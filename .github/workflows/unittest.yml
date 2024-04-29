@@ -1,0 +1,46 @@
+name: unit-test
+
+on:
+  workflow_dispatch:
+  pull_request:
+  push:
+    branches: [next, qa, main]
+    tags: ['v*']
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash -l {0}
+    steps:
+      - uses: actions/checkout@v3
+      - uses: conda-incubator/setup-miniconda@v2
+        with:
+          auto-update-conda: true
+          channels: conda-forge,defaults
+          mamba-version: "*"
+          environment-file: environment.yml
+          cache-environment-key: ${{ runner.os }}-env-${{ hashFiles('**/environment.yml') }}
+          cache-downloads-key: ${{ runner.os }}-downloads-${{ hashFiles('**/environment.yml') }}
+      - name: install additional dependencies
+        run: |
+          echo "installing additional dependencies if cannot be installed from conda"
+      - name: run unit tests
+        run: |
+          echo "running unit tests"
+          python -m pytest --cov=src --cov-report=xml --cov-report=term-missing tests/
+      - name: upload coverage to codecov
+        uses: codecov/codecov-action@v4
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+      - name: build conda package
+        run: |
+          # test that the conda package builds
+          cd conda.recipe
+          echo "versioningit $(versioningit ../)"
+          # conda channels could have been defined in the conda-incubator, but you can copy/paste the lines
+          # below to build the conda package in your local machine
+          CHANNELS="--channel mantid/label/main --channel conda-forge"
+          VERSION=$(versioningit ../) conda mambabuild $CHANNELS --output-folder . .
+          conda verify noarch/mypackagename*.tar.bz2

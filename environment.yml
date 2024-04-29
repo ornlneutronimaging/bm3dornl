@@ -1,0 +1,39 @@
+name: mypythonapp
+channels:
+  - conda-forge
+dependencies:
+  # -- Runtime dependencies
+  # base: list all base dependencies here
+  - python>=3.8  # please specify the mimimum version of python here
+  - versioningit
+  # compute: list all compute dependencies here
+  - numpy
+  - pandas
+  # plot: list all plot dependencies here, if applicable
+  - matplotlib
+  # jupyter: list all jupyter dependencies here, if applicable
+  - jupyterlab
+  - ipympl
+  # -- Development dependencies
+  # utils:
+  - pre-commit
+  # pacakge building:
+  - libmamba
+  - libarchive
+  - anaconda-client
+  - boa
+  - conda-build < 4  # conda-build 24.x has a bug, missing update_index from conda_build.index
+  - conda-verify
+  - python-build
+  # test: list all test dependencies here
+  - pytest
+  - pytest-cov
+  - pytest-xdist
+  # --------------------------------------------------
+  # add additional sections such as Qt, etc. if needed
+  # --------------------------------------------------
+  # if pakcages are not available on conda, list them here
+  - pip
+  - pip:
+    - bm3d-streak-removal # example
+    - pytest-playwright

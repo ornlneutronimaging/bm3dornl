@@ -1,0 +1,44 @@
+# load information from pyproject.toml
+{% set pyproject = load_file_data('pyproject.toml') %}
+{% set project = pyproject.get('project', {}) %}
+{% set license = project.get('license').get('text') %}
+{% set description = project.get('description') %}
+{% set project_url = pyproject.get('project', {}).get('urls') %}
+{% set url = project_url.get('homepage') %}
+# this will get the version set by environment variable
+{% set version = environ.get('VERSION') %}
+{% set version_number = version.split('+')[0] %}
+# change the build number by hand if you want to rebuild the package
+{% set build_number = 0 %}
+
+package:
+  name: mypackagename
+  version: {{ version_number }}
+
+source:
+  path: ..
+
+build:
+  noarch: python
+  number: {{ build_number }}
+  string: py{{py}}
+  script: {{ PYTHON }} -m pip install . --no-deps --ignore-installed -vvv
+
+requirements:
+  host:
+    - python
+    - versioningit
+
+  build:
+    - setuptools
+    - versioningit
+
+  run:
+    - python
+
+about:
+  home: {{ url }}
+  license: {{ license }}
+  license_family: MIT
+  license_file: ../LICENSE
+  summary: {{ description }}
