@@ -1,4 +1,4 @@
-name: mypythonapp
+name: bm3dornl
 channels:
   - conda-forge
 dependencies:
