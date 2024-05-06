@@ -1,5 +1,5 @@
-from packagenamepy import __version__
+from bm3dornl import __version__
 
 
 def test_version():
-    assert __version__ == "unknown"
+    assert __version__ == "0.0.1"
