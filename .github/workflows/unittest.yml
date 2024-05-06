@@ -43,4 +43,4 @@ jobs:
           # below to build the conda package in your local machine
           CHANNELS="--channel mantid/label/main --channel conda-forge"
           VERSION=$(versioningit ../) conda mambabuild $CHANNELS --output-folder . .
-          conda verify noarch/mypackagename*.tar.bz2
+          conda verify noarch/bm3dornl*.tar.bz2
