@@ -1,39 +1,36 @@
 name: bm3dornl
 channels:
   - conda-forge
+  - nvidia
 dependencies:
-  # -- Runtime dependencies
-  # base: list all base dependencies here
-  - python>=3.8  # please specify the mimimum version of python here
+  # base
+  - python>=3.10
+  - pip
   - versioningit
-  # compute: list all compute dependencies here
-  - numpy
-  - pandas
-  # plot: list all plot dependencies here, if applicable
+  # compute
+  - cupy
+  - numba
+  - scipy<1.13  # avoid a bug in 1.13
+  # [Optional]visualization
   - matplotlib
-  # jupyter: list all jupyter dependencies here, if applicable
+  # [Optional]jupyter
   - jupyterlab
-  - ipympl
-  # -- Development dependencies
-  # utils:
+  # utils
   - pre-commit
-  # pacakge building:
-  - libmamba
-  - libarchive
+  - line_profiler  # useful for development
+  - memory_profiler  # useful for development
+  # packaging
   - anaconda-client
   - boa
-  - conda-build < 4  # conda-build 24.x has a bug, missing update_index from conda_build.index
+  - conda-build < 4
   - conda-verify
+  - libmamba
+  - libarchive
   - python-build
-  # test: list all test dependencies here
+  # test
   - pytest
   - pytest-cov
   - pytest-xdist
-  # --------------------------------------------------
-  # add additional sections such as Qt, etc. if needed
-  # --------------------------------------------------
-  # if pakcages are not available on conda, list them here
-  - pip
+  # pip packages
   - pip:
-    - bm3d-streak-removal # example
-    - pytest-playwright
+    - bm3d-streak-removal  # this is our reference package
