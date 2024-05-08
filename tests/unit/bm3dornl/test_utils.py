@@ -9,6 +9,8 @@ from bm3dornl.utils import (
     is_within_threshold,
     get_signal_patch_positions,
     pad_patch_ids,
+    horizontal_binning,
+    horizontal_debinning,
 )
 
 
@@ -176,6 +178,54 @@ def test_pad_patch_ids_unknown_mode():
     assert "Unknown padding mode specified" in str(
         excinfo.value
     ), "Error not raised for unknown mode"
+
+
+def test_horizontal_binning():
+    # Initial setup: Create a test image
+    Z = np.random.rand(64, 64)
+
+    # Number of binning iterations
+    k = 3
+
+    # Perform the binning
+    binned_images = horizontal_binning(Z, k)
+
+    # Assert we have the correct number of images
+    assert len(binned_images) == k + 1, "Incorrect number of binned images returned"
+
+    # Assert that each image has the correct dimensions
+    expected_width = 64
+    for i, img in enumerate(binned_images):
+        assert img.shape[0] == 64, f"Height of image {i} is incorrect"
+        assert img.shape[1] == expected_width, f"Width of image {i} is incorrect"
+        expected_width = (expected_width + 1) // 2  # Calculate the next expected width
+
+
+def test_horizontal_binning_k_zero():
+    Z = np.random.rand(64, 64)
+    binned_images = horizontal_binning(Z, 0)
+    assert len(binned_images) == 1 and np.array_equal(
+        binned_images[0], Z
+    ), "Binning with k=0 should return only the original image"
+
+
+def test_horizontal_binning_large_k():
+    Z = np.random.rand(64, 64)
+    binned_images = horizontal_binning(Z, 6)
+    assert len(binned_images) == 7, "Incorrect number of images for large k"
+    assert binned_images[-1].shape[1] == 1, "Final image width should be 1 for large k"
+
+
+@pytest.mark.parametrize(
+    "original_width, target_width", [(32, 64), (64, 128), (128, 256)]
+)
+def test_horizontal_debinning_scaling(original_width, target_width):
+    original_image = np.random.rand(64, original_width)
+    target_shape = (64, target_width)
+    debinned_image = horizontal_debinning(original_image, np.empty(target_shape))
+    assert (
+        debinned_image.shape == target_shape
+    ), f"Failed to scale from {original_width} to {target_width}"
 
 
 if __name__ == "__main__":
