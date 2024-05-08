@@ -50,13 +50,13 @@ def test_group_signal_patches_geometric(patch_manager):
     )
 
 
-def test_get_4d_patch_groups(patch_manager):
+def test_get_hyper_block(patch_manager):
     cut_off_distance = (100, 100)  # Larger than image dimensions
     intensity_diff_threshold = 0.5  # Irrelevant due to uniform image
     patch_manager.group_signal_patches(cut_off_distance, intensity_diff_threshold)
     num_patches_per_group = 4
     padding_mode = "circular"
-    patch_groups, positions = patch_manager.get_4d_patch_groups(
+    patch_groups, positions = patch_manager.get_hyper_block(
         num_patches_per_group, padding_mode
     )
     assert patch_groups.shape == (

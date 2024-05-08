@@ -52,9 +52,6 @@ def hard_thresholding(
     denoised_block = hyper_block.get()
     del hyper_block
 
-    # release fft cache
-    cp.fft.config._get_plan_cache().clear()
-
     return denoised_block
 
 
