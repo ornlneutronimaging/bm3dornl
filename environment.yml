@@ -30,6 +30,7 @@ dependencies:
   # test
   - pytest
   - pytest-cov
+  - pytest-mock
   - pytest-xdist
   # pip packages
   - pip:

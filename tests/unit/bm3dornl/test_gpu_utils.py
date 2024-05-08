@@ -95,5 +95,33 @@ def test_wiener_hadamard_4d_input():
     memory_cleanup()
 
 
+def test_memory_cleanup(mocker):
+    # Create mock objects for the method chains
+    mock_free_all_blocks = mocker.Mock()
+    mock_free_all_blocks_pinned = mocker.Mock()
+    mock_synchronize = mocker.Mock()
+
+    # Mock the chain calls
+    mock_memory_pool = mocker.patch(
+        "cupy.get_default_memory_pool", return_value=mock_free_all_blocks
+    )
+    mock_memory_pool().free_all_blocks = mock_free_all_blocks
+
+    mock_pinned_memory_pool = mocker.patch(
+        "cupy.get_default_pinned_memory_pool", return_value=mock_free_all_blocks_pinned
+    )
+    mock_pinned_memory_pool().free_all_blocks = mock_free_all_blocks_pinned
+
+    mocker.patch("cupy.cuda.Stream.null.synchronize", mock_synchronize)
+
+    # Call the function
+    memory_cleanup()
+
+    # Check if the functions were called
+    mock_free_all_blocks.assert_called_once()
+    mock_free_all_blocks_pinned.assert_called_once()
+    mock_synchronize.assert_called_once()
+
+
 if __name__ == "__main__":
     pytest.main([__file__])
