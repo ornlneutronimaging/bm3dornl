@@ -255,6 +255,7 @@ def bm3d_streak_removal(
     """
     # step 0: median filter the sinogram
     sinogram = medfilt2d(sinogram, kernel_size=3)
+    sino_star = sinogram
 
     # step 1: create a list of binned sinograms
     binned_sinos = horizontal_binning(sinogram, k=k)
