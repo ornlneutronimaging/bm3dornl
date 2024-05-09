@@ -223,8 +223,12 @@ class BM3D:
 
 def bm3d_streak_removal(
     sinogram: np.ndarray,
+    background_threshold: float = 0.1,
     patch_size: Tuple[int, int] = (8, 8),
+    stride: int = 3,
+    cut_off_distance: Tuple[int, int] = (64, 64),
     intensity_diff_threshold: float = 0.1,
+    num_patches_per_group: int = 400,
     shrinkage_threshold: float = 0.1,
     k: int = 4,
 ) -> np.ndarray:
@@ -234,10 +238,18 @@ def bm3d_streak_removal(
     ----------
     sinogram : np.ndarray
         The input sinogram to be denoised.
+    background_threshold: float
+        Estimated background intensity threshold, default to 0.1.
     patch_size : tuple[int, int], optional
         The size of the patches, by default (8, 8)
+    stride:
+        Steps when generating blocks with sliding window.
+    cut_off_distance : tuple
+        Maximum spatial distance in terms of row and column indices for patches in the same block.
     intensity_diff_threshold : float, optional
         The threshold for patch similarity, by default 0.01
+    num_patches_per_group : int
+        The number of patch in each block.
     shrinkage_threshold : float, optional
         The threshold for hard thresholding, by default 0.2
     k : int, optional
@@ -275,13 +287,13 @@ def bm3d_streak_removal(
             worker = BM3D(
                 image=sino_star,
                 patch_size=patch_size,
-                stride=3,  # need to be an input arg
-                background_threshold=1e-3,  # need to be an input arg
+                stride=stride,
+                background_threshold=background_threshold,
             )
             worker.denoise(
-                cut_off_distance=(64, 64),  # need to be an input arg
+                cut_off_distance=cut_off_distance,
                 intensity_diff_threshold=intensity_diff_threshold,
-                num_patches_per_group=300,  # need to be an input arg
+                num_patches_per_group=num_patches_per_group,
                 threshold=shrinkage_threshold,
             )
             noise_estimate = sino - worker.final_denoised_image
