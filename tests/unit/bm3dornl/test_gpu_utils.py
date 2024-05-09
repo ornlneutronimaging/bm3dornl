@@ -12,6 +12,7 @@ from bm3dornl.gpu_utils import (
 )
 
 
+@pytest.mark.cuda_required
 def test_hard_thresholding():
     # Setup the patch block
     patch_block = np.random.rand(2, 5, 8, 8)  # Random block of patches on GPU
@@ -49,6 +50,7 @@ def test_hard_thresholding():
     memory_cleanup()
 
 
+@pytest.mark.cuda_required
 def test_wiener_hadamard_3d_input():
     # Prepare a 3D patch block
     patch_block = np.random.rand(1000, 8, 8)  # 1000 patches of 8x8 pixels
@@ -71,6 +73,7 @@ def test_wiener_hadamard_3d_input():
     memory_cleanup()
 
 
+@pytest.mark.cuda_required
 def test_wiener_hadamard_4d_input():
     # Prepare a 4D patch block
     patch_block = np.random.rand(
@@ -95,6 +98,7 @@ def test_wiener_hadamard_4d_input():
     memory_cleanup()
 
 
+@pytest.mark.cuda_required
 def test_memory_cleanup(mocker):
     # Create mock objects for the method chains
     mock_free_all_blocks = mocker.Mock()
