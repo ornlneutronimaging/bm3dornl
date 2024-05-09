@@ -89,7 +89,7 @@ def generate_sinogram(
     sinogram = radon(
         input_img,
         theta=thetas_deg,
-        circle=False,  # do not clip the image to get the best recon quality.
+        circle=True,
     ).T  # transpose to get the sinogram in the correct orientation for tomopy
 
     return sinogram, thetas_deg
