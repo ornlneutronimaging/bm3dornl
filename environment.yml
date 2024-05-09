@@ -11,6 +11,7 @@ dependencies:
   - cupy
   - numba
   - scipy<1.13  # avoid a bug in 1.13
+  - scikit-image
   # [Optional]visualization
   - matplotlib
   # [Optional]jupyter
