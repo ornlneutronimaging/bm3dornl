@@ -35,7 +35,7 @@ def find_candidate_patch_ids(
     """
     num_patches = signal_patches.shape[0]
     ref_pos = signal_patches[ref_index]
-    candidate_patch_ids = []
+    candidate_patch_ids = [ref_index]
 
     for i in range(ref_index + 1, num_patches):  # Ensure only checking upper triangle
         if (

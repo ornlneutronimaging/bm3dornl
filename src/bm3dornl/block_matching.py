@@ -91,7 +91,15 @@ class PatchManager:
             Maximum Euclidean distance in intensity for patches to be considered similar.
         """
         num_patches = len(self.signal_patches_pos)
-        self.signal_blocks_matrix = np.eye(num_patches, dtype=float)
+        # Initialize the signal blocks matrix
+        # note:
+        # - the matrix is symmetric
+        # - the zero values means the patches are not similar
+        # - the non-zero values are the Euclidean distance between the patches, i.e smaller values means smaller distance, higher similarity
+        self.signal_blocks_matrix = np.zeros(
+            (num_patches, num_patches),
+            dtype=float,
+        )
 
         # Cache patches as views
         cached_patches = [self.get_patch(pos) for pos in self.signal_patches_pos]
@@ -108,8 +116,9 @@ class PatchManager:
                     cached_patches[neightbor_patch_id],
                     intensity_diff_threshold,
                 ):
-                    val_diff = np.linalg.norm(
-                        ref_patch - cached_patches[neightbor_patch_id]
+                    val_diff = max(
+                        np.linalg.norm(ref_patch - cached_patches[neightbor_patch_id]),
+                        1e-8,
                     )
                     self.signal_blocks_matrix[ref_patch_id, neightbor_patch_id] = (
                         val_diff
