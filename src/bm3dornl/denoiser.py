@@ -171,7 +171,7 @@ class BM3D:
         )
 
         logging.info("Wiener-Hadamard filtering...")
-        block = wiener_hadamard(block, sigma_squared)
+        block = wiener_hadamard(block, sigma_squared * 1e3)  # why does this work?
 
         # manual release of memory
         memory_cleanup()
@@ -214,11 +214,12 @@ class BM3D:
         self.thresholding(
             cut_off_distance, intensity_diff_threshold, num_patches_per_group, threshold
         )
+        self.final_denoised_image = self.estimate_denoised_image
 
-        logging.info("Second pass: Re-filtering")
-        self.re_filtering(
-            cut_off_distance, intensity_diff_threshold, num_patches_per_group
-        )
+        # logging.info("Second pass: Re-filtering")
+        # self.re_filtering(
+        #     cut_off_distance, intensity_diff_threshold, num_patches_per_group
+        # )
 
 
 def bm3d_streak_removal(
@@ -268,6 +269,22 @@ def bm3d_streak_removal(
     # step 0: median filter the sinogram
     sinogram = medfilt2d(sinogram, kernel_size=3)
     sino_star = sinogram
+
+    if k == 0:
+        # direct without multi-scale
+        worker = BM3D(
+            image=sino_star,
+            patch_size=patch_size,
+            stride=stride,
+            background_threshold=background_threshold,
+        )
+        worker.denoise(
+            cut_off_distance=cut_off_distance,
+            intensity_diff_threshold=intensity_diff_threshold,
+            num_patches_per_group=num_patches_per_group,
+            threshold=shrinkage_threshold,
+        )
+        return worker.final_denoised_image
 
     # step 1: create a list of binned sinograms
     binned_sinos = horizontal_binning(sinogram, k=k)

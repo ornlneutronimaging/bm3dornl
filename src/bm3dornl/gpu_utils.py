@@ -42,6 +42,9 @@ def hard_thresholding(
     # Transform the patch block to the frequency domain using rfft
     hyper_block = cp.fft.rfft2(hyper_block, axes=(1, 2, 3))
 
+    # find the quantile value based on the threshold
+    threshold = cp.quantile(cp.abs(hyper_block), threshold)
+
     # Apply hard thresholding
     hyper_block[cp.abs(hyper_block) < threshold] = 0
 

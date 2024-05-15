@@ -39,9 +39,16 @@ def test_group_signal_patches_geometric(patch_manager):
     cut_off_distance = (100, 100)  # Larger than image dimensions
     intensity_diff_threshold = 0.5  # Irrelevant due to uniform image
     patch_manager.group_signal_patches(cut_off_distance, intensity_diff_threshold)
-    expected_blocks = np.ones(
-        (len(patch_manager.signal_patches_pos), len(patch_manager.signal_patches_pos)),
-        dtype=bool,
+    # uniform image, all patches are similar, so everybody get the smallest distance
+    expected_blocks = (
+        np.ones(
+            (
+                len(patch_manager.signal_patches_pos),
+                len(patch_manager.signal_patches_pos),
+            ),
+            dtype=float,
+        )
+        * 1e-8
     )
     np.testing.assert_array_equal(
         patch_manager.signal_blocks_matrix,

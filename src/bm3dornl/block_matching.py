@@ -91,7 +91,15 @@ class PatchManager:
             Maximum Euclidean distance in intensity for patches to be considered similar.
         """
         num_patches = len(self.signal_patches_pos)
-        self.signal_blocks_matrix = np.eye(num_patches, dtype=bool)
+        # Initialize the signal blocks matrix
+        # note:
+        # - the matrix is symmetric
+        # - the zero values means the patches are not similar
+        # - the non-zero values are the Euclidean distance between the patches, i.e smaller values means smaller distance, higher similarity
+        self.signal_blocks_matrix = np.zeros(
+            (num_patches, num_patches),
+            dtype=float,
+        )
 
         # Cache patches as views
         cached_patches = [self.get_patch(pos) for pos in self.signal_patches_pos]
@@ -108,8 +116,16 @@ class PatchManager:
                     cached_patches[neightbor_patch_id],
                     intensity_diff_threshold,
                 ):
-                    self.signal_blocks_matrix[ref_patch_id, neightbor_patch_id] = True
-                    self.signal_blocks_matrix[neightbor_patch_id, ref_patch_id] = True
+                    val_diff = max(
+                        np.linalg.norm(ref_patch - cached_patches[neightbor_patch_id]),
+                        1e-8,
+                    )
+                    self.signal_blocks_matrix[ref_patch_id, neightbor_patch_id] = (
+                        val_diff
+                    )
+                    self.signal_blocks_matrix[neightbor_patch_id, ref_patch_id] = (
+                        val_diff
+                    )
 
     def get_hyper_block(
         self,
@@ -146,7 +162,13 @@ class PatchManager:
         positions = np.empty((group_size, num_patches_per_group, 2), dtype=np.int32)
 
         for i, row in enumerate(self.signal_blocks_matrix):
-            candidate_patch_ids = np.where(row)[0]
+            # find the ids
+            candidate_patch_ids = np.where(row > 0)[0]
+            # get the difference
+            candidate_patch_val = row[candidate_patch_ids]
+            # sort candidate_patch_ids by candidate_patch_val, smallest first
+            candidate_patch_ids = candidate_patch_ids[np.argsort(candidate_patch_val)]
+            # pad the patch ids
             padded_patch_ids = pad_patch_ids(
                 candidate_patch_ids, num_patches_per_group, mode=padding_mode
             )
