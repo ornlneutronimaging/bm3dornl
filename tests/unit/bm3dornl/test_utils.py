@@ -22,6 +22,7 @@ def test_find_candidate_patch_ids():
     ref_index = 0
     cut_off_distance = (1, 1)
     expected = [
+        0,
         1,
         3,
         4,
@@ -32,21 +33,21 @@ def test_find_candidate_patch_ids():
     # Test case 2
     ref_index = 2
     cut_off_distance = (2, 2)
-    expected = [3, 4, 5]  # Indices that are within 2 units from (0, 2)
+    expected = [2, 3, 4, 5]  # Indices that are within 2 units from (0, 2)
     result = find_candidate_patch_ids(signal_patches, ref_index, cut_off_distance)
     assert result == expected, "Test case 2 failed"
 
     # Test case 3
     ref_index = 4
     cut_off_distance = (3, 3)
-    expected = [5, 6]  # Indices that are within 3 units from (1, 1)
+    expected = [4, 5, 6]  # Indices that are within 3 units from (1, 1)
     result = find_candidate_patch_ids(signal_patches, ref_index, cut_off_distance)
     assert result == expected, "Test case 3 failed"
 
     # Test case 4
     ref_index = 0
     cut_off_distance = (0, 0)
-    expected = []  # No patch within 0 distance from (0, 0) except itself
+    expected = [0]  # No patch within 0 distance from (0, 0) except itself
     result = find_candidate_patch_ids(signal_patches, ref_index, cut_off_distance)
     assert result == expected, "Test case 4 failed"
 
