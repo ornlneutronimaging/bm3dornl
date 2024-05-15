@@ -16,13 +16,14 @@ from bm3dornl.gpu_utils import (
 def test_hard_thresholding():
     # Setup the patch block
     patch_block = np.random.rand(2, 5, 8, 8)  # Random block of patches on GPU
-    threshold = 0.5  # Threshold for hard thresholding
+    threshold_quantile = 0.5  # Threshold for hard thresholding
 
     # Apply shrinkage
-    denoised_block = hard_thresholding(patch_block, threshold)
+    denoised_block = hard_thresholding(patch_block, threshold_quantile)
 
     # Convert back to frequency domain to check thresholding
     dct_block_check = cp.fft.rfft2(cp.asarray(denoised_block), axes=(1, 2, 3)).get()
+    threshold = np.quantile(np.abs(dct_block_check), threshold_quantile)
 
     # Test if all values in the DCT domain are either zero or above the threshold
     # Allow a small tolerance for floating point arithmetic issues
@@ -39,6 +40,7 @@ def test_hard_thresholding():
 
     # Check for any values that should not have been zeroed out
     original_dct_block = cp.fft.rfft2(cp.asarray(patch_block), axes=(1, 2, 3)).get()
+    threshold = np.quantile(np.abs(original_dct_block), threshold_quantile)
     should_not_change = np.abs(original_dct_block) >= threshold
     assert np.allclose(
         dct_block_check[should_not_change],
