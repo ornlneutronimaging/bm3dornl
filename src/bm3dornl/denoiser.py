@@ -214,11 +214,12 @@ class BM3D:
         self.thresholding(
             cut_off_distance, intensity_diff_threshold, num_patches_per_group, threshold
         )
+        self.final_denoised_image = self.estimate_denoised_image
 
-        logging.info("Second pass: Re-filtering")
-        self.re_filtering(
-            cut_off_distance, intensity_diff_threshold, num_patches_per_group
-        )
+        # logging.info("Second pass: Re-filtering")
+        # self.re_filtering(
+        #     cut_off_distance, intensity_diff_threshold, num_patches_per_group
+        # )
 
 
 def bm3d_streak_removal(
