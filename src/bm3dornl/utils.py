@@ -267,3 +267,42 @@ def horizontal_debinning(original_image: np.ndarray, target: np.ndarray) -> np.n
     interpolated_image = spline(new_y, new_x)
 
     return interpolated_image
+
+
+def estimate_noise_std(
+    noisy_image: np.ndarray,
+    noise_free_image: np.ndarray,
+) -> float:
+    """
+    Estimate the noise standard deviation from a pair of noisy and noise-free images.
+
+    Parameters
+    ----------
+    noisy_image : np.ndarray
+        A 2D NumPy array representing the noisy image.
+    noise_free_image : np.ndarray
+        A 2D NumPy array representing the noise-free image.
+
+    Returns
+    -------
+    float
+        The estimated noise standard deviation.
+    """
+    # Rescale both images to [0, 255]
+    noisy_image_min, noisy_image_max = noisy_image.min(), noisy_image.max()
+    noise_free_image_min, noise_free_image_max = (
+        noise_free_image.min(),
+        noise_free_image.max(),
+    )
+
+    noisy_image = (
+        (noisy_image - noisy_image_min) / (noisy_image_max - noisy_image_min) * 255
+    )
+    noise_free_image = (
+        (noise_free_image - noise_free_image_min)
+        / (noise_free_image_max - noise_free_image_min)
+        * 255
+    )
+
+    # calculate the noise standard deviation
+    return np.std(np.abs(noisy_image - noise_free_image))
