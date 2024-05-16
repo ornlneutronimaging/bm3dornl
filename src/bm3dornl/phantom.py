@@ -92,6 +92,9 @@ def generate_sinogram(
         circle=True,
     ).T  # transpose to get the sinogram in the correct orientation for tomopy
 
+    # normalize sinogram to [0, 1]
+    sinogram = (sinogram - sinogram.min()) / (sinogram.max() - sinogram.min()) + 1e-8
+
     return sinogram, thetas_deg
 
 
