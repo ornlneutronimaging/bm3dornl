@@ -255,6 +255,7 @@ def bm3d_streak_removal(
     num_patches_per_group: int = 400,
     shrinkage_threshold: float = 0.1,
     k: int = 4,
+    fast_estimate: bool = True,
 ) -> np.ndarray:
     """Multiscale BM3D for streak removal
 
@@ -278,6 +279,8 @@ def bm3d_streak_removal(
         The threshold for hard thresholding, by default 0.2
     k : int, optional
         The number of iterations for horizontal binning, by default 3
+    fast_estimate : bool, optional
+        Whether to use a fast estimate for the denoised image, by default True
 
     Returns
     -------
@@ -306,6 +309,7 @@ def bm3d_streak_removal(
             intensity_diff_threshold=intensity_diff_threshold,
             num_patches_per_group=num_patches_per_group,
             threshold=shrinkage_threshold,
+            fast_estimate=fast_estimate,
         )
         return worker.final_denoised_image
 
@@ -335,6 +339,7 @@ def bm3d_streak_removal(
                 intensity_diff_threshold=intensity_diff_threshold,
                 num_patches_per_group=num_patches_per_group,
                 threshold=shrinkage_threshold,
+                fast_estimate=fast_estimate,
             )
             noise_estimate = sino - worker.final_denoised_image
 
