@@ -6,6 +6,7 @@ import pytest
 import numpy as np
 from bm3dornl.utils import (
     estimate_noise_std,
+    estimate_noise_free_sinogram,
     find_candidate_patch_ids,
     is_within_threshold,
     get_signal_patch_positions,
@@ -247,6 +248,42 @@ def test_estimate_noise_std():
     assert np.isclose(
         estimated_noise_std, noise_std_true, atol=0.2
     ), "Estimated noise standard deviation is incorrect"
+
+
+def test_estimate_noise_free_sinogram():
+    # Create a test sinogram with synthetic noise
+    sinogram = np.random.normal(loc=100, scale=20, size=(100, 100))
+
+    # Add background estimate
+    background_estimate = 80
+
+    # Run the function with the test sinogram
+    noise_free_sinogram = estimate_noise_free_sinogram(sinogram, background_estimate)
+
+    # Check if the result is a numpy array
+    assert isinstance(
+        noise_free_sinogram, np.ndarray
+    ), "The output is not a numpy array."
+
+    # Check the shape of the result
+    assert (
+        noise_free_sinogram.shape == sinogram.shape
+    ), "The shape of the output does not match the input."
+
+    # Check if the result is normalized to [0, 1]
+    assert (
+        noise_free_sinogram.min() >= 0
+    ), "The minimum value of the output is less than 0."
+    assert (
+        noise_free_sinogram.max() <= 1
+    ), "The maximum value of the output is greater than 1."
+
+    # Additional checks can include statistical properties, ensuring that the result is less noisy than the input
+    original_std = np.std(sinogram)
+    filtered_std = np.std(noise_free_sinogram)
+    assert (
+        filtered_std < original_std
+    ), "The noise-free sinogram is not less noisy than the original."
 
 
 if __name__ == "__main__":
