@@ -5,6 +5,7 @@
 import pytest
 import numpy as np
 from bm3dornl.utils import (
+    estimate_noise_std,
     find_candidate_patch_ids,
     is_within_threshold,
     get_signal_patch_positions,
@@ -227,6 +228,25 @@ def test_horizontal_debinning_scaling(original_width, target_width):
     assert (
         debinned_image.shape == target_shape
     ), f"Failed to scale from {original_width} to {target_width}"
+
+
+def test_estimate_noise_std():
+    # Create a random noise-free image
+    noise_free_image = np.random.rand(8, 8)
+
+    # Add Gaussian noise to the noise-free image
+    noise_std_true = 0.2
+    noisy_image = noise_free_image + np.random.normal(
+        0.5, noise_std_true, noise_free_image.shape
+    )
+
+    # Estimate the noise standard deviation using the function
+    estimated_noise_std = estimate_noise_std(noisy_image, noise_free_image) / 255
+
+    # Assert that the estimate is close to the true value, with a high tolerance
+    assert np.isclose(
+        estimated_noise_std, noise_std_true, atol=0.2
+    ), "Estimated noise standard deviation is incorrect"
 
 
 if __name__ == "__main__":

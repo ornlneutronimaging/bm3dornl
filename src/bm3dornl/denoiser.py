@@ -15,6 +15,7 @@ from bm3dornl.gpu_utils import (
 from bm3dornl.utils import (
     horizontal_binning,
     horizontal_debinning,
+    estimate_noise_std,
 )
 
 
@@ -160,8 +161,9 @@ class BM3D:
         weights = np.zeros_like(self.image, dtype=np.float64)
 
         # estimate the noise
-        noise = np.asarray(self.image) - self.estimate_denoised_image
-        sigma_squared = np.mean(noise**2)
+        sigma_squared = estimate_noise_std(
+            noisy_image=self.image, noise_free_image=self.estimate_denoised_image
+        )
 
         logging.info("Block matching for 2nd pass...")
         block, positions = self.patch_manager.get_hyper_block(
@@ -171,7 +173,7 @@ class BM3D:
         )
 
         logging.info("Wiener-Hadamard filtering...")
-        block = wiener_hadamard(block, sigma_squared * 1e3)  # why does this work?
+        block = wiener_hadamard(block, sigma_squared)  # why does this work?
 
         # manual release of memory
         memory_cleanup()
@@ -214,12 +216,12 @@ class BM3D:
         self.thresholding(
             cut_off_distance, intensity_diff_threshold, num_patches_per_group, threshold
         )
-        self.final_denoised_image = self.estimate_denoised_image
+        # self.final_denoised_image = self.estimate_denoised_image
 
-        # logging.info("Second pass: Re-filtering")
-        # self.re_filtering(
-        #     cut_off_distance, intensity_diff_threshold, num_patches_per_group
-        # )
+        logging.info("Second pass: Re-filtering")
+        self.re_filtering(
+            cut_off_distance, intensity_diff_threshold, num_patches_per_group
+        )
 
 
 def bm3d_streak_removal(
