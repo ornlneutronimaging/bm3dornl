@@ -46,7 +46,7 @@ jobs:
           conda verify noarch/bm3dornl*.tar.bz2
 
   linux_gpu:
-    runs-on: bm3dornl
+    runs-on: github-gpu-builder
     defaults:
       run:
         shell: bash -l {0}
