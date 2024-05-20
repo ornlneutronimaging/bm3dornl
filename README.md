@@ -7,3 +7,6 @@ The BM3D algorithm is a state-of-the-art denoising algorithm that is widely used
 The BM3D ORNL code is a Python implementation of the BM3D algorithm that has been optimized for performance using both `Numba` and `CuPy`.
 The BM3D ORNL code is designed to be easy to use and easy to integrate into existing Python workflows.
 The BM3D ORNL code is released under an open-source license, and is freely available for download and use.
+
+
+For more information, check out our [FAQ](docs/FAQ.md).
