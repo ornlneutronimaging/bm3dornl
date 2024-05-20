@@ -16,6 +16,7 @@ from bm3dornl.utils import (
     horizontal_binning,
     horizontal_debinning,
     estimate_noise_std,
+    estimate_noise_free_sinogram,
 )
 
 
@@ -130,11 +131,11 @@ class BM3D:
         # Normalize by the weights to compute the average
         self.estimate_denoised_image /= np.maximum(weights, 1)
 
-        # update the patch manager with the new estimate
-        self.patch_manager.background_threshold *= (
-            0.5  # reduce the threshold for background threshold further
-        )
-        self.patch_manager.image = self.estimate_denoised_image
+        # # update the patch manager with the new estimate
+        # self.patch_manager.background_threshold *= (
+        #     0.5  # reduce the threshold for background threshold further
+        # )
+        # self.patch_manager.image = self.estimate_denoised_image
 
     def re_filtering(
         self,
@@ -197,6 +198,7 @@ class BM3D:
         intensity_diff_threshold: float,
         num_patches_per_group: int,
         threshold: float,
+        fast_estimate: bool = True,
     ):
         """
         Perform the BM3D denoising process on the input image.
@@ -211,16 +213,35 @@ class BM3D:
             The number of patch in each block.
         threshold : float
             The threshold value for hard thresholding during the first pass.
+        fast_estimate : bool
+            Whether to use a fast estimate for the denoised image. Default is True.
         """
-        logging.info("First pass: Hard thresholding")
-        self.thresholding(
-            cut_off_distance, intensity_diff_threshold, num_patches_per_group, threshold
-        )
-        # self.final_denoised_image = self.estimate_denoised_image
+        # step 1: estimate the noise free image
+        logging.info("Estimating noise free image...")
+        if fast_estimate:
+            logging.info("Using fast estimate")
+            self.estimate_denoised_image = estimate_noise_free_sinogram(
+                sinogram=self.image,
+                background_estimate=self.background_threshold,
+            )
+        else:
+            logging.info("Using block-matching with hard thresholding")
+            self.thresholding(
+                cut_off_distance=cut_off_distance,
+                intensity_diff_threshold=intensity_diff_threshold,
+                num_patches_per_group=num_patches_per_group,
+                threshold=threshold,
+            )
 
+        # step 2: update patch manager with the estimate_denoised_image
+        self.patch_manager.image = self.estimate_denoised_image
+
+        # step 3: re-filtering
         logging.info("Second pass: Re-filtering")
         self.re_filtering(
-            cut_off_distance, intensity_diff_threshold, num_patches_per_group
+            cut_off_distance=cut_off_distance,
+            intensity_diff_threshold=intensity_diff_threshold,
+            num_patches_per_group=num_patches_per_group,
         )
 
 
@@ -234,6 +255,7 @@ def bm3d_streak_removal(
     num_patches_per_group: int = 400,
     shrinkage_threshold: float = 0.1,
     k: int = 4,
+    fast_estimate: bool = True,
 ) -> np.ndarray:
     """Multiscale BM3D for streak removal
 
@@ -257,6 +279,8 @@ def bm3d_streak_removal(
         The threshold for hard thresholding, by default 0.2
     k : int, optional
         The number of iterations for horizontal binning, by default 3
+    fast_estimate : bool, optional
+        Whether to use a fast estimate for the denoised image, by default True
 
     Returns
     -------
@@ -285,6 +309,7 @@ def bm3d_streak_removal(
             intensity_diff_threshold=intensity_diff_threshold,
             num_patches_per_group=num_patches_per_group,
             threshold=shrinkage_threshold,
+            fast_estimate=fast_estimate,
         )
         return worker.final_denoised_image
 
@@ -314,6 +339,7 @@ def bm3d_streak_removal(
                 intensity_diff_threshold=intensity_diff_threshold,
                 num_patches_per_group=num_patches_per_group,
                 threshold=shrinkage_threshold,
+                fast_estimate=fast_estimate,
             )
             noise_estimate = sino - worker.final_denoised_image
 

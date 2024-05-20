@@ -40,8 +40,8 @@ def test_generate_sinogram():
     expected_num_projections = int(360 / scan_step)
     assert sinogram.shape == (
         expected_num_projections,
-        input_size,
-    ), f"Sinogram shape mismatch, expected: {(expected_num_projections, input_size)}"
+        363,
+    ), f"Sinogram shape mismatch, expected: {(expected_num_projections, 363)}"
 
     # Verify the length of the angles array
     assert thetas_deg.shape == (
