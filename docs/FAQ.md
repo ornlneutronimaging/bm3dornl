@@ -31,7 +31,7 @@
    - For simple usage:
      ```python
      from bm3dornl.denoiser import bm3d_streak_removal
-     
+
      sino_bm3dornl = bm3d_streak_removal(
          sinogram=sinogram_noisy,
          background_threshold=0.1,
