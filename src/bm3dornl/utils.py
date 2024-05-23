@@ -139,6 +139,7 @@ def get_signal_patch_positions(
     return np.array(signal_patches)
 
 
+@njit
 def pad_patch_ids(
     candidate_patch_ids: np.ndarray,
     num_patches: int,
@@ -169,24 +170,27 @@ def pad_patch_ids(
         padding = np.full((num_patches - current_length,), candidate_patch_ids[0])
     elif mode == "repeat_sequence":
         repeats = (num_patches // current_length) + 1
-        padded = np.tile(candidate_patch_ids, repeats)[:num_patches]
+        padded = np.empty(num_patches, dtype=candidate_patch_ids.dtype)
+        index = 0
+        for _ in range(repeats):
+            for candidate in candidate_patch_ids:
+                if index >= num_patches:
+                    break
+                padded[index] = candidate
+                index += 1
         return padded
     elif mode == "circular":
-        extended = np.tile(candidate_patch_ids, ((num_patches // current_length) + 1))[
-            :num_patches
-        ]
-        return extended
+        padded = np.empty(num_patches, dtype=candidate_patch_ids.dtype)
+        for i in range(num_patches):
+            padded[i] = candidate_patch_ids[i % current_length]
+        return padded
     elif mode == "mirror":
-        mirror_length = min(current_length, num_patches - current_length)
-        mirrored_part = candidate_patch_ids[:mirror_length][::-1]
-        return np.concatenate([candidate_patch_ids, mirrored_part])
+        extended = np.concatenate((candidate_patch_ids, candidate_patch_ids[::-1]))
+        padded = extended[:num_patches]
+        return padded
     elif mode == "random":
-        random_padded = np.random.choice(candidate_patch_ids, num_patches, replace=True)
-        return random_padded
-    else:
-        raise ValueError("Unknown padding mode specified.")
-
-    return np.concatenate([candidate_patch_ids, padding])
+        padding = np.random.choice(candidate_patch_ids, num_patches - current_length)
+    return np.concatenate((candidate_patch_ids, padding))
 
 
 def horizontal_binning(Z: np.ndarray, k: int = 0) -> list[np.ndarray]:
@@ -406,3 +410,62 @@ def compute_signal_blocks_matrix(
                 val_diff = max(val_diff, 1e-8)
                 signal_blocks_matrix[ref_patch_id, neighbor_patch_id] = val_diff
                 signal_blocks_matrix[neighbor_patch_id, ref_patch_id] = val_diff
+
+
+@njit
+def get_patch_numba(
+    image: np.ndarray, position: Tuple[int, int], patch_size: Tuple[int, int]
+) -> np.ndarray:
+    """
+    Retrieve a patch from the image at the specified position.
+
+    Parameters
+    ----------
+    image : np.ndarray
+        The image from which the patch is to be extracted.
+    position : tuple
+        The row and column indices of the top-left corner of the patch.
+    patch_size : tuple
+        The size of the patch to be extracted.
+
+    Returns
+    -------
+    np.ndarray
+        The patch extracted from the image.
+    """
+    i, j = position
+    return image[i : i + patch_size[0], j : j + patch_size[1]]
+
+
+@njit(parallel=True)
+def compute_hyper_block(
+    signal_blocks_matrix,
+    signal_patches_pos,
+    patch_size,
+    num_patches_per_group,
+    image,
+    padding_mode="circular",
+):
+    group_size = len(signal_blocks_matrix)
+    block = np.empty(
+        (group_size, num_patches_per_group, patch_size[0], patch_size[1]),
+        dtype=np.float32,
+    )
+    positions = np.empty((group_size, num_patches_per_group, 2), dtype=np.int32)
+
+    for i in prange(group_size):
+        row = signal_blocks_matrix[i]
+        candidate_patch_ids = np.where(row > 0)[0]
+        candidate_patch_val = row[candidate_patch_ids]
+        candidate_patch_ids = candidate_patch_ids[np.argsort(candidate_patch_val)]
+        padded_patch_ids = pad_patch_ids(
+            candidate_patch_ids, num_patches_per_group, mode=padding_mode
+        )
+
+        for j in range(num_patches_per_group):
+            idx = padded_patch_ids[j]
+            patch = get_patch_numba(image, signal_patches_pos[idx], patch_size)
+            block[i, j] = patch
+            positions[i, j] = signal_patches_pos[idx]
+
+    return block, positions

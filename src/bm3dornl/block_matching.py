@@ -4,9 +4,10 @@
 import numpy as np
 from typing import Tuple, Optional
 from bm3dornl.utils import (
+    compute_hyper_block,
     compute_signal_blocks_matrix,
+    get_patch_numba,
     get_signal_patch_positions,
-    pad_patch_ids,
 )
 
 
@@ -73,8 +74,7 @@ class PatchManager:
             The patch extracted from the image.
         """
         source_image = self._image if source_image is None else source_image
-        i, j = position
-        return source_image[i : i + self.patch_size[0], j : j + self.patch_size[1]]
+        return get_patch_numba(source_image, position, self.patch_size)
 
     def group_signal_patches(
         self, cut_off_distance: tuple, intensity_diff_threshold: float
@@ -134,35 +134,14 @@ class PatchManager:
         -------
         tuple
             A tuple containing the 4D array of patch groups and the corresponding positions.
-
-        TODO:
-        -----
-        - use multi-processing to further improve the speed of block building
         """
-        group_size = len(self.signal_blocks_matrix)
-        block = np.empty(
-            (group_size, num_patches_per_group, *self.patch_size), dtype=np.float32
+        source_image = self._image if alternative_source is None else alternative_source
+        block, positions = compute_hyper_block(
+            self.signal_blocks_matrix,
+            np.array(self.signal_patches_pos),
+            self.patch_size,
+            num_patches_per_group,
+            source_image,
+            padding_mode,
         )
-        positions = np.empty((group_size, num_patches_per_group, 2), dtype=np.int32)
-
-        for i, row in enumerate(self.signal_blocks_matrix):
-            # find the ids
-            candidate_patch_ids = np.where(row > 0)[0]
-            # get the difference
-            candidate_patch_val = row[candidate_patch_ids]
-            # sort candidate_patch_ids by candidate_patch_val, smallest first
-            candidate_patch_ids = candidate_patch_ids[np.argsort(candidate_patch_val)]
-            # pad the patch ids
-            padded_patch_ids = pad_patch_ids(
-                candidate_patch_ids, num_patches_per_group, mode=padding_mode
-            )
-            # update block and positions
-            block[i] = np.array(
-                [
-                    self.get_patch(self.signal_patches_pos[idx], alternative_source)
-                    for idx in padded_patch_ids
-                ]
-            )
-            positions[i] = np.array(self.signal_patches_pos[padded_patch_ids])
-
         return block, positions
