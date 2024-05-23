@@ -5,6 +5,7 @@
 import pytest
 import numpy as np
 from bm3dornl.utils import (
+    compute_signal_blocks_matrix,
     estimate_noise_std,
     estimate_noise_free_sinogram,
     find_candidate_patch_ids,
@@ -274,6 +275,36 @@ def test_estimate_noise_free_sinogram():
     assert (
         filtered_std < original_std
     ), "The noise-free sinogram is not less noisy than the original."
+
+
+def test_compute_signal_blocks_matrix():
+    # Create fake inputs
+    # Initialize the signal blocks matrix, assuming 4 patches extracted
+    signal_blocks_matrix = np.zeros((4, 4))
+    # 4 8x8 patches, all identical
+    cached_pacthes = np.ones((4, 8, 8))
+    #
+    signal_patches_pos = np.array([[0, 0], [0, 8], [8, 0], [8, 8]])
+    #
+    cut_off_distance = (5, 5)
+    #
+    intensity_diff_threshold = 0.1
+
+    # Call the function
+    compute_signal_blocks_matrix(
+        signal_blocks_matrix,
+        cached_pacthes,
+        signal_patches_pos,
+        cut_off_distance,
+        intensity_diff_threshold,
+    )
+
+    # Check that the function correctly computed the signal blocks matrix
+    np.testing.assert_array_almost_equal(
+        signal_blocks_matrix,
+        np.eye(4) * 1e-8,
+        err_msg="Signal blocks matrix was not computed correctly",
+    )
 
 
 if __name__ == "__main__":
