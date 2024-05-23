@@ -5,6 +5,7 @@
 import pytest
 import numpy as np
 from bm3dornl.utils import (
+    compute_hyper_block,
     compute_signal_blocks_matrix,
     estimate_noise_std,
     estimate_noise_free_sinogram,
@@ -323,6 +324,35 @@ def test_get_patch_numba():
     np.testing.assert_array_equal(
         patch, image[2:5, 2:5], "Patch was not extracted correctly"
     )
+
+
+def test_compute_hyper_block():
+    # Create fake inputs
+    signal_block_matrix = np.eye(4) * 1e-8
+    #
+    signal_patches_pos = np.array([[0, 0], [0, 8], [8, 0], [8, 8]])
+    #
+    patch_size = (8, 8)
+    #
+    num_patches_per_group = 4
+    #
+    image = np.random.rand(16, 16)
+    #
+    padding_mode = "circular"
+
+    # call the function
+    block, positions = compute_hyper_block(
+        signal_block_matrix,
+        signal_patches_pos,
+        patch_size,
+        num_patches_per_group,
+        image,
+        padding_mode,
+    )
+
+    # Check that the function correctly computed the hyper block
+    assert block.shape == (4, 4, 8, 8), "Incorrect shape of the block"
+    assert positions.shape == (4, 4, 2), "Incorrect shape of the positions"
 
 
 if __name__ == "__main__":
