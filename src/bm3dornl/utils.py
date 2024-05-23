@@ -3,16 +3,16 @@
 
 import numpy as np
 from scipy.interpolate import RectBivariateSpline
-from numba import jit
+from numba import njit, prange
 from typing import Tuple, List
 from scipy.fft import fft2, ifft2, fftshift, ifftshift
 from scipy.ndimage import gaussian_filter
 
 
-@jit(nopython=True)
+@njit
 def find_candidate_patch_ids(
     signal_patches: np.ndarray, ref_index: int, cut_off_distance: Tuple
-) -> List:
+) -> List[int]:
     """
     Identify candidate patch indices that are within the specified Manhattan distance from a reference patch.
 
@@ -49,7 +49,7 @@ def find_candidate_patch_ids(
     return candidate_patch_ids
 
 
-@jit(nopython=True)
+@njit
 def is_within_threshold(
     ref_patch: np.ndarray, cmp_patch: np.ndarray, intensity_diff_threshold: float
 ) -> bool:
@@ -86,7 +86,7 @@ def is_within_threshold(
     return np.linalg.norm(ref_patch - cmp_patch) <= intensity_diff_threshold
 
 
-@jit(nopython=True)
+@njit
 def get_signal_patch_positions(
     image: np.ndarray,
     patch_size: Tuple[int, int] = (8, 8),
@@ -358,3 +358,51 @@ def estimate_noise_free_sinogram(
     sinogram_filtered /= sinogram_filtered.max()
 
     return sinogram_filtered
+
+
+@njit(parallel=True)
+def compute_signal_blocks_matrix(
+    signal_blocks_matrix: np.ndarray,
+    cached_patches: np.ndarray,
+    signal_patches_pos: np.ndarray,
+    cut_off_distance: Tuple[int, int],
+    intensity_diff_threshold: float,
+):
+    """
+    Compute the signal blocks matrix for the given signal patches.
+
+    Parameters
+    ----------
+    signal_blocks_matrix : np.ndarray
+        The matrix to store the computed signal blocks.
+    cached_patches : np.ndarray
+        The cached patches for the signal blocks.
+    signal_patches_pos : np.ndarray
+        The positions of the signal patches.
+    cut_off_distance : tuple
+        The maximum Manhattan distance for considering candidate patches.
+    intensity_diff_threshold : float
+        The threshold for considering patches similar.
+    """
+    num_patches = len(signal_patches_pos)
+
+    for ref_patch_id in prange(num_patches):
+        ref_patch = cached_patches[ref_patch_id]
+        candidate_patch_ids = find_candidate_patch_ids(
+            signal_patches_pos, ref_patch_id, cut_off_distance
+        )
+        for neighbor_patch_id in candidate_patch_ids:
+            neighbor_patch_id = int(neighbor_patch_id)
+            # compute L2 norm distance between patches
+            val_diff = 0.0
+            for i in range(ref_patch.shape[0]):
+                for j in range(ref_patch.shape[1]):
+                    val_diff += (
+                        ref_patch[i, j] - cached_patches[neighbor_patch_id, i, j]
+                    ) ** 2
+            val_diff = val_diff**0.5
+            # check if the distance is within the threshold
+            if val_diff < intensity_diff_threshold:
+                val_diff = max(val_diff, 1e-8)
+                signal_blocks_matrix[ref_patch_id, neighbor_patch_id] = val_diff
+                signal_blocks_matrix[neighbor_patch_id, ref_patch_id] = val_diff

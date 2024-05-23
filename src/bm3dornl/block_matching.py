@@ -4,9 +4,8 @@
 import numpy as np
 from typing import Tuple, Optional
 from bm3dornl.utils import (
+    compute_signal_blocks_matrix,
     get_signal_patch_positions,
-    find_candidate_patch_ids,
-    is_within_threshold,
     pad_patch_ids,
 )
 
@@ -96,36 +95,21 @@ class PatchManager:
         # - the matrix is symmetric
         # - the zero values means the patches are not similar
         # - the non-zero values are the Euclidean distance between the patches, i.e smaller values means smaller distance, higher similarity
-        self.signal_blocks_matrix = np.zeros(
-            (num_patches, num_patches),
-            dtype=float,
-        )
+        self.signal_blocks_matrix = np.zeros((num_patches, num_patches), dtype=float)
 
         # Cache patches as views
-        cached_patches = [self.get_patch(pos) for pos in self.signal_patches_pos]
+        cached_patches = np.array(
+            [self.get_patch(pos) for pos in self.signal_patches_pos]
+        )
 
-        for ref_patch_id in range(num_patches):
-            ref_patch = cached_patches[ref_patch_id]
-            candidate_patch_ids = find_candidate_patch_ids(
-                self.signal_patches_pos, ref_patch_id, cut_off_distance
-            )
-            # iterate over the candidate patches
-            for neightbor_patch_id in candidate_patch_ids:
-                if is_within_threshold(
-                    ref_patch,
-                    cached_patches[neightbor_patch_id],
-                    intensity_diff_threshold,
-                ):
-                    val_diff = max(
-                        np.linalg.norm(ref_patch - cached_patches[neightbor_patch_id]),
-                        1e-8,
-                    )
-                    self.signal_blocks_matrix[ref_patch_id, neightbor_patch_id] = (
-                        val_diff
-                    )
-                    self.signal_blocks_matrix[neightbor_patch_id, ref_patch_id] = (
-                        val_diff
-                    )
+        # Compute signal blocks matrix using Numba JIT for speed
+        compute_signal_blocks_matrix(
+            self.signal_blocks_matrix,
+            cached_patches,
+            np.array(self.signal_patches_pos),
+            np.array(cut_off_distance),
+            intensity_diff_threshold,
+        )
 
     def get_hyper_block(
         self,
