@@ -131,12 +131,6 @@ class BM3D:
         # Normalize by the weights to compute the average
         self.estimate_denoised_image /= np.maximum(weights, 1)
 
-        # # update the patch manager with the new estimate
-        # self.patch_manager.background_threshold *= (
-        #     0.5  # reduce the threshold for background threshold further
-        # )
-        # self.patch_manager.image = self.estimate_denoised_image
-
     def re_filtering(
         self,
         cut_off_distance: Tuple[int, int],

@@ -5,10 +5,13 @@
 import pytest
 import numpy as np
 from bm3dornl.utils import (
+    compute_hyper_block,
+    compute_signal_blocks_matrix,
     estimate_noise_std,
     estimate_noise_free_sinogram,
     find_candidate_patch_ids,
     is_within_threshold,
+    get_patch_numba,
     get_signal_patch_positions,
     pad_patch_ids,
     horizontal_binning,
@@ -173,16 +176,6 @@ def test_pad_patch_ids_random():
     assert all(item in candidate_patch_ids for item in padded), "Random padding failed"
 
 
-def test_pad_patch_ids_unknown_mode():
-    candidate_patch_ids = np.array([1, 2, 3])
-    num_patches = 5
-    with pytest.raises(ValueError) as excinfo:
-        pad_patch_ids(candidate_patch_ids, num_patches, mode="unknown")
-    assert "Unknown padding mode specified" in str(
-        excinfo.value
-    ), "Error not raised for unknown mode"
-
-
 def test_horizontal_binning():
     # Initial setup: Create a test image
     Z = np.random.rand(64, 64)
@@ -284,6 +277,82 @@ def test_estimate_noise_free_sinogram():
     assert (
         filtered_std < original_std
     ), "The noise-free sinogram is not less noisy than the original."
+
+
+def test_compute_signal_blocks_matrix():
+    # Create fake inputs
+    # Initialize the signal blocks matrix, assuming 4 patches extracted
+    signal_blocks_matrix = np.zeros((4, 4))
+    # 4 8x8 patches, all identical
+    cached_pacthes = np.ones((4, 8, 8))
+    #
+    signal_patches_pos = np.array([[0, 0], [0, 8], [8, 0], [8, 8]])
+    #
+    cut_off_distance = (5, 5)
+    #
+    intensity_diff_threshold = 0.1
+
+    # Call the function
+    compute_signal_blocks_matrix(
+        signal_blocks_matrix,
+        cached_pacthes,
+        signal_patches_pos,
+        cut_off_distance,
+        intensity_diff_threshold,
+    )
+
+    # Check that the function correctly computed the signal blocks matrix
+    np.testing.assert_array_almost_equal(
+        signal_blocks_matrix,
+        np.eye(4) * 1e-8,
+        err_msg="Signal blocks matrix was not computed correctly",
+    )
+
+
+def test_get_patch_numba():
+    # Create a test image
+    image = np.random.rand(10, 10)
+
+    # Define the patch size and the patch position
+    patch_size = (3, 3)
+    patch_position = (2, 2)
+
+    # Call the function
+    patch = get_patch_numba(image, patch_position, patch_size)
+
+    # Check that the function correctly extracted the patch
+    np.testing.assert_array_equal(
+        patch, image[2:5, 2:5], "Patch was not extracted correctly"
+    )
+
+
+def test_compute_hyper_block():
+    # Create fake inputs
+    signal_block_matrix = np.eye(4) * 1e-8
+    #
+    signal_patches_pos = np.array([[0, 0], [0, 8], [8, 0], [8, 8]])
+    #
+    patch_size = (8, 8)
+    #
+    num_patches_per_group = 4
+    #
+    image = np.random.rand(16, 16)
+    #
+    padding_mode = "circular"
+
+    # call the function
+    block, positions = compute_hyper_block(
+        signal_block_matrix,
+        signal_patches_pos,
+        patch_size,
+        num_patches_per_group,
+        image,
+        padding_mode,
+    )
+
+    # Check that the function correctly computed the hyper block
+    assert block.shape == (4, 4, 8, 8), "Incorrect shape of the block"
+    assert positions.shape == (4, 4, 2), "Incorrect shape of the positions"
 
 
 if __name__ == "__main__":

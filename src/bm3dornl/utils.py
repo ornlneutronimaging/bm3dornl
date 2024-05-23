@@ -3,16 +3,16 @@
 
 import numpy as np
 from scipy.interpolate import RectBivariateSpline
-from numba import jit
+from numba import njit, prange
 from typing import Tuple, List
 from scipy.fft import fft2, ifft2, fftshift, ifftshift
 from scipy.ndimage import gaussian_filter
 
 
-@jit(nopython=True)
+@njit
 def find_candidate_patch_ids(
     signal_patches: np.ndarray, ref_index: int, cut_off_distance: Tuple
-) -> List:
+) -> List[int]:
     """
     Identify candidate patch indices that are within the specified Manhattan distance from a reference patch.
 
@@ -49,7 +49,7 @@ def find_candidate_patch_ids(
     return candidate_patch_ids
 
 
-@jit(nopython=True)
+@njit
 def is_within_threshold(
     ref_patch: np.ndarray, cmp_patch: np.ndarray, intensity_diff_threshold: float
 ) -> bool:
@@ -86,7 +86,7 @@ def is_within_threshold(
     return np.linalg.norm(ref_patch - cmp_patch) <= intensity_diff_threshold
 
 
-@jit(nopython=True)
+@njit
 def get_signal_patch_positions(
     image: np.ndarray,
     patch_size: Tuple[int, int] = (8, 8),
@@ -139,6 +139,7 @@ def get_signal_patch_positions(
     return np.array(signal_patches)
 
 
+@njit
 def pad_patch_ids(
     candidate_patch_ids: np.ndarray,
     num_patches: int,
@@ -169,24 +170,27 @@ def pad_patch_ids(
         padding = np.full((num_patches - current_length,), candidate_patch_ids[0])
     elif mode == "repeat_sequence":
         repeats = (num_patches // current_length) + 1
-        padded = np.tile(candidate_patch_ids, repeats)[:num_patches]
+        padded = np.empty(num_patches, dtype=candidate_patch_ids.dtype)
+        index = 0
+        for _ in range(repeats):
+            for candidate in candidate_patch_ids:
+                if index >= num_patches:
+                    break
+                padded[index] = candidate
+                index += 1
         return padded
     elif mode == "circular":
-        extended = np.tile(candidate_patch_ids, ((num_patches // current_length) + 1))[
-            :num_patches
-        ]
-        return extended
+        padded = np.empty(num_patches, dtype=candidate_patch_ids.dtype)
+        for i in range(num_patches):
+            padded[i] = candidate_patch_ids[i % current_length]
+        return padded
     elif mode == "mirror":
-        mirror_length = min(current_length, num_patches - current_length)
-        mirrored_part = candidate_patch_ids[:mirror_length][::-1]
-        return np.concatenate([candidate_patch_ids, mirrored_part])
+        extended = np.concatenate((candidate_patch_ids, candidate_patch_ids[::-1]))
+        padded = extended[:num_patches]
+        return padded
     elif mode == "random":
-        random_padded = np.random.choice(candidate_patch_ids, num_patches, replace=True)
-        return random_padded
-    else:
-        raise ValueError("Unknown padding mode specified.")
-
-    return np.concatenate([candidate_patch_ids, padding])
+        padding = np.random.choice(candidate_patch_ids, num_patches - current_length)
+    return np.concatenate((candidate_patch_ids, padding))
 
 
 def horizontal_binning(Z: np.ndarray, k: int = 0) -> list[np.ndarray]:
@@ -358,3 +362,110 @@ def estimate_noise_free_sinogram(
     sinogram_filtered /= sinogram_filtered.max()
 
     return sinogram_filtered
+
+
+@njit(parallel=True)
+def compute_signal_blocks_matrix(
+    signal_blocks_matrix: np.ndarray,
+    cached_patches: np.ndarray,
+    signal_patches_pos: np.ndarray,
+    cut_off_distance: Tuple[int, int],
+    intensity_diff_threshold: float,
+):
+    """
+    Compute the signal blocks matrix for the given signal patches.
+
+    Parameters
+    ----------
+    signal_blocks_matrix : np.ndarray
+        The matrix to store the computed signal blocks.
+    cached_patches : np.ndarray
+        The cached patches for the signal blocks.
+    signal_patches_pos : np.ndarray
+        The positions of the signal patches.
+    cut_off_distance : tuple
+        The maximum Manhattan distance for considering candidate patches.
+    intensity_diff_threshold : float
+        The threshold for considering patches similar.
+    """
+    num_patches = len(signal_patches_pos)
+
+    for ref_patch_id in prange(num_patches):
+        ref_patch = cached_patches[ref_patch_id]
+        candidate_patch_ids = find_candidate_patch_ids(
+            signal_patches_pos, ref_patch_id, cut_off_distance
+        )
+        for neighbor_patch_id in candidate_patch_ids:
+            neighbor_patch_id = int(neighbor_patch_id)
+            # compute L2 norm distance between patches
+            val_diff = 0.0
+            for i in range(ref_patch.shape[0]):
+                for j in range(ref_patch.shape[1]):
+                    val_diff += (
+                        ref_patch[i, j] - cached_patches[neighbor_patch_id, i, j]
+                    ) ** 2
+            val_diff = val_diff**0.5
+            # check if the distance is within the threshold
+            if val_diff < intensity_diff_threshold:
+                val_diff = max(val_diff, 1e-8)
+                signal_blocks_matrix[ref_patch_id, neighbor_patch_id] = val_diff
+                signal_blocks_matrix[neighbor_patch_id, ref_patch_id] = val_diff
+
+
+@njit
+def get_patch_numba(
+    image: np.ndarray, position: Tuple[int, int], patch_size: Tuple[int, int]
+) -> np.ndarray:
+    """
+    Retrieve a patch from the image at the specified position.
+
+    Parameters
+    ----------
+    image : np.ndarray
+        The image from which the patch is to be extracted.
+    position : tuple
+        The row and column indices of the top-left corner of the patch.
+    patch_size : tuple
+        The size of the patch to be extracted.
+
+    Returns
+    -------
+    np.ndarray
+        The patch extracted from the image.
+    """
+    i, j = position
+    return image[i : i + patch_size[0], j : j + patch_size[1]]
+
+
+@njit(parallel=True)
+def compute_hyper_block(
+    signal_blocks_matrix,
+    signal_patches_pos,
+    patch_size,
+    num_patches_per_group,
+    image,
+    padding_mode="circular",
+):
+    group_size = len(signal_blocks_matrix)
+    block = np.empty(
+        (group_size, num_patches_per_group, patch_size[0], patch_size[1]),
+        dtype=np.float32,
+    )
+    positions = np.empty((group_size, num_patches_per_group, 2), dtype=np.int32)
+
+    for i in prange(group_size):
+        row = signal_blocks_matrix[i]
+        candidate_patch_ids = np.where(row > 0)[0]
+        candidate_patch_val = row[candidate_patch_ids]
+        candidate_patch_ids = candidate_patch_ids[np.argsort(candidate_patch_val)]
+        padded_patch_ids = pad_patch_ids(
+            candidate_patch_ids, num_patches_per_group, mode=padding_mode
+        )
+
+        for j in range(num_patches_per_group):
+            idx = padded_patch_ids[j]
+            patch = get_patch_numba(image, signal_patches_pos[idx], patch_size)
+            block[i, j] = patch
+            positions[i, j] = signal_patches_pos[idx]
+
+    return block, positions
