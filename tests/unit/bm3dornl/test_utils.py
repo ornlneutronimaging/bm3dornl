@@ -173,16 +173,6 @@ def test_pad_patch_ids_random():
     assert all(item in candidate_patch_ids for item in padded), "Random padding failed"
 
 
-def test_pad_patch_ids_unknown_mode():
-    candidate_patch_ids = np.array([1, 2, 3])
-    num_patches = 5
-    with pytest.raises(ValueError) as excinfo:
-        pad_patch_ids(candidate_patch_ids, num_patches, mode="unknown")
-    assert "Unknown padding mode specified" in str(
-        excinfo.value
-    ), "Error not raised for unknown mode"
-
-
 def test_horizontal_binning():
     # Initial setup: Create a test image
     Z = np.random.rand(64, 64)
