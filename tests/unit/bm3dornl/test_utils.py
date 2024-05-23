@@ -10,6 +10,7 @@ from bm3dornl.utils import (
     estimate_noise_free_sinogram,
     find_candidate_patch_ids,
     is_within_threshold,
+    get_patch_numba,
     get_signal_patch_positions,
     pad_patch_ids,
     horizontal_binning,
@@ -304,6 +305,23 @@ def test_compute_signal_blocks_matrix():
         signal_blocks_matrix,
         np.eye(4) * 1e-8,
         err_msg="Signal blocks matrix was not computed correctly",
+    )
+
+
+def test_get_patch_numba():
+    # Create a test image
+    image = np.random.rand(10, 10)
+
+    # Define the patch size and the patch position
+    patch_size = (3, 3)
+    patch_position = (2, 2)
+
+    # Call the function
+    patch = get_patch_numba(image, patch_position, patch_size)
+
+    # Check that the function correctly extracted the patch
+    np.testing.assert_array_equal(
+        patch, image[2:5, 2:5], "Patch was not extracted correctly"
     )
 
 
