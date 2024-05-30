@@ -469,3 +469,28 @@ def compute_hyper_block(
             positions[i, j] = signal_patches_pos[idx]
 
     return block, positions
+
+
+def estimate_background_intensity(
+    tomostack: np.ndarray,
+    quantile: float=0.05,  # 5% quantile
+) -> float:
+    """
+    Estimate the background intensity from the tomostack.
+
+    Parameters
+    ----------
+    tomostack : np.ndarray
+        The tomostack to estimate the background intensity.
+    quantile : float, optional
+        The quantile to estimate the background intensity, by default 0.05.
+
+    Returns
+    -------
+    float
+        The estimated background intensity.
+    """
+    # if tomostack is 3D, average along axis 1 (the row axis)
+    if tomostack.ndim == 3:
+        tomostack = np.mean(tomostack, axis=1)
+    return np.quantile(tomostack, quantile)

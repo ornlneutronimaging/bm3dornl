@@ -7,6 +7,7 @@ import numpy as np
 from bm3dornl.utils import (
     compute_hyper_block,
     compute_signal_blocks_matrix,
+    estimate_background_intensity,
     estimate_noise_std,
     estimate_noise_free_sinogram,
     find_candidate_patch_ids,
@@ -354,6 +355,22 @@ def test_compute_hyper_block():
     assert block.shape == (4, 4, 8, 8), "Incorrect shape of the block"
     assert positions.shape == (4, 4, 2), "Incorrect shape of the positions"
 
+def test_estimate_background_intensity():
+    # Create a sample 3D tomostack
+    tomostack = np.array([
+        [[1, 2, 3], [4, 5, 6], [7, 8, 9]],
+        [[9, 8, 7], [6, 5, 4], [3, 2, 1]],
+        [[2, 4, 6], [8, 10, 12], [14, 16, 18]]
+    ])
+
+    # Calculate the expected background intensity (5% quantile of the mean along axis 1)
+    expected_intensity = np.quantile(np.mean(tomostack, axis=1), 0.05)
+    
+    # Call the function
+    result = estimate_background_intensity(tomostack, quantile=0.05)
+    
+    # Assert the result is as expected
+    assert np.isclose(result, expected_intensity), f"Expected {expected_intensity}, but got {result}"
 
 if __name__ == "__main__":
     pytest.main([__file__])
