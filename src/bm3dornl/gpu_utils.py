@@ -97,11 +97,14 @@ def wiener_hadamard(hyper_block: np.ndarray, sigma_squared: float):
     local_variance = cp.var(hyper_block, axis=0, keepdims=True)
 
     # Apply Wiener filter
-    hyper_block = (1 - sigma_squared / (local_variance + 1e-8)) * (
-        hyper_block - local_mean
-    ) + local_mean
+    factor = cp.maximum(
+        1 - sigma_squared / (local_variance + 1e-8), 0
+    )  # Ensure non-negative values
+    hyper_block = factor * (hyper_block - local_mean) + local_mean
+
+    # Masking
     mask = cp.broadcast_to(local_variance < sigma_squared, hyper_block.shape)
-    hyper_block[mask] = 0
+    hyper_block[mask] = cp.broadcast_to(local_mean, hyper_block.shape)[mask]
 
     # Inverse Hadamard transform
     hyper_block = cp.einsum("ij,kjl->kil", H, hyper_block)
