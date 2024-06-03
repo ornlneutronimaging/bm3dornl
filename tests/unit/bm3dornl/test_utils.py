@@ -8,7 +8,6 @@ from bm3dornl.utils import (
     compute_hyper_block,
     compute_signal_blocks_matrix,
     estimate_background_intensity,
-    estimate_noise_std,
     estimate_noise_free_sinogram,
     find_candidate_patch_ids,
     is_within_threshold,
@@ -225,25 +224,6 @@ def test_horizontal_debinning_scaling(original_width, target_width):
     ), f"Failed to scale from {original_width} to {target_width}"
 
 
-def test_estimate_noise_std():
-    # Create a random noise-free image
-    noise_free_image = np.random.rand(8, 8)
-
-    # Add Gaussian noise to the noise-free image
-    noise_std_true = 0.2
-    noisy_image = noise_free_image + np.random.normal(
-        0.5, noise_std_true, noise_free_image.shape
-    )
-
-    # Estimate the noise standard deviation using the function
-    estimated_noise_std = estimate_noise_std(noisy_image, noise_free_image) / 255
-
-    # Assert that the estimate is close to the true value, with a high tolerance
-    assert np.isclose(
-        estimated_noise_std, noise_std_true, atol=0.2
-    ), "Estimated noise standard deviation is incorrect"
-
-
 def test_estimate_noise_free_sinogram():
     # Create a test sinogram with synthetic noise
     sinogram = np.random.normal(loc=100, scale=20, size=(100, 100))
@@ -355,22 +335,28 @@ def test_compute_hyper_block():
     assert block.shape == (4, 4, 8, 8), "Incorrect shape of the block"
     assert positions.shape == (4, 4, 2), "Incorrect shape of the positions"
 
+
 def test_estimate_background_intensity():
     # Create a sample 3D tomostack
-    tomostack = np.array([
-        [[1, 2, 3], [4, 5, 6], [7, 8, 9]],
-        [[9, 8, 7], [6, 5, 4], [3, 2, 1]],
-        [[2, 4, 6], [8, 10, 12], [14, 16, 18]]
-    ])
+    tomostack = np.array(
+        [
+            [[1, 2, 3], [4, 5, 6], [7, 8, 9]],
+            [[9, 8, 7], [6, 5, 4], [3, 2, 1]],
+            [[2, 4, 6], [8, 10, 12], [14, 16, 18]],
+        ]
+    )
 
     # Calculate the expected background intensity (5% quantile of the mean along axis 1)
     expected_intensity = np.quantile(np.mean(tomostack, axis=1), 0.05)
-    
+
     # Call the function
     result = estimate_background_intensity(tomostack, quantile=0.05)
-    
+
     # Assert the result is as expected
-    assert np.isclose(result, expected_intensity), f"Expected {expected_intensity}, but got {result}"
+    assert np.isclose(
+        result, expected_intensity
+    ), f"Expected {expected_intensity}, but got {result}"
+
 
 if __name__ == "__main__":
     pytest.main([__file__])

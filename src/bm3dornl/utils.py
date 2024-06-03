@@ -275,45 +275,6 @@ def horizontal_debinning(original_image: np.ndarray, target: np.ndarray) -> np.n
     return interpolated_image
 
 
-def estimate_noise_std(
-    noisy_image: np.ndarray,
-    noise_free_image: np.ndarray,
-) -> float:
-    """
-    Estimate the noise standard deviation from a pair of noisy and noise-free images.
-
-    Parameters
-    ----------
-    noisy_image : np.ndarray
-        A 2D NumPy array representing the noisy image.
-    noise_free_image : np.ndarray
-        A 2D NumPy array representing the noise-free image.
-
-    Returns
-    -------
-    float
-        The estimated noise standard deviation.
-    """
-    # Rescale both images to [0, 255]
-    noisy_image_min, noisy_image_max = noisy_image.min(), noisy_image.max()
-    noise_free_image_min, noise_free_image_max = (
-        noise_free_image.min(),
-        noise_free_image.max(),
-    )
-
-    noisy_image = (
-        (noisy_image - noisy_image_min) / (noisy_image_max - noisy_image_min) * 255
-    )
-    noise_free_image = (
-        (noise_free_image - noise_free_image_min)
-        / (noise_free_image_max - noise_free_image_min)
-        * 255
-    )
-
-    # calculate the noise standard deviation
-    return np.std(np.abs(noisy_image - noise_free_image))
-
-
 def estimate_noise_free_sinogram(
     sinogram: np.ndarray,
     background_estimate: float,
@@ -473,7 +434,7 @@ def compute_hyper_block(
 
 def estimate_background_intensity(
     tomostack: np.ndarray,
-    quantile: float=0.05,  # 5% quantile
+    quantile: float = 0.2,  # 20% quantile, can estimate from visual inspection
 ) -> float:
     """
     Estimate the background intensity from the tomostack.
