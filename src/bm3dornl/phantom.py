@@ -2,6 +2,7 @@
 """Sinogram generation for phantom data."""
 
 import numpy as np
+from scipy.ndimage import gaussian_filter
 from skimage.transform import radon
 from typing import Tuple
 
@@ -159,3 +160,82 @@ def simulate_detector_gain_error(
     detector_gain = detector_gain.astype(np.float32)
 
     return sinogram, detector_gain
+
+
+def apply_convolution(noise: np.ndarray, kernel: np.ndarray) -> np.ndarray:
+    """
+    Apply convolution to the noise with the given kernel.
+
+    Parameters
+    ----------
+    noise : np.ndarray
+        The noise to be convolved.
+    kernel : np.ndarray
+        The convolution kernel.
+
+    Returns
+    -------
+    np.ndarray
+        The convolved noise.
+    """
+    noise_fft = np.fft.fftn(noise)
+    kernel_fft = np.fft.fftn(kernel, s=noise.shape)
+    convolved_noise = np.real(np.fft.ifftn(noise_fft * kernel_fft))
+    return convolved_noise
+
+
+def get_synthetic_noise(
+    image_size: Tuple[int, int],
+    streak_kernel_width: int,
+    streak_kernel_length: int,
+    white_noise_intensity: float,
+    streak_noise_intensity: float,
+) -> np.ndarray:
+    """
+    Generate synthetic noise composed of white noise and streak noise.
+
+    Parameters
+    ----------
+    image_size : Tuple[int, int]
+        The size of the noise image (height, width).
+    streak_kernel_width : int
+        The width of the streak noise kernel.
+    streak_kernel_length : int
+        The length of the streak noise kernel.
+    white_noise_intensity : float
+        The intensity of the white noise.
+    streak_noise_intensity : float
+        The intensity of the streak noise.
+
+    Returns
+    -------
+    np.ndarray
+        The generated synthetic noise image.
+
+    Example
+    -------
+    >>> noise = get_synthetic_noise(
+        image_size=sinogram.shape,
+        streak_kernel_width=1,
+        streak_kernel_length=200,
+        white_noise_intensity=0.01,
+        streak_noise_intensity=0.01,
+        )
+    >>> plt.figure(figsize=(5, 5))
+    >>> plt.imshow(synthetic_noise, cmap='gray')
+    >>> plt.colorbar()
+    """
+    mu = np.random.normal(0, 1, image_size)  # unit variance Gaussian noise
+
+    # white noise (v ctimes g0)
+    g0 = np.zeros(image_size)
+    g0[image_size[0] // 2, image_size[1] // 2] = 1  # Delta function for white noise
+    white_noise = apply_convolution(mu, g0) * white_noise_intensity
+
+    # streak noise (v ctimes g1)
+    g1 = np.zeros(image_size)
+    g1[image_size[0] // 2, image_size[1] // 2] = 1
+    g1 = gaussian_filter(g1, sigma=(streak_kernel_length, streak_kernel_width))
+    streak_noise = apply_convolution(mu, g1) * streak_noise_intensity
+
+    return white_noise + streak_noise
