@@ -1,7 +1,9 @@
+#!/usr/bin/env python3
 """Denoising functions using CuPy for GPU acceleration."""
 
 import numpy as np
 import cupy as cp
+from cupyx.scipy.linalg import hadamard
 
 
 def memory_cleanup():
@@ -11,7 +13,7 @@ def memory_cleanup():
     cp.cuda.Stream.null.synchronize()
 
 
-def shrinkage_hyper_blocks(
+def shrinkage_fft(
     hyper_blocks: np.ndarray, variance_blocks: np.ndarray, threshold_factor: float = 3
 ) -> np.ndarray:
     """
@@ -57,6 +59,62 @@ def shrinkage_hyper_blocks(
     memory_cleanup()
 
     return hyper_blocks
+
+
+def shrinkage_hadamard(
+    hyper_blocks: np.ndarray, variance_blocks: np.ndarray, threshold_factor: float = 3
+) -> np.ndarray:
+    """
+    Apply shrinkage to hyper blocks using their variances and the Hadamard transform.
+
+    Parameters
+    ----------
+    hyper_blocks : np.ndarray
+        Hyper blocks of image patches with shape (num_blocks, num_patches_per_block, patch_height, patch_width).
+    variance_blocks : np.ndarray
+        Hyper blocks of noise variances with shape (num_blocks, num_patches_per_block, patch_height, patch_width).
+    threshold_factor : float
+        Factor to determine the shrinkage threshold.
+
+    Returns
+    -------
+    np.ndarray
+        Array of denoised hyper blocks with the same shape as the input hyper blocks.
+    """
+    # Send data to GPU
+    denoised_hyper_blocks = cp.asarray(hyper_blocks)
+    variance_blocks = cp.asarray(variance_blocks)
+
+    # Compute the threshold for shrinkage
+    threshold = threshold_factor * cp.sqrt(variance_blocks)
+
+    # Get the size of the patches
+    n = denoised_hyper_blocks.shape[-1]  # Assuming square patches
+    H = hadamard(n)
+
+    # Hadamard transform
+    denoised_hyper_blocks = cp.einsum("ij,...jl->...il", H, denoised_hyper_blocks)
+    denoised_hyper_blocks = cp.einsum("...ij,jl->...il", denoised_hyper_blocks, H)
+
+    # Apply shrinkage (hard thresholding) in the Hadamard domain
+    denoised_hyper_blocks = cp.where(
+        cp.abs(denoised_hyper_blocks) > threshold, denoised_hyper_blocks, 0
+    )
+
+    # Inverse Hadamard transform
+    denoised_hyper_blocks = cp.einsum("ij,...jl->...il", H, denoised_hyper_blocks)
+    denoised_hyper_blocks = cp.einsum("...ij,jl->...il", denoised_hyper_blocks, H) / (
+        n * n
+    )
+
+    # Send data back to CPU
+    denoised_hyper_blocks_cpu = cp.asnumpy(denoised_hyper_blocks)
+
+    # Clear memory cache
+    del denoised_hyper_blocks, variance_blocks, threshold
+    memory_cleanup()
+
+    return denoised_hyper_blocks_cpu
 
 
 def collaborative_wiener_filtering(
@@ -120,3 +178,77 @@ def collaborative_wiener_filtering(
     memory_cleanup()
 
     return hyper_blocks
+
+
+def collaborative_hadamard_filtering(
+    hyper_blocks: np.ndarray,
+    variance_blocks: np.ndarray,
+    noisy_hyper_blocks: np.ndarray,
+) -> np.ndarray:
+    """
+    Apply Wiener filtering to hyper blocks using their variances and the noisy image patches with the Hadamard transform.
+
+    Parameters
+    ----------
+    hyper_blocks : np.ndarray
+        Hyper blocks of denoised image patches with shape (num_blocks, num_patches_per_block, patch_height, patch_width).
+    variance_blocks : np.ndarray
+        Hyper blocks of noise variances with shape (num_blocks, num_patches_per_block, patch_height, patch_width).
+    noisy_hyper_blocks : np.ndarray
+        Hyper blocks of noisy image patches with shape (num_blocks, num_patches_per_block, patch_height, patch_width).
+
+    Returns
+    -------
+    np.ndarray
+        Array of denoised hyper blocks after Wiener filtering.
+    """
+    # Send data to the GPU
+    hyper_blocks_gpu = cp.asarray(hyper_blocks)
+    variance_blocks_gpu = cp.asarray(variance_blocks)
+    noisy_hyper_blocks_gpu = cp.asarray(noisy_hyper_blocks)
+
+    # Get the size of the patches
+    n = hyper_blocks_gpu.shape[-1]  # Assuming square patches
+    H = hadamard(n)
+
+    # Hadamard transform
+    hyper_blocks_hadamard = cp.einsum("ij,...jl->...il", H, hyper_blocks_gpu)
+    hyper_blocks_hadamard = cp.einsum("...ij,jl->...il", hyper_blocks_hadamard, H)
+    noisy_hyper_blocks_hadamard = cp.einsum(
+        "ij,...jl->...il", H, noisy_hyper_blocks_gpu
+    )
+    noisy_hyper_blocks_hadamard = cp.einsum(
+        "...ij,jl->...il", noisy_hyper_blocks_hadamard, H
+    )
+
+    # Estimate the power spectral density (PSD) of the signal and noise
+    signal_psd = cp.abs(hyper_blocks_hadamard) ** 2
+    noise_psd = variance_blocks_gpu
+
+    # Compute Wiener filter coefficients
+    wiener_filter = signal_psd / (signal_psd + noise_psd + 1e-8)
+
+    # Apply Wiener filtering
+    filtered_blocks_hadamard = wiener_filter * noisy_hyper_blocks_hadamard
+
+    # Apply inverse Hadamard transform to obtain the denoised hyper blocks
+    filtered_blocks = cp.einsum("ij,...jl->...il", H, filtered_blocks_hadamard)
+    filtered_blocks = cp.einsum("...ij,jl->...il", filtered_blocks, H) / (n * n)
+
+    # Send data back to the CPU
+    filtered_blocks_cpu = cp.asnumpy(filtered_blocks)
+
+    # Clear memory cache
+    del (
+        variance_blocks_gpu,
+        noisy_hyper_blocks_gpu,
+        hyper_blocks_hadamard,
+        noisy_hyper_blocks_hadamard,
+        signal_psd,
+        noise_psd,
+        wiener_filter,
+        filtered_blocks_hadamard,
+    )
+    memory_cleanup()
+
+    return filtered_blocks_cpu
