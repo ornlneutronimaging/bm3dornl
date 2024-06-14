@@ -89,6 +89,52 @@ def aggregate_block_to_image(
                     weights[i_pos + ii, j_pos + jj] += weight[ii, jj]
 
     # Normalize the denoised image by the sum of weights
-    estimate_denoised_image /= weights
+    estimate_denoised_image /= np.maximum(weights, 1)
 
     return estimate_denoised_image
+
+
+@njit(parallel=True)
+def aggregate_denoised_block_to_image(
+    image_shape: Tuple[int, int],
+    denoised_patches: np.ndarray,
+    patch_positions: np.ndarray,
+) -> np.ndarray:
+    """
+    Aggregate denoised patches into the final denoised image.
+
+    Parameters
+    ----------
+    image_shape : tuple
+        The shape of the final denoised image (height, width).
+    denoised_patches : np.ndarray
+        A 4D numpy array of denoised patches. Shape is (num_blocks, num_patches_per_block, patch_height, patch_width).
+    patch_positions : np.ndarray
+        A 3D numpy array containing the top-left indices (row, column) for each patch in the `denoised_patches`.
+        Shape is (num_blocks, num_patches_per_block, 2).
+
+    Returns
+    -------
+    np.ndarray
+        The final denoised image.
+    """
+    denoised_image = np.zeros(image_shape, dtype=np.float32)
+    weights = np.zeros(image_shape, dtype=np.float32)
+
+    num_blocks, num_patches_per_block, patch_height, patch_width = (
+        denoised_patches.shape
+    )
+
+    for block_idx in prange(num_blocks):
+        for patch_idx in range(num_patches_per_block):
+            patch = denoised_patches[block_idx, patch_idx]
+            top_left_row, top_left_col = patch_positions[block_idx, patch_idx]
+            for i in range(patch_height):
+                for j in range(patch_width):
+                    denoised_image[top_left_row + i, top_left_col + j] += patch[i, j]
+                    weights[top_left_row + i, top_left_col + j] += 1
+
+    # Normalize the denoised image by the sum of weights
+    denoised_image /= np.maximum(weights, 1)
+
+    return denoised_image
