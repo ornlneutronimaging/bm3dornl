@@ -4,10 +4,6 @@
 import numpy as np
 from typing import Tuple, List
 from numba import njit, prange
-# from bm3dornl.utils import (
-#     # pad_patch_ids,
-#     # find_candidate_patch_ids,
-# )
 
 
 @njit
