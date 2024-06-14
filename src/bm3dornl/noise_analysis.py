@@ -46,6 +46,24 @@ def get_exact_noise_variance_fft(patches: np.ndarray) -> np.ndarray:
     return patches_psd * patches_psd_mean[np.newaxis, ...]
 
 
+def get_exact_noise_variance(transformed_patches: np.ndarray) -> np.ndarray:
+    """Estimate the noise variance of each transformed patch in the input array.
+
+    Parameters
+    ----------
+    transformed_patches : np.ndarray
+        Input array with shape (N, H, W), where N is the number of patches and H, W are the patch dimensions.
+
+    Returns
+    -------
+    np.ndarray
+        Array with shape (N, H, W) containing the estimated noise variance of each transformed patch.
+    """
+    patches_psd = np.abs(transformed_patches) ** 2
+    patches_psd_mean = np.mean(patches_psd, axis=0)
+    return patches_psd * patches_psd_mean[np.newaxis, ...]
+
+
 def get_exact_noise_variance_hadamard(patches: np.ndarray) -> np.ndarray:
     """
     Estimate the noise variance of each patch in the input array using the Hadamard transform.

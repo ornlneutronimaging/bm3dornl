@@ -13,8 +13,7 @@ from .block_matching import (
 )
 from .noise_analysis import (
     estimate_noise_psd,
-    get_exact_noise_variance_fft,
-    get_exact_noise_variance_hadamard,
+    get_exact_noise_variance,
 )
 from .denoiser_gpu import (
     shrinkage_fft,
@@ -291,12 +290,10 @@ def bm3d_ring_artifact_removal(
     method = method.lower()
     if method == "fft":
         transform_func = fft_transform
-        noise_variance_func = get_exact_noise_variance_fft
         shrinkage_func = shrinkage_fft
         collaborative_filtering_func = collaborative_wiener_filtering
     elif method == "hadamard":
         transform_func = hadamard_transform
-        noise_variance_func = get_exact_noise_variance_hadamard
         shrinkage_func = shrinkage_hadamard
         collaborative_filtering_func = collaborative_hadamard_filtering
     else:
@@ -327,7 +324,7 @@ def bm3d_ring_artifact_removal(
     # 1.3 Compute the transformed patches
     transformed_patches = transform_func(signal_patches)
     # 1.4 Estimate the noise variance for transformed patches
-    phi_fft = noise_variance_func(signal_patches)
+    phi_fft = get_exact_noise_variance(transformed_patches)
     # 1.5 Estimate the noise-free sinogram via hard-thresholding
     yhat_ht = shrinkage_via_hardthresholding(
         sinogram=z,
@@ -343,7 +340,7 @@ def bm3d_ring_artifact_removal(
     )
 
     # Step 2: use global fourier thresholding GFT to refine the noise-free sinogram
-    #         GFT(z, phi, yhat_ht) -> yhat_gft_ht, phi_gft_ht
+    #         GFT(z, phi, yhat_ht) -> z_gft_ht
     z_gft_ht = global_fourier_thresholding(z, phi, yhat_ht)
 
     # Step 3: use hard thresholding again to refine the GFT result
@@ -355,7 +352,7 @@ def bm3d_ring_artifact_removal(
     # 3.2 Compute the transformed patches
     transformed_patches = transform_func(signal_patches)
     # 3.3 Estimate the noise variance for transformed patches
-    phi_fft_gft_ht = noise_variance_func(signal_patches)
+    phi_fft_gft_ht = get_exact_noise_variance(transformed_patches)
     # 3.4 Estimate the noise-free sinogram via hard-thresholding
     yhat_ht_gft = shrinkage_via_hardthresholding(
         sinogram=z_gft_ht,
@@ -398,7 +395,7 @@ def bm3d_ring_artifact_removal(
     # 6.2 Compute the transformed patches
     transformed_patches = transform_func(signal_patches)
     # 6.3 Estimate the noise variance for transformed patches
-    phi_fft_gft_wie = noise_variance_func(signal_patches)
+    phi_fft_gft_wie = get_exact_noise_variance(transformed_patches)
     # 6.4 Compute the final denoised sinogram
     yhat_final = collaborative_filtering(
         sinogram=z_gft_wie,
