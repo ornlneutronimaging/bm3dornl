@@ -2,12 +2,52 @@
 """Block matching to build hyper block from single sinogram."""
 
 import numpy as np
-from typing import Tuple
+from typing import Tuple, List
 from numba import njit, prange
-from bm3dornl.utils import (
-    pad_patch_ids,
-    find_candidate_patch_ids,
-)
+# from bm3dornl.utils import (
+#     # pad_patch_ids,
+#     # find_candidate_patch_ids,
+# )
+
+
+@njit
+def find_candidate_patch_ids(
+    signal_patches: np.ndarray, ref_index: int, cut_off_distance: Tuple
+) -> List[int]:
+    """
+    Identify candidate patch indices that are within the specified Manhattan distance from a reference patch.
+
+    This function computes a list of indices for patches that are within a given row and column distance from
+    the reference patch specified by `ref_index`. It only considers patches that have not been compared previously
+    (i.e., patches that are ahead of the reference patch in the list, ensuring the upper triangle of the comparison matrix).
+
+    Parameters
+    ----------
+    signal_patches : np.ndarray
+        Array containing the positions of all signal patches. Each position is represented as (row_index, column_index).
+    ref_index : int
+        Index of the reference patch in `signal_patches` for which candidates are being sought.
+    cut_off_distance : tuple
+        A tuple (row_dist, col_dist) specifying the maximum allowed distances in the row and column directions.
+
+    Returns
+    -------
+    list
+        A list of integers representing the indices of the candidate patches in `signal_patches` that are within
+        the `cut_off_distance` from the reference patch and are not previously compared (ensuring upper triangle).
+    """
+    num_patches = signal_patches.shape[0]
+    ref_pos = signal_patches[ref_index]
+    candidate_patch_ids = [ref_index]
+
+    for i in range(ref_index + 1, num_patches):  # Ensure only checking upper triangle
+        if (
+            np.abs(signal_patches[i, 0] - ref_pos[0]) <= cut_off_distance[0]
+            and np.abs(signal_patches[i, 1] - ref_pos[1]) <= cut_off_distance[1]
+        ):
+            candidate_patch_ids.append(i)
+
+    return candidate_patch_ids
 
 
 @njit
@@ -61,6 +101,60 @@ def get_signal_patch_positions(
         )
 
     return np.array(signal_patches)
+
+
+@njit
+def pad_patch_ids(
+    candidate_patch_ids: np.ndarray,
+    num_patches: int,
+    mode: str = "circular",
+) -> np.ndarray:
+    """
+    Pad the array of patch IDs to reach a specified length using different strategies.
+
+    Parameters
+    ----------
+    candidate_patch_ids : np.ndarray
+        Array of patch indices identified as candidates.
+    num_patches : int
+        Desired number of patches in the padded list.
+    mode : str
+        Padding mode, options are 'first', 'repeat_sequence', 'circular', 'mirror', 'random'.
+
+    Returns
+    -------
+    np.ndarray
+        Padded array of patch indices.
+    """
+    current_length = len(candidate_patch_ids)
+    if current_length >= num_patches:
+        return candidate_patch_ids[:num_patches]
+
+    if mode == "first":
+        padding = np.full((num_patches - current_length,), candidate_patch_ids[0])
+    elif mode == "repeat_sequence":
+        repeats = (num_patches // current_length) + 1
+        padded = np.empty(num_patches, dtype=candidate_patch_ids.dtype)
+        index = 0
+        for _ in range(repeats):
+            for candidate in candidate_patch_ids:
+                if index >= num_patches:
+                    break
+                padded[index] = candidate
+                index += 1
+        return padded
+    elif mode == "circular":
+        padded = np.empty(num_patches, dtype=candidate_patch_ids.dtype)
+        for i in range(num_patches):
+            padded[i] = candidate_patch_ids[i % current_length]
+        return padded
+    elif mode == "mirror":
+        extended = np.concatenate((candidate_patch_ids, candidate_patch_ids[::-1]))
+        padded = extended[:num_patches]
+        return padded
+    elif mode == "random":
+        padding = np.random.choice(candidate_patch_ids, num_patches - current_length)
+    return np.concatenate((candidate_patch_ids, padding))
 
 
 @njit
@@ -253,7 +347,7 @@ def form_hyper_blocks_from_distance_matrix(
         )
 
         for j in range(num_patches_per_group):
-            idx = padded_patch_ids[j]
+            idx = int(padded_patch_ids[j])
             patch = get_patch_numba(image, patch_positions[idx], patch_size)
             block[i, j] = patch
             positions[i, j] = patch_positions[idx]
@@ -331,7 +425,7 @@ def form_hyper_blocks_from_two_images(
         )
 
         for j in range(num_patches_per_group):
-            idx = padded_patch_ids[j]
+            idx = int(padded_patch_ids[j])
             patch1 = get_patch_numba(image1, patch_positions[idx], patch_size)
             patch2 = get_patch_numba(image2, patch_positions[idx], patch_size)
             block1[i, j] = patch1
@@ -340,213 +434,3 @@ def form_hyper_blocks_from_two_images(
             variance_blocks1[i, j] = variances1[idx]
 
     return block1, block2, positions, variance_blocks1
-
-
-# def image_to_hyper_blocks(
-#     image: np.ndarray,
-#     patch_size: Tuple[int, int] = (8, 8),
-#     stride: int = 3,
-#     background_threshold: float = 1e-3,
-#     cut_off_distance: Tuple[int, int] = (64, 64),
-#     intensity_diff_threshold: float = 0.1,
-#     num_patches_per_group: int = 100,
-#     padding_mode: str = "circular",
-#     alternative_source: Optional[np.ndarray] = None,
-# ) -> Tuple[np.ndarray, np.ndarray]:
-#     """Generate hyper block from single image for block matching.
-
-#     Parameters
-#     ----------
-#     image : np.ndarray
-#         The image from which to extract patches.
-#     patch_size : tuple
-#         The size of the patches to extract.
-#     stride : int
-#         The stride with which to slide the patch window.
-#     background_threshold : float
-#         The threshold below which a patch is considered background.
-#     cut_off_distance : tuple
-#         The maximum distance between patches in a block.
-#     intensity_diff_threshold : float
-#         The maximum intensity difference between patches.
-#     num_patches_per_group : int
-#         The number of patches in each group.
-#     padding_mode : str
-#         The mode for padding the patch IDs.
-#     alternative_source : np.ndarray
-#         An alternative source image to extract patches from.
-
-#     Returns
-#     -------
-#     tuple
-#         A tuple containing the hyper block and the corresponding positions.
-#     """
-#     # get the patch positions, upper left corner of each patch
-#     signal_patches_pos = get_signal_patch_positions(
-#         image, patch_size, stride, background_threshold
-#     )
-
-#     # prepare distance matrix
-#     num_patches = len(signal_patches_pos)
-#     signal_blocks_matrix = np.zeros((num_patches, num_patches), dtype=float)
-
-#     # cache the patches
-#     cached_patches = np.array([get_patch_numba(image, pos, patch_size) for pos in signal_patches_pos])
-
-#     # fill the matrix
-#     # TODO: improve ordering function to consider noise variance
-#     compute_signal_blocks_matrix(
-#         signal_blocks_matrix=signal_blocks_matrix,
-#         cached_patches=cached_patches,
-#         signal_patches_pos=signal_patches_pos,
-#         cut_off_distance=cut_off_distance,
-#         intensity_diff_threshold=intensity_diff_threshold,
-#     )
-
-#     # compute hyper blocks and index
-#     block, positions = compute_hyper_block(
-#         signal_blocks_matrix=signal_blocks_matrix,
-#         signal_patches_pos=signal_patches_pos,
-#         patch_size=patch_size,
-#         num_patches_per_group=num_patches_per_group,
-#         image=image if alternative_source is None else alternative_source,
-#         padding_mode=padding_mode,
-#     )
-
-#     return block, positions
-
-
-# class PatchManager:
-#     def __init__(
-#         self,
-#         image: np.ndarray,
-#         patch_size: Tuple[int, int] = (8, 8),
-#         stride: int = 1,
-#         background_threshold: float = 0.1,
-#     ):
-#         """
-#         Initialize the PatchManager with an image, patch configuration, and background threshold
-#         for distinguishing between signal and background patches.
-
-#         Parameters
-#         ----------
-#         image : np.ndarray
-#             The image from which patches will be managed.
-#         patch_size : tuple
-#             Dimensions (height, width) of each patch. Default is (8, 8).
-#         stride : int
-#             The stride with which to slide the window across the image. Default is 1.
-#         background_threshold : float
-#             The mean intensity threshold below which a patch is considered a background patch.
-#         """
-#         self._image = image
-#         self.patch_size = patch_size
-#         self.stride = stride
-#         self.background_threshold = background_threshold
-#         self.signal_patches_pos = []
-#         self.signal_blocks_matrix = []
-#         self._generate_patch_positions()
-
-#     def _generate_patch_positions(self):
-#         """Generate the positions of signal and background patches in the image."""
-#         self.signal_patches_pos = get_signal_patch_positions(
-#             self._image, self.patch_size, self.stride, self.background_threshold
-#         )
-
-#     @property
-#     def image(self):
-#         return self._image
-
-#     @image.setter
-#     def image(self, value):
-#         self._image = value
-#         self._generate_patch_positions()
-
-#     def get_patch(
-#         self, position: tuple, source_image: Optional[np.ndarray] = None
-#     ) -> np.ndarray:
-#         """Retreive a patch from the image at the specified position.
-
-#         Parameters:
-#         ----------
-#         position : tuple
-#             The row and column indices of the top-left corner of the patch.
-#         source_image : np.ndarray
-
-#         Returns:
-#         -------
-#         np.ndarray
-#             The patch extracted from the image.
-#         """
-#         source_image = self._image if source_image is None else source_image
-#         return get_patch_numba(source_image, position, self.patch_size)
-
-#     def group_signal_patches(
-#         self, cut_off_distance: tuple, intensity_diff_threshold: float
-#     ):
-#         """
-#         Group signal patches into blocks based on spatial and intensity distance thresholds.
-
-#         Parameters:
-#         ----------
-#         cut_off_distance : tuple
-#             Maximum spatial distance in terms of row and column indices for patches in the same block, Manhattan distance (taxi cab distance).
-#         intensity_diff_threshold : float
-#             Maximum Euclidean distance in intensity for patches to be considered similar.
-#         """
-#         num_patches = len(self.signal_patches_pos)
-#         # Initialize the signal blocks matrix
-#         # note:
-#         # - the matrix is symmetric
-#         # - the zero values means the patches are not similar
-#         # - the non-zero values are the Euclidean distance between the patches, i.e smaller values means smaller distance, higher similarity
-#         self.signal_blocks_matrix = np.zeros((num_patches, num_patches), dtype=float)
-
-#         # Cache patches as views
-#         cached_patches = np.array(
-#             [self.get_patch(pos) for pos in self.signal_patches_pos]
-#         )
-
-#         # Compute signal blocks matrix using Numba JIT for speed
-#         compute_signal_blocks_matrix(
-#             self.signal_blocks_matrix,
-#             cached_patches,
-#             np.array(self.signal_patches_pos),
-#             np.array(cut_off_distance),
-#             intensity_diff_threshold,
-#         )
-
-#     def get_hyper_block(
-#         self,
-#         num_patches_per_group: int,
-#         padding_mode="circular",
-#         alternative_source: np.ndarray = None,
-#     ):
-#         """
-#         Return groups of similar patches as 4D arrays with each group having a fixed number of patches.
-
-#         Parameters:
-#         ----------
-#         num_patches_per_group : int
-#             Number of patches in each group.
-#         padding_mode : str
-#             Mode for padding the patch IDs when the number of candidates is less than `num_patches_per_group`.
-#             Options are 'first', 'repeat_sequence', 'circular', 'mirror', 'random'.
-#         alternative_source : cp.ndarray
-#             An alternative source image to extract patches from. Default is None.
-
-#         Returns:
-#         -------
-#         tuple
-#             A tuple containing the 4D array of patch groups and the corresponding positions.
-#         """
-#         source_image = self._image if alternative_source is None else alternative_source
-#         block, positions = compute_hyper_block(
-#             self.signal_blocks_matrix,
-#             np.array(self.signal_patches_pos),
-#             self.patch_size,
-#             num_patches_per_group,
-#             source_image,
-#             padding_mode,
-#         )
-#         return block, positions

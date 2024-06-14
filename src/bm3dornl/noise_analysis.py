@@ -5,6 +5,29 @@ import numpy as np
 from bm3dornl.signal import hadamard_transform
 
 
+def estimate_noise_psd(noisy_image: np.ndarray) -> np.ndarray:
+    """
+    Estimate the noise power spectral density (PSD) from a given noisy image.
+
+    Parameters
+    ----------
+    noisy_image : np.ndarray
+        The noisy image from which to estimate the noise PSD.
+
+    Returns
+    -------
+    np.ndarray
+        The estimated noise PSD.
+    """
+    # Compute the Fourier transform of the noisy image
+    noisy_image_fft = np.fft.fft2(noisy_image)
+
+    # Estimate the noise power spectral density (PSD)
+    noise_psd = np.abs(noisy_image_fft) ** 2 / noisy_image.size
+
+    return noise_psd
+
+
 def get_exact_noise_variance_fft(patches: np.ndarray) -> np.ndarray:
     """Estimate the noise variance of each patch in the input array.
 
