@@ -160,3 +160,6 @@ cython_debug/
 #.idea/
 .envrc
 src/bm3dornl/_version.py
+.vscode/settings.json
+tmp/*
+dev*.ipynb
