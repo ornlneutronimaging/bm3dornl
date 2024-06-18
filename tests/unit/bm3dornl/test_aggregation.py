@@ -1,61 +1,130 @@
-#!/usr/bin/env python3
-
-"""Unit test for patch aggregation functions."""
-
-import pytest
 import numpy as np
-from bm3dornl.aggregation import aggregate_patches
+import pytest
+from bm3dornl.aggregation import (
+    aggregate_block_to_image,
+    aggregate_denoised_block_to_image,
+)
 
 
-def test_aggregate_patches():
-    # Setup
-    # ph, pw = 2, 2  # patch height and width
-    # num_blocks = 1
-    # num_patches_per_block = 2
+@pytest.fixture
+def sample_data():
+    image_shape = (64, 64)
+    patch_size = (8, 8)
+    num_blocks = 10
+    num_patches_per_block = 5
 
-    # Create a simple hyper block with known values
-    hyper_block = np.array([[[[1, 2], [3, 4]], [[5, 6], [7, 8]]]])
+    hyper_blocks = np.random.rand(
+        num_blocks, num_patches_per_block, patch_size[0], patch_size[1]
+    ).astype(np.float32)
+    variance_blocks = np.random.rand(
+        num_blocks, num_patches_per_block, patch_size[0], patch_size[1]
+    ).astype(np.float32)
+    hyper_block_indices = np.random.randint(
+        0, image_shape[0] - patch_size[0], size=(num_blocks, num_patches_per_block, 2)
+    ).astype(np.int32)
 
-    # Index positions where patches will be placed
-    hyper_block_index = np.array(
-        [
-            [
-                [0, 0],  # First patch at top-left corner
-                [0, 0],  # Second patch also starts at top-left for overlap
-            ]
-        ]
+    denoised_patches = np.random.rand(
+        num_blocks, num_patches_per_block, patch_size[0], patch_size[1]
+    ).astype(np.float32)
+    patch_positions = hyper_block_indices
+
+    return (
+        image_shape,
+        hyper_blocks,
+        hyper_block_indices,
+        variance_blocks,
+        denoised_patches,
+        patch_positions,
     )
 
-    # Initial image and weights matrices sized 2x2
-    estimate_denoised_image = np.zeros((2, 2), dtype=float)
-    weights = np.zeros((2, 2), dtype=float)
 
-    # Expected outputs
-    expected_image = np.array(
-        [
-            [6, 8],  # Both patches contribute to the first row
-            [10, 12],  # Both patches contribute to the second row
-        ]
-    )
-    expected_weights = np.array(
-        [
-            [2, 2],  # Both patches contribute to each position
-            [2, 2],
-        ]
+def test_aggregate_block_to_image(sample_data):
+    image_shape, hyper_blocks, hyper_block_indices, variance_blocks, _, _ = sample_data
+
+    denoised_image = aggregate_block_to_image(
+        image_shape, hyper_blocks, hyper_block_indices, variance_blocks
     )
 
-    # Invoke the function under test
-    aggregate_patches(estimate_denoised_image, weights, hyper_block, hyper_block_index)
+    assert denoised_image.shape == image_shape
+    assert np.all(denoised_image >= 0)
+    assert np.all(np.isfinite(denoised_image))
 
-    # Assertions
-    np.testing.assert_array_almost_equal(
-        estimate_denoised_image,
-        expected_image,
-        err_msg="Image aggregation did not match expected",
+
+def test_aggregate_denoised_block_to_image(sample_data):
+    image_shape, _, _, _, denoised_patches, patch_positions = sample_data
+
+    final_denoised_image = aggregate_denoised_block_to_image(
+        image_shape, denoised_patches, patch_positions
     )
-    np.testing.assert_array_equal(
-        weights, expected_weights, err_msg="Weights update did not match expected"
+
+    assert final_denoised_image.shape == image_shape
+    assert np.all(final_denoised_image >= 0)
+    assert np.all(np.isfinite(final_denoised_image))
+
+
+def test_aggregate_block_to_image_zero_variance():
+    image_shape = (16, 16)
+    patch_size = (4, 4)
+    num_blocks = 2
+    num_patches_per_block = 3
+
+    hyper_blocks = np.random.rand(
+        num_blocks, num_patches_per_block, patch_size[0], patch_size[1]
+    ).astype(np.float32)
+    variance_blocks = np.zeros(
+        (num_blocks, num_patches_per_block, patch_size[0], patch_size[1])
+    ).astype(np.float32)
+    hyper_block_indices = np.random.randint(
+        0, image_shape[0] - patch_size[0], size=(num_blocks, num_patches_per_block, 2)
+    ).astype(np.int32)
+
+    denoised_image = aggregate_block_to_image(
+        image_shape, hyper_blocks, hyper_block_indices, variance_blocks
     )
+
+    assert denoised_image.shape == image_shape
+
+
+def test_aggregate_denoised_block_to_image_uniform_weights():
+    image_shape = (16, 16)
+    patch_size = (4, 4)
+    num_blocks = 2
+    num_patches_per_block = 3
+
+    denoised_patches = np.ones(
+        (num_blocks, num_patches_per_block, patch_size[0], patch_size[1])
+    ).astype(np.float32)
+    patch_positions = np.random.randint(
+        0, image_shape[0] - patch_size[0], size=(num_blocks, num_patches_per_block, 2)
+    ).astype(np.int32)
+
+    final_denoised_image = aggregate_denoised_block_to_image(
+        image_shape, denoised_patches, patch_positions
+    )
+
+    assert final_denoised_image.shape == image_shape
+    assert np.all(final_denoised_image >= 0)
+    assert np.all(np.isfinite(final_denoised_image))
+
+
+def test_aggregate_denoised_block_to_image_non_overlapping():
+    image_shape = (16, 16)
+
+    denoised_patches = np.array(
+        [[[[1, 2, 3, 4], [5, 6, 7, 8], [9, 10, 11, 12], [13, 14, 15, 16]]]],
+        dtype=np.float32,
+    )
+    patch_positions = np.array([[[0, 0]]], dtype=np.int32)
+
+    final_denoised_image = aggregate_denoised_block_to_image(
+        image_shape, denoised_patches, patch_positions
+    )
+
+    expected_image = np.zeros(image_shape, dtype=np.float32)
+    expected_image[:4, :4] = denoised_patches[0, 0]
+
+    assert final_denoised_image.shape == image_shape
+    assert np.allclose(final_denoised_image, expected_image)
 
 
 if __name__ == "__main__":
