@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Denoising functions using CuPy for GPU acceleration."""
 
+import logging
 import numpy as np
 from typing import Tuple, Callable
 from scipy.ndimage import gaussian_filter
@@ -29,6 +30,10 @@ from .aggregation import (
 from .signal import (
     fft_transform,
     hadamard_transform,
+)
+from .utils import (
+    horizontal_binning,
+    horizontal_debinning,
 )
 
 
@@ -678,3 +683,82 @@ def bm3d_ring_artifact_removal(
         )
     else:
         raise ValueError(f"Unknown mode: {mode}")
+
+
+def bm3d_ring_artifact_removal_ms(
+    sinogram: np.ndarray,
+    k: int = 4,
+    mode: str = "simple",  # express, simple, full
+    block_matching_kwargs: dict = {
+        "patch_size": (8, 8),
+        "stride": 3,
+        "background_threshold": 0.0,
+        "cut_off_distance": (64, 64),
+        "num_patches_per_group": 32,
+        "padding_mode": "circular",
+    },
+    filter_kwargs: dict = {
+        "filter_function": "fft",
+        "shrinkage_factor": 3e-2,
+    },
+) -> np.ndarray:
+    """Multiscale BM3D for streak removal
+
+    Parameters
+    ----------
+    sinogram : np.ndarray
+        The input sinogram to be denoised.
+    k : int, optional
+        The number of iterations for horizontal binning, by default 3
+    mode : str
+        The denoising mode to use.
+    block_matching_kwargs : dict
+        The block matching parameters.
+    filter_kwargs : dict
+        The filter parameters.
+
+    Returns
+    -------
+    np.ndarray
+        The denoised sinogram.
+
+    References
+    ----------
+    [1] ref: `Collaborative Filtering of Correlated Noise <https://doi.org/10.1109/TIP.2020.3014721>`_
+    [2] ref: `Ring artifact reduction via multiscale nonlocal collaborative filtering of spatially correlated noise <https://doi.org/10.1107/S1600577521001910>`_
+    """
+    # step 0: median filter the sinogram
+    sino_star = sinogram
+
+    if k == 0:
+        # single pass
+        return bm3d_ring_artifact_removal(
+            sino_star,
+            mode=mode,
+            block_matching_kwargs=block_matching_kwargs,
+            filter_kwargs=filter_kwargs,
+        )
+
+    # step 1: create a list of binned sinograms
+    binned_sinos = horizontal_binning(sinogram, k=k)
+    # reverse the list
+    binned_sinos = binned_sinos[::-1]
+
+    # step 2: estimate the noise level from the coarsest sinogram, then working back to the original sinogram
+    noise_estimate = None
+    for i in range(len(binned_sinos)):
+        logging.info(f"Processing binned sinogram {i+1} of {len(binned_sinos)}")
+        sino = binned_sinos[i]
+        sino_star = (
+            sino if i == 0 else sino - horizontal_debinning(noise_estimate, sino)
+        )
+
+        if i < len(binned_sinos) - 1:
+            noise_estimate = sino - bm3d_ring_artifact_removal(
+                sino_star,
+                mode=mode,
+                block_matching_kwargs=block_matching_kwargs,
+                filter_kwargs=filter_kwargs,
+            )
+
+    return sino_star
