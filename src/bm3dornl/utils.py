@@ -4,8 +4,6 @@
 import numpy as np
 from scipy.interpolate import RectBivariateSpline
 from numba import njit
-from scipy.fft import fft2, ifft2, fftshift, ifftshift
-from scipy.ndimage import gaussian_filter
 
 
 @njit
@@ -125,56 +123,6 @@ def horizontal_debinning(original_image: np.ndarray, target: np.ndarray) -> np.n
     interpolated_image = spline(new_y, new_x)
 
     return interpolated_image
-
-
-def estimate_noise_free_sinogram(
-    sinogram: np.ndarray,
-    background_estimate: float,
-    sigma_gaussian: float = 5.0,
-) -> np.ndarray:
-    """
-    Estimate noise-free sinogram from noisy sinogram.
-
-    Parameters
-    ----------
-    sinogram : np.ndarray
-        Noisy sinogram.
-    background_estimate : float
-        Background estimate value.
-    sigma_gaussian : float, optional
-        Standard deviation of the 1D Gaussian filter, by default 5.0.
-
-    Returns
-    -------
-    np.ndarray
-        Noise-free sinogram.
-    """
-    # Perform the hard-thresholding using FFT
-    sinogram_fft_shifted = fftshift(fft2(sinogram))
-    mask = np.ones_like(sinogram_fft_shifted)
-    crow = sinogram_fft_shifted.shape[0] // 2
-    mask[crow] = (
-        0  # this will suppress all vertical streaks, and some features (demerit)
-    )
-    sinogram_fft_shifted *= mask
-    sinogram_filtered = ifft2(ifftshift(sinogram_fft_shifted)).real
-
-    # Renormalize the sinogram to [0, 1] as the hard threshold mess up the intensity distribution
-    sinogram_filtered -= sinogram_filtered.min()
-    sinogram_filtered /= sinogram_filtered.max()
-
-    # Now reapply the background
-    sinogram_filtered[sinogram < background_estimate] = 0
-
-    sino_blurred = gaussian_filter(sinogram, sigma=sigma_gaussian)
-    scale_profile = np.sum(sinogram_filtered, axis=0) / np.sum(sino_blurred, axis=0)
-    sinogram_filtered /= scale_profile + 1e-8
-
-    # renormalize the sinogram to [0, 1]
-    sinogram_filtered -= sinogram_filtered.min()
-    sinogram_filtered /= sinogram_filtered.max()
-
-    return sinogram_filtered
 
 
 def estimate_background_intensity(
