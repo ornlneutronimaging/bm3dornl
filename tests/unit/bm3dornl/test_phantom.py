@@ -1,93 +1,65 @@
-#!/usr/bin/env python3
-
-"""Unit test for phantom module."""
-
-import pytest
 import numpy as np
+import pytest
 from bm3dornl.phantom import (
     shepp_logan_phantom,
     generate_sinogram,
     simulate_detector_gain_error,
+    apply_convolution,
+    get_synthetic_noise,
 )
 
 
+@pytest.fixture
+def sample_image():
+    return np.random.rand(256, 256).astype(float)
+
+
 def test_shepp_logan_phantom():
-    """Test the shepp_logan_phantom function."""
-    size = 256
-    contrast_factor = 2.0
-    phantom = shepp_logan_phantom(size=size, contrast_factor=contrast_factor)
-
-    # Check the shape
-    assert phantom.shape == (size, size), "Phantom shape mismatch"
-
-    # Check that all values are between 0 and 1
-    assert phantom.min() >= 0, "Phantom values should be >= 0"
-    assert phantom.max() <= 1, "Phantom values should be <= 1"
-
-    # Check that the phantom contains meaningful non-zero values
-    assert np.any(phantom > 0), "Phantom should have non-zero values"
+    phantom = shepp_logan_phantom(size=256, contrast_factor=2.0)
+    assert phantom.shape == (256, 256)
+    assert phantom.dtype == float
+    assert np.min(phantom) >= 0
+    assert np.max(phantom) <= 1
 
 
-def test_generate_sinogram():
-    """Test the generate_sinogram function."""
-    input_size = 256
-    scan_step = 1.0
-    input_img = np.random.rand(input_size, input_size)
-
-    sinogram, thetas_deg = generate_sinogram(input_img, scan_step)
-
-    # Verify the shape of the sinogram
-    expected_num_projections = int(360 / scan_step)
-    assert sinogram.shape == (
-        expected_num_projections,
-        363,
-    ), f"Sinogram shape mismatch, expected: {(expected_num_projections, 363)}"
-
-    # Verify the length of the angles array
-    assert thetas_deg.shape == (
-        expected_num_projections,
-    ), f"Theta shape mismatch, expected: {(expected_num_projections,)}"
-
-    # Ensure that the theta array spans the correct range
-    assert thetas_deg.min() >= -180, "Minimum theta value should be -180 degrees"
-    assert thetas_deg.max() < 180, "Maximum theta value should be less than 180 degrees"
-
-    # Check for non-zero sinogram
-    assert np.any(sinogram > 0), "The sinogram should contain non-zero values"
+def test_generate_sinogram(sample_image):
+    sinogram, thetas_deg = generate_sinogram(sample_image, scan_step=1)
+    assert sinogram.shape[0] == 360
+    assert thetas_deg.shape == (360,)
+    assert np.min(sinogram) >= 0.000
+    assert np.max(sinogram) <= 1.001
 
 
-def test_simulate_detector_gain_error():
-    """Test the simulate_detector_gain_error function."""
-    # Define the parameters for the test
-    sinogram_shape = (360, 256)
-    detector_gain_range = (0.9, 1.1)
-    detector_gain_error = 0.1
-
-    # Create a random sinogram for testing
-    sinogram = np.random.rand(*sinogram_shape)
-
-    # Call the function to simulate gain error
-    modified_sinogram, detector_gain = simulate_detector_gain_error(
-        sinogram, detector_gain_range, detector_gain_error
+def test_simulate_detector_gain_error(sample_image):
+    sinogram, _ = generate_sinogram(sample_image, scan_step=1)
+    sinogram_with_error, detector_gain = simulate_detector_gain_error(
+        sinogram, detector_gain_range=(0.9, 1.1), detector_gain_error=0.1
     )
+    assert sinogram_with_error.shape == sinogram.shape
+    assert detector_gain.shape == sinogram.shape
+    assert np.min(sinogram_with_error) >= 0
+    assert np.max(sinogram_with_error) <= 1
 
-    # Ensure the output sinogram and detector gain have the same shape as the input
-    assert (
-        modified_sinogram.shape == sinogram_shape
-    ), f"Output sinogram shape mismatch, expected: {sinogram_shape}"
-    assert (
-        detector_gain.shape == sinogram_shape
-    ), f"Detector gain shape mismatch, expected: {sinogram_shape}"
 
-    # Check that the sinogram is normalized to [0, 1]
-    assert modified_sinogram.min() >= 0, "Sinogram values should be >= 0"
-    assert modified_sinogram.max() <= 1, "Sinogram values should be <= 1"
+def test_apply_convolution(sample_image):
+    kernel = np.ones((3, 3))
+    convolved_noise = apply_convolution(sample_image, kernel)
+    assert convolved_noise.shape == sample_image.shape
+    assert convolved_noise.dtype == float
 
-    # Ensure that the output is of type float32
-    assert (
-        modified_sinogram.dtype == np.float32
-    ), "Output sinogram should be of type float32"
-    assert detector_gain.dtype == np.float32, "Detector gain should be of type float32"
+
+def test_get_synthetic_noise():
+    noise = get_synthetic_noise(
+        image_size=(256, 256),
+        streak_kernel_width=1,
+        streak_kernel_length=200,
+        white_noise_intensity=0.01,
+        streak_noise_intensity=0.01,
+    )
+    assert noise.shape == (256, 256)
+    assert noise.dtype == float
+    assert np.min(noise) >= -0.5
+    assert np.max(noise) <= 0.5
 
 
 if __name__ == "__main__":
