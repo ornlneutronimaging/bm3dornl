@@ -10,6 +10,10 @@ Welcome to bm3dornl's documentation!
    :maxdepth: 2
    :caption: Contents:
 
+   user
+   developer
+   api/modules
+   FAQ.md
 
 
 Indices and tables
