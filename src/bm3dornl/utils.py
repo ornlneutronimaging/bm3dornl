@@ -7,6 +7,8 @@ from numba import njit, prange
 from typing import Tuple, List
 from scipy.fft import fft2, ifft2, fftshift, ifftshift
 from scipy.ndimage import gaussian_filter
+from scipy.signal import convolve, convolve2d
+from scipy.interpolate import interp1d
 
 
 @njit
@@ -193,7 +195,7 @@ def pad_patch_ids(
     return np.concatenate((candidate_patch_ids, padding))
 
 
-def horizontal_binning(Z: np.ndarray, k: int = 0) -> list[np.ndarray]:
+def horizontal_binning1(Z: np.ndarray, k: int = 0) -> list[np.ndarray]:
     """
     Horizontal binning of the image Z into a list of k images.
 
@@ -231,7 +233,7 @@ def horizontal_binning(Z: np.ndarray, k: int = 0) -> list[np.ndarray]:
     return binned_zs
 
 
-def horizontal_debinning(original_image: np.ndarray, target: np.ndarray) -> np.ndarray:
+def horizontal_debinning1(original_image: np.ndarray, target: np.ndarray) -> np.ndarray:
     """
     Horizontal debinning of the image Z into the same shape as Z_target.
 
@@ -273,6 +275,113 @@ def horizontal_debinning(original_image: np.ndarray, target: np.ndarray) -> np.n
     interpolated_image = spline(new_y, new_x)
 
     return interpolated_image
+
+def create_array(base_arr: np.ndarray, h: int, dim: int):
+
+    """
+    Create a padded and convolved array used in both binning and debinning.
+    :param base_arr: Input array
+    :param h: bin count
+    :param dim: bin dimension (0 or 1)
+    :return: resulting array
+    """
+    mod_pad = h - ((base_arr.shape[dim] - 1) % h) - 1
+    if dim == 0:
+        pads = ((0, mod_pad), (0, 0))
+        kernel = np.ones((h, 1))
+    else:
+        pads = ((0, 0), (0, mod_pad))
+        kernel = np.ones((1, h))
+
+    return convolve2d(np.pad(base_arr, pads, 'symmetric'), kernel, 'same', 'fill')
+
+def horizontal_binning(z: np.ndarray, h: int = 2, dim: int = 1) -> np.ndarray:
+    """
+    Horizontal binning of the image Z
+
+    Parameters
+    ----------
+    Z : np.ndarray
+        The image to be binned.
+    h : int
+        devisor or binning
+    dim : direction
+    Returns
+    -------
+    np.ndarray
+        binned image
+
+    """
+
+    if h > 1:
+        h_half = h // 2
+        z_bin = create_array(z, h, dim)
+
+        # get coordinates of bin centres
+        if dim == 0:
+            z_bin = z_bin[h_half + ((h % 2) == 1): z_bin.shape[dim] - h_half + 1: h, :]
+        else:
+            z_bin = z_bin[:, h_half + ((h % 2) == 1): z_bin.shape[dim] - h_half + 1: h]
+
+        return z_bin
+
+    return z
+
+
+def horizontal_debinning(z: np.ndarray, size: int, h: int, n_iter: int, dim: int = 1) -> np.ndarray:
+    """
+        Horizontal debinning of the image Z into the same shape as Z_target.
+
+        Parameters
+        ----------
+        z : np.ndarray
+            The image to be debinned.
+        size: target size (original size before binning) for the second dimension
+        h: binning factor (original divisor)
+        n_iter: number of iterations
+        dim: dimension for binning (0 or 1)
+
+        Returns
+        -------
+        np.ndarray
+            The debinned image.
+            """
+    if h <= 1:
+        return np.copy(z)
+
+    h_half = h // 2
+
+    if dim == 0:
+        base_arr = np.ones((size, 1))
+    else:
+        base_arr = np.ones((1, size))
+
+    n_counter = create_array(base_arr, h, dim)
+
+    # coordinates of bin counts
+    x1c = np.arange(h_half + ((h % 2) == 1), (z.shape[dim]) * h, h)
+    x1 = np.arange(h_half + 1 - ((h % 2) == 0) / 2, (z.shape[dim]) * h, h)
+
+    # coordinates of image pixels
+    ix1 = np.arange(1, size + 1)
+
+    y_j = 0
+
+    for jj in range(max(1, n_iter)):
+        # residual
+        if jj > 0:
+            r_j = z - horizontal_binning(y_j, h, dim)
+        else:
+            r_j = z
+
+        # interpolation
+        if dim == 0:
+            interp = interp1d(x1, r_j / n_counter[x1c, :], kind='cubic', fill_value='extrapolate', axis=0)
+        else:
+            interp = interp1d(x1, r_j / n_counter[:, x1c], kind='cubic', fill_value='extrapolate')
+        y_j = y_j + interp(ix1)
+
+    return y_j
 
 
 def estimate_noise_free_sinogram(
