@@ -13,7 +13,7 @@ Welcome to bm3dornl's documentation!
    user
    developer
    api/modules
-   FAQ.md
+   FAQ
 
 
 Indices and tables
