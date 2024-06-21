@@ -1,7 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
-from bm3dornl.denoiser import bm3d_ring_artifact_removal_ms
-from bm3dornl.gpu_utils import memory_cleanup
+from bm3dornl.bm3d import bm3d_ring_artifact_removal_ms
+from bm3dornl.denoiser_gpu  import memory_cleanup
 
 
 with open("sino.npy", "rb") as f:
@@ -11,22 +11,27 @@ print(sino_noisy)
 
 memory_cleanup()
 
-keywargs = {
+block_matching_kwargs: dict = {
     "patch_size": (8, 8),
     "stride": 3,
-    "background_threshold": 1e-3,
-    "cut_off_distance": (128, 128),
-    "intensity_diff_threshold": 0.2,
-    "num_patches_per_group": 300,
+    "background_threshold": 0.0,
+    "cut_off_distance": (64, 64),
+    "num_patches_per_group": 32,
     "padding_mode": "circular",
-    "gaussian_noise_estimate": 5.0,
-    "wiener_filter_strength": 100.0,
-    "k": 1,
+}
+filter_kwargs: dict = {
+    "filter_function": "fft",
+    "shrinkage_factor": 3e-2,
+}
+kwargs = {
+    "mode": "full",
+    "block_matching_kwargs": block_matching_kwargs,
+    "filter_kwargs": filter_kwargs,
 }
 
 sino_bm3dornl = bm3d_ring_artifact_removal_ms(
     sinogram=sino_noisy,
-    **keywargs,
+    **kwargs,
 )
 
 
