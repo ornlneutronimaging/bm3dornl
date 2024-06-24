@@ -1,3 +1,4 @@
+==========
 User Guide
 ==========
 
@@ -8,6 +9,7 @@ In order to use this library, an Nvidia card with CUDA support is required.
     :align: center
     :alt: Example of ring artifact removal using bm3dornl
 
+------------
 Installation
 ------------
 
@@ -31,6 +33,7 @@ If you prefer installing from source directly from the repository, you can clone
     cd bm3dornl
     pip install .
 
+-----
 Usage
 -----
 
@@ -39,7 +42,9 @@ There are two main ways to use ``bm3dornl``:
 - Use ``bm3d_ring_artifact_removal`` to perform single-pass ring artifact removal.
 - Use ``bm3d_ring_artifact_removal_ms`` to perform multi-scale ring artifact removal (feature to come in the next version).
 
-### Single-pass ring artifact removal
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+Single-pass ring artifact removal
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 The core function of ``bm3dornl`` is ``bm3d_ring_artifact_removal``.
 This function takes a 2D NumPy array as input and returns a 2D NumPy array with the ring artifacts removed from the sinogram.
@@ -102,6 +107,8 @@ Currently, there are three modes available for the ring artifact removal:
     :align: center
     :alt: Example of ring artifact removal using bm3dornl in full mode
 
-### Multi-scale ring artifact removal
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+Multi-scale ring artifact removal
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 TO BE IMPLEMENTED

@@ -1,3 +1,4 @@
+===============
 Developer Guide
 ===============
 
@@ -7,6 +8,7 @@ Developer Guide
 
 This guide is intended for developers who want to contribute to the development of the project.
 
+-----------------
 Developer Account
 -----------------
 
@@ -14,6 +16,7 @@ All development work is done on Github and requires a Github account.
 For developers who are part of SCSE@ORNL, you need to make sure you have the 2-step verification enabled on your account to comply with the organization's security policy.
 For developers who are not part of SCSE@ORNL, you need to fork the repository to your own account and submit pull requests to the main repository.
 
+--------
 Branches
 --------
 
@@ -23,6 +26,7 @@ In addition to the `next` branch, we also have `qa` and `main` branches.
 The `qa` branch is used for testing the release candidate, and the `main` branch is used for the stable release.
 All three branches are protected branches, and only the project maintainers can merge into the `main` branch.
 
+-----------------
 Development Cycle
 -----------------
 
@@ -56,6 +60,7 @@ For developers who are not part of SCSE@ORNL, the development cycle is as follow
 
 * The project maintainers will review the pull request and provide feedback.
 
+-------------
 Release Cycle
 -------------
 
@@ -67,6 +72,7 @@ The release cycle is as follows:
 * The `main` branch will be tagged with the release version number.
 * The release version will be published on Github, Anaconda and PyPI.
 
+-------------------------
 Developing with Test Data
 -------------------------
 
