@@ -13,27 +13,23 @@ Installation
 
 You can install bm3dornl from Conda using the following command:
 
-```bash
+.. code-block:: bash
 
-conda install -c neutronimaging bm3dornl
-
-```
+    conda install -c neutronimaging bm3dornl
 
 Or using pip:
 
-```bash
+.. code-block:: bash
 
-pip install bm3dornl
-
-```
+    pip install bm3dornl
 
 If you prefer installing from source directly from the repository, you can clone the repository and run the following command:
 
-```bash
+.. code-block:: bash
 
-pip install .
-
-```
+    git clone
+    cd bm3dornl
+    pip install .
 
 Usage
 -----
@@ -51,44 +47,40 @@ The input sinogram must be normalized with flat field correction before using th
 
 Here is an example of how to use this function:
 
-```python
+.. code-block:: python
 
-from bm3dornl.bm3d import bm3d_ring_artifact_removal
+    from bm3dornl.bm3d import bm3d_ring_artifact_removal
 
-sinogram_denoised = bm3d_ring_artifact_removal(sinogram_input, mode="simple")
-
-```
+    sinogram_denoised = bm3d_ring_artifact_removal(sinogram_input, mode="simple")
 
 It is recommended to use the default values for the block matching and filtering parameters, unless you are familiar with the BM3D algorithm.
 If you would like to customize the block matching and filtering parameters, you can pass them as keyword arguments to the function, i.e.:
 
-```python
+.. code-block:: python
 
-from bm3dornl.bm3d import bm3d_ring_artifact_removal
+    from bm3dornl.bm3d import bm3d_ring_artifact_removal
 
-block_matching_kwargs: dict = {
-    "patch_size": (8, 8),
-    "stride": 3,
-    "background_threshold": 0.0,
-    "cut_off_distance": (64, 64),
-    "num_patches_per_group": 32,
-    "padding_mode": "circular",
-}
+    block_matching_kwargs: dict = {
+        "patch_size": (8, 8),
+        "stride": 3,
+        "background_threshold": 0.0,
+        "cut_off_distance": (64, 64),
+        "num_patches_per_group": 32,
+        "padding_mode": "circular",
+    }
 
-filter_kwargs: dict = {
-    "filter_function": "fft",
-    "shrinkage_factor": 3e-2,
-}
+    filter_kwargs: dict = {
+        "filter_function": "fft",
+        "shrinkage_factor": 3e-2,
+    }
 
-kwargs = {
-    "mode": "express",
-    "block_matching_kwargs": block_matching_kwargs,
-    "filter_kwargs": filter_kwargs,
-}
+    kwargs = {
+        "mode": "express",
+        "block_matching_kwargs": block_matching_kwargs,
+        "filter_kwargs": filter_kwargs,
+    }
 
-sinogram_denoised = bm3d_ring_artifact_removal(sinogram_input, **kwargs)
-
-```
+    sinogram_denoised = bm3d_ring_artifact_removal(sinogram_input, **kwargs)
 
 Currently, there are three modes available for the ring artifact removal:
 
