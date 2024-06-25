@@ -36,12 +36,24 @@ Installation
 
    - Use the `environment.yml` file: `conda env create -f environment.yml`.
 
+4. **Can I use bm3dornl without a GPU?**
+
+   - At present, the library requires a CUDA-enabled GPU for accelerated performance. We are working on a version that will allow CPU-only operation when a GPU is not available.
+
 Usage
 -----
 
 1. **Can you provide a basic example of how to use bm3dornl for ring artifact removal?**
 
    - See the user guide for a step-by-step example.
+   - Basic usage:
+
+   ```python
+   import numpy as np
+   from bm3dornl.bm3d import bm3d_ring_artifact_removal
+
+   sinogram_denoised = bm3d_ring_artifact_removal(np.array(sinogram_input), mode="simple")
+   ```
 
 2. **How do I use bm3dornl with CuPy for accelerated performance?**
 
@@ -50,6 +62,11 @@ Usage
 3. **What are the main functions provided by bm3dornl?**
 
    - The main function is `bm3d_ring_artifact_removal`, which takes a normalized sinogram and returns a denoised sinogram with reduced ring artifacts.
+   - It also provides functions to perform
+     - fast estimate with FFT-based notch filter
+     - block-matching, noise variance weighted hard-thresholding, and aggregation for noise-free estimate pilot
+     - block-matching, collaborative filtering, and aggregation for final denoising
+     - global fourier refiltering derived from a Wiener filter
 
 Code and Implementation
 -----------------------
@@ -61,6 +78,10 @@ Code and Implementation
 2. **Can you explain the process of block matching in bm3dornl?**
 
    - Involves finding similar patches in an image and grouping them for collaborative denoising, leveraging similar patches to enhance denoising effectiveness.
+
+3. **How is CuPy used in bm3dornl for GPU acceleration?**
+
+   - CuPy is used to perform computationally intensive tasks on the GPU, such as collaborative filtering and hard thresholding, to speed up the denoising process.
 
 Documentation and Support
 -------------------------
@@ -76,3 +97,11 @@ Documentation and Support
 3. **Are there any tutorials available for learning bm3dornl?**
 
    - Check the repository for example notebooks or additional tutorial links.
+
+4. **Where can I report bugs or request features?**
+
+   - You can report bugs or request features by opening an issue in the GitHub repository.
+
+5. **Is there a community or forum for bm3dornl users?**
+
+   - Currently, the primary community interaction happens through the GitHub issues and pull requests. Consider checking the repository for any updates on community forums or mailing lists.
