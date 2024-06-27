@@ -32,7 +32,7 @@ jobs:
           echo "versioningit $(versioningit ../)"
           # build the package
           VERSION=$(versioningit ../) conda mambabuild --channel conda-forge --output-folder . .
-          conda verify noarch/mypackagename*.tar.bz2
+          conda verify noarch/bm3dornl*.tar.bz2
       - name: upload conda package to anaconda
         shell: bash -l {0}
         if: startsWith(github.ref, 'refs/tags/v')
@@ -44,4 +44,4 @@ jobs:
           CONDA_LABEL="main"
           if [ "${IS_RC}" = "true" ]; then CONDA_LABEL="rc"; fi
           echo pushing ${{ github.ref }} with label $CONDA_LABEL
-          anaconda upload --label $CONDA_LABEL conda.recipe/noarch/mypackagename*.tar.bz2
+          anaconda upload --label $CONDA_LABEL conda.recipe/noarch/bm3dornl*.tar.bz2

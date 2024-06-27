@@ -1,6 +1,6 @@
 [project]
-name = "examplepyapp"
-description = "Example Python repo for neutrons"
+name = "bm3dornl"
+description = "BM3D repo"
 dynamic = ["version"]
 requires-python = ">=3.10"
 dependencies = [
@@ -36,7 +36,7 @@ dirty = "{version}+d{build_date:%Y%m%d}"
 distance-dirty = "{next_version}.dev{distance}+d{build_date:%Y%m%d%H%M}"
 
 [tool.versioningit.write]
-file = "src/packagenamepy/_version.py"
+file = "src/bm3dornl/_version.py"
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -59,7 +59,7 @@ testpaths = ["tests"]
 python_files = ["test*.py"]
 norecursedirs = [".git", "tmp*", "_tmp*", "__pycache__", "*dataset*", "*data_set*"]
 markers = [
-    "mymarker: example markers goes here"
+    "cuda_required: test requires cuda to run."
 ]
 
 [tool.pylint]
