@@ -3,12 +3,11 @@
 
 import numpy as np
 from scipy.interpolate import RectBivariateSpline
-from numba import njit, prange
+from numba import njit
 from typing import Tuple, List
-from scipy.fft import fft2, ifft2, fftshift, ifftshift
-from scipy.ndimage import gaussian_filter
-from scipy.signal import convolve, convolve2d
+from scipy.signal import convolve2d
 from scipy.interpolate import interp1d
+
 
 @njit
 def find_candidate_patch_ids(
@@ -275,8 +274,8 @@ def horizontal_debinning1(original_image: np.ndarray, target: np.ndarray) -> np.
 
     return interpolated_image
 
-def create_array(base_arr: np.ndarray, h: int, dim: int):
 
+def create_array(base_arr: np.ndarray, h: int, dim: int):
     """
     Create a padded and convolved array used in both binning and debinning.
     :param base_arr: Input array
@@ -292,7 +291,8 @@ def create_array(base_arr: np.ndarray, h: int, dim: int):
         pads = ((0, 0), (0, mod_pad))
         kernel = np.ones((1, h))
 
-    return convolve2d(np.pad(base_arr, pads, 'symmetric'), kernel, 'same', 'fill')
+    return convolve2d(np.pad(base_arr, pads, "symmetric"), kernel, "same", "fill")
+
 
 def horizontal_binning(z: np.ndarray, h: int = 2, dim: int = 1) -> np.ndarray:
     """
@@ -318,33 +318,39 @@ def horizontal_binning(z: np.ndarray, h: int = 2, dim: int = 1) -> np.ndarray:
 
         # get coordinates of bin centres
         if dim == 0:
-            z_bin = z_bin[h_half + ((h % 2) == 1): z_bin.shape[dim] - h_half + 1: h, :]
+            z_bin = z_bin[
+                h_half + ((h % 2) == 1) : z_bin.shape[dim] - h_half + 1 : h, :
+            ]
         else:
-            z_bin = z_bin[:, h_half + ((h % 2) == 1): z_bin.shape[dim] - h_half + 1: h]
+            z_bin = z_bin[
+                :, h_half + ((h % 2) == 1) : z_bin.shape[dim] - h_half + 1 : h
+            ]
 
         return z_bin
 
     return z
 
 
-def horizontal_debinning(z: np.ndarray, size: int, h: int, n_iter: int, dim: int = 1) -> np.ndarray:
+def horizontal_debinning(
+    z: np.ndarray, size: int, h: int, n_iter: int, dim: int = 1
+) -> np.ndarray:
     """
-        Horizontal debinning of the image Z into the same shape as Z_target.
+    Horizontal debinning of the image Z into the same shape as Z_target.
 
-        Parameters
-        ----------
-        z : np.ndarray
-            The image to be debinned.
-        size: target size (original size before binning) for the second dimension
-        h: binning factor (original divisor)
-        n_iter: number of iterations
-        dim: dimension for binning (0 or 1)
+    Parameters
+    ----------
+    z : np.ndarray
+        The image to be debinned.
+    size: target size (original size before binning) for the second dimension
+    h: binning factor (original divisor)
+    n_iter: number of iterations
+    dim: dimension for binning (0 or 1)
 
-        Returns
-        -------
-        np.ndarray
-            The debinned image.
-            """
+    Returns
+    -------
+    np.ndarray
+        The debinned image.
+    """
     if h <= 1:
         return np.copy(z)
 
@@ -375,9 +381,17 @@ def horizontal_debinning(z: np.ndarray, size: int, h: int, n_iter: int, dim: int
 
         # interpolation
         if dim == 0:
-            interp = interp1d(x1, r_j / n_counter[x1c, :], kind='cubic', fill_value='extrapolate', axis=0)
+            interp = interp1d(
+                x1,
+                r_j / n_counter[x1c, :],
+                kind="cubic",
+                fill_value="extrapolate",
+                axis=0,
+            )
         else:
-            interp = interp1d(x1, r_j / n_counter[:, x1c], kind='cubic', fill_value='extrapolate')
+            interp = interp1d(
+                x1, r_j / n_counter[:, x1c], kind="cubic", fill_value="extrapolate"
+            )
         y_j = y_j + interp(ix1)
 
     return y_j

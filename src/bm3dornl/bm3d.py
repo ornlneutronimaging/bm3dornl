@@ -732,9 +732,12 @@ def bm3d_ring_artifact_removal_ms(
 
     if k == 0:
         # single pass
-        return bm3d_ring_artifact_removal(sino_star, mode=mode,
+        return bm3d_ring_artifact_removal(
+            sino_star,
+            mode=mode,
             block_matching_kwargs=block_matching_kwargs,
-            filter_kwargs=filter_kwargs,)
+            filter_kwargs=filter_kwargs,
+        )
 
     denoised_sino = None
     # Make a copy of an original sinogram
@@ -754,16 +757,26 @@ def bm3d_ring_artifact_removal_ms(
     for i in range(k, -1, -1):
         logging.info(f"Processing binned sinogram {i + 1} of {k}")
         # Denoise binned sinogram
-        denoised_sino = bm3d_ring_artifact_removal(binned_sinos[i], mode=mode,
+        denoised_sino = bm3d_ring_artifact_removal(
+            binned_sinos[i],
+            mode=mode,
             block_matching_kwargs=block_matching_kwargs,
-            filter_kwargs=filter_kwargs,)
+            filter_kwargs=filter_kwargs,
+        )
         # For iterations except the last, create the next noisy image with a finer scale residual
         if i > 0:
-            debinned_sino = horizontal_debinning(denoised_sino - binned_sinos_orig[i],
-                                                 binned_sinos_orig[i - 1].shape[1], 2, 30, dim=1)
+            debinned_sino = horizontal_debinning(
+                denoised_sino - binned_sinos_orig[i],
+                binned_sinos_orig[i - 1].shape[1],
+                2,
+                30,
+                dim=1,
+            )
             binned_sinos[i - 1] = binned_sinos_orig[i - 1] + debinned_sino
 
     # residual
-    sino_star = sino_star + horizontal_debinning(denoised_sino - sino_orig, sino_star.shape[0], 1, 30, dim=0)
+    sino_star = sino_star + horizontal_debinning(
+        denoised_sino - sino_orig, sino_star.shape[0], 1, 30, dim=0
+    )
 
     return sino_star

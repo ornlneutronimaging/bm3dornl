@@ -1,7 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from bm3dornl.bm3d import bm3d_ring_artifact_removal_ms
-from bm3dornl.denoiser_gpu  import memory_cleanup
+from bm3dornl.denoiser_gpu import memory_cleanup
 
 
 with open("sino.npy", "rb") as f:
@@ -36,10 +36,10 @@ sino_bm3dornl = bm3d_ring_artifact_removal_ms(
 
 
 fig, axs = plt.subplots(1, 2, figsize=(12, 4))
-axs[0].imshow(sino_noisy, cmap='gray')
-axs[0].set_title('Noisy sinogram')
-axs[1].imshow(sino_bm3dornl, cmap='gray')
-axs[1].set_title('BM3D denoised sinogram')
-#plt.show()
+axs[0].imshow(sino_noisy, cmap="gray")
+axs[0].set_title("Noisy sinogram")
+axs[1].imshow(sino_bm3dornl, cmap="gray")
+axs[1].set_title("BM3D denoised sinogram")
+# plt.show()
 fig.savefig("denoise-gpu.png")
 plt.close(fig)

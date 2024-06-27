@@ -21,10 +21,10 @@ sino_bm3d = bm3dsr.multiscale_streak_removal(
 
 
 fig, axs = plt.subplots(1, 2, figsize=(12, 4))
-axs[0].imshow(sino_noisy, cmap='gray')
-axs[0].set_title('Noisy sinogram')
-axs[1].imshow(sino_bm3d, cmap='gray')
-axs[1].set_title('BM3D denoised sinogram')
-#plt.show()
+axs[0].imshow(sino_noisy, cmap="gray")
+axs[0].set_title("Noisy sinogram")
+axs[1].imshow(sino_bm3d, cmap="gray")
+axs[1].set_title("BM3D denoised sinogram")
+# plt.show()
 fig.savefig("denoise-orig.png")
 plt.close(fig)
