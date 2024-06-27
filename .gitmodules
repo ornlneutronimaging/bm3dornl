@@ -1,0 +1,3 @@
+[submodule "tests/bm3dornl-data"]
+	path = tests/bm3dornl-data
+	url = git@code.ornl.gov:sns-hfir-scse/infrastructure/test-data/bm3dornl-data.git
