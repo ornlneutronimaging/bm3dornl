@@ -24,7 +24,8 @@ filter_kwargs: dict = {
     "shrinkage_factor": 3e-2,
 }
 kwargs = {
-    "mode": "full",
+    "mode": "simple",
+    "k": 4,
     "block_matching_kwargs": block_matching_kwargs,
     "filter_kwargs": filter_kwargs,
 }
