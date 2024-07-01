@@ -2,8 +2,9 @@
 """Utility functions for BM3DORNL."""
 
 import numpy as np
-from scipy.interpolate import RectBivariateSpline
 from numba import njit
+from scipy.signal import convolve2d
+from scipy.interpolate import interp1d
 
 
 @njit
@@ -43,86 +44,130 @@ def is_within_threshold(
     return np.linalg.norm(ref_patch - cmp_patch) <= intensity_diff_threshold
 
 
-def horizontal_binning(Z: np.ndarray, k: int = 0) -> list[np.ndarray]:
+def create_array(base_arr: np.ndarray, h: int, dim: int):
     """
-    Horizontal binning of the image Z into a list of k images.
+    Create a padded and convolved array used in both binning and debinning.
+    Parameters
+    ----------
+    base_arr: Input array
+           h: bin count
+         dim: bin dimension (0 or 1)
+    Returns
+    -------
+    resulting array
+    """
+    mod_pad = h - ((base_arr.shape[dim] - 1) % h) - 1
+    if dim == 0:
+        pads = ((0, mod_pad), (0, 0))
+        kernel = np.ones((h, 1))
+    else:
+        pads = ((0, 0), (0, mod_pad))
+        kernel = np.ones((1, h))
+
+    return convolve2d(np.pad(base_arr, pads, "symmetric"), kernel, "same", "fill")
+
+
+def horizontal_binning(z: np.ndarray, h: int = 2, dim: int = 1) -> np.ndarray:
+    """
+    Horizontal binning of the image Z
 
     Parameters
     ----------
     Z : np.ndarray
         The image to be binned.
-    k : int
-        Number of iterations to bin the image by half.
-
+    h : int
+        devisor or binning
+    dim : direction
     Returns
     -------
-    list[np.ndarray]
-        List of k images.
+    np.ndarray
+        binned image
 
-    Example
-    -------
-    >>> Z = np.random.rand(64, 64)
-    >>> binned_zs = horizontal_binning(Z, 3)
-    >>> len(binned_zs)
-    4
     """
-    binned_zs = [Z]
-    for _ in range(k):
-        sub_z0 = Z[:, ::2]
-        sub_z1 = Z[:, 1::2]
-        # make sure z0 and z1 have the same shape
-        if sub_z0.shape[1] > sub_z1.shape[1]:
-            sub_z0 = sub_z0[:, :-1]
-        elif sub_z0.shape[1] < sub_z1.shape[1]:
-            sub_z1 = sub_z1[:, :-1]
-        # average z0 and z1
-        Z = (sub_z0 + sub_z1) * 0.5
-        binned_zs.append(Z)
-    return binned_zs
+
+    if h > 1:
+        h_half = h // 2
+        z_bin = create_array(z, h, dim)
+
+        # get coordinates of bin centres
+        if dim == 0:
+            z_bin = z_bin[
+                h_half + ((h % 2) == 1) : z_bin.shape[dim] - h_half + 1 : h, :
+            ]
+        else:
+            z_bin = z_bin[
+                :, h_half + ((h % 2) == 1) : z_bin.shape[dim] - h_half + 1 : h
+            ]
+
+        return z_bin
+
+    return z
 
 
-def horizontal_debinning(original_image: np.ndarray, target: np.ndarray) -> np.ndarray:
+def horizontal_debinning(
+    z: np.ndarray, size: int, h: int, n_iter: int, dim: int = 1
+) -> np.ndarray:
     """
     Horizontal debinning of the image Z into the same shape as Z_target.
 
     Parameters
     ----------
-    original_image : np.ndarray
+    z : np.ndarray
         The image to be debinned.
-    target : np.ndarray
-        The target image to match the shape.
+    size: target size (original size before binning) for the second dimension
+    h: binning factor (original divisor)
+    n_iter: number of iterations
+    dim: dimension for binning (0 or 1)
 
     Returns
     -------
     np.ndarray
         The debinned image.
-
-    Example
-    -------
-    >>> Z = np.random.rand(64, 64)
-    >>> target = np.random.rand(64, 128)
-    >>> debinned_z = horizontal_debinning(Z, target)
-    >>> debinned_z.shape
-    (64, 128)
     """
-    # Original dimensions
-    original_height, original_width = original_image.shape
-    # Target dimensions
-    new_height, new_width = target.shape
+    if h <= 1:
+        return np.copy(z)
 
-    # Original grid
-    original_x = np.arange(original_width)
-    original_y = np.arange(original_height)
+    h_half = h // 2
 
-    # Target grid
-    new_x = np.linspace(0, original_width - 1, new_width)
-    new_y = np.linspace(0, original_height - 1, new_height)
+    if dim == 0:
+        base_arr = np.ones((size, 1))
+    else:
+        base_arr = np.ones((1, size))
 
-    # Spline interpolation
-    spline = RectBivariateSpline(original_y, original_x, original_image)
-    interpolated_image = spline(new_y, new_x)
+    n_counter = create_array(base_arr, h, dim)
 
-    return interpolated_image
+    # coordinates of bin counts
+    x1c = np.arange(h_half + ((h % 2) == 1), (z.shape[dim]) * h, h)
+    x1 = np.arange(h_half + 1 - ((h % 2) == 0) / 2, (z.shape[dim]) * h, h)
+
+    # coordinates of image pixels
+    ix1 = np.arange(1, size + 1)
+
+    y_j = 0
+
+    for jj in range(max(1, n_iter)):
+        # residual
+        if jj > 0:
+            r_j = z - horizontal_binning(y_j, h, dim)
+        else:
+            r_j = z
+
+        # interpolation
+        if dim == 0:
+            interp = interp1d(
+                x1,
+                r_j / n_counter[x1c, :],
+                kind="cubic",
+                fill_value="extrapolate",
+                axis=0,
+            )
+        else:
+            interp = interp1d(
+                x1, r_j / n_counter[:, x1c], kind="cubic", fill_value="extrapolate"
+            )
+        y_j = y_j + interp(ix1)
+
+    return y_j
 
 
 def estimate_background_intensity(
