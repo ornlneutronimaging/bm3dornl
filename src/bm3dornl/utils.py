@@ -2,9 +2,7 @@
 """Utility functions for BM3DORNL."""
 
 import numpy as np
-from scipy.interpolate import RectBivariateSpline
 from numba import njit
-from typing import Tuple, List
 from scipy.signal import convolve2d
 from scipy.interpolate import interp1d
 
