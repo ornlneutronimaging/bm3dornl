@@ -117,7 +117,7 @@ def horizontal_debinning(
     size: target size (original size before binning) for the second dimension
     fac: binning factor (original divisor)
     n_iter: number of iterations
-    dim: dimension for binning (X = 0 or Y = 1)
+    dim: dimension for binning (Y = 0 or X = 1)
 
     Returns
     -------
