@@ -3,11 +3,11 @@ import matplotlib.pyplot as plt
 from bm3dornl.bm3d import bm3d_ring_artifact_removal_ms
 from bm3dornl.denoiser_gpu import memory_cleanup
 
-
-with open("sino.npy", "rb") as f:
+print("Reading sinogram from file ...")
+with open("../bm3dornl-data/sino.npy", "rb") as f:
     sino_noisy = np.load(f)
 
-print(sino_noisy)
+print("done")
 
 memory_cleanup()
 

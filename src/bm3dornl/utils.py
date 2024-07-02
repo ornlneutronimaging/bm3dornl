@@ -67,7 +67,7 @@ def create_array(base_arr: np.ndarray, h: int, dim: int):
     return convolve2d(np.pad(base_arr, pads, "symmetric"), kernel, "same", "fill")
 
 
-def horizontal_binning(z: np.ndarray, h: int = 2, dim: int = 1) -> np.ndarray:
+def horizontal_binning(Z: np.ndarray, fac: int = 2, dim: int = 1) -> np.ndarray:
     """
     Horizontal binning of the image Z
 
@@ -75,9 +75,9 @@ def horizontal_binning(z: np.ndarray, h: int = 2, dim: int = 1) -> np.ndarray:
     ----------
     Z : np.ndarray
         The image to be binned.
-    h : int
-        devisor or binning
-    dim : direction
+    fac : int
+        binning factor
+    dim : direction X=0, Y=1
     Returns
     -------
     np.ndarray
@@ -85,89 +85,89 @@ def horizontal_binning(z: np.ndarray, h: int = 2, dim: int = 1) -> np.ndarray:
 
     """
 
-    if h > 1:
-        h_half = h // 2
-        z_bin = create_array(z, h, dim)
+    if fac > 1:
+        fac_half = fac // 2
+        binned_zs = create_array(Z, fac, dim)
 
         # get coordinates of bin centres
         if dim == 0:
-            z_bin = z_bin[
-                h_half + ((h % 2) == 1) : z_bin.shape[dim] - h_half + 1 : h, :
+            binned_zs = binned_zs[
+                fac_half + ((fac % 2) == 1) : binned_zs.shape[dim] - fac_half + 1 : fac, :
             ]
         else:
-            z_bin = z_bin[
-                :, h_half + ((h % 2) == 1) : z_bin.shape[dim] - h_half + 1 : h
+            binned_zs = binned_zs[
+                :, fac_half + ((fac % 2) == 1) : binned_zs.shape[dim] - fac_half + 1 : fac
             ]
 
-        return z_bin
+        return binned_zs
 
-    return z
+    return Z
 
 
 def horizontal_debinning(
-    z: np.ndarray, size: int, h: int, n_iter: int, dim: int = 1
+    Z: np.ndarray, size: int, fac: int, n_iter: int, dim: int = 1
 ) -> np.ndarray:
     """
     Horizontal debinning of the image Z into the same shape as Z_target.
 
     Parameters
     ----------
-    z : np.ndarray
+    Z : np.ndarray
         The image to be debinned.
     size: target size (original size before binning) for the second dimension
-    h: binning factor (original divisor)
+    fac: binning factor (original divisor)
     n_iter: number of iterations
-    dim: dimension for binning (0 or 1)
+    dim: dimension for binning (X = 0 or Y = 1)
 
     Returns
     -------
     np.ndarray
         The debinned image.
     """
-    if h <= 1:
-        return np.copy(z)
+    if fac <= 1:
+        return np.copy(Z)
 
-    h_half = h // 2
+    fac_half = fac // 2
 
     if dim == 0:
-        base_arr = np.ones((size, 1))
+        base_array = np.ones((size, 1))
     else:
-        base_arr = np.ones((1, size))
+        base_array = np.ones((1, size))
 
-    n_counter = create_array(base_arr, h, dim)
+    n_counter = create_array(base_array, fac, dim)
 
     # coordinates of bin counts
-    x1c = np.arange(h_half + ((h % 2) == 1), (z.shape[dim]) * h, h)
-    x1 = np.arange(h_half + 1 - ((h % 2) == 0) / 2, (z.shape[dim]) * h, h)
+    x1c = np.arange(fac_half + ((fac % 2) == 1), (Z.shape[dim]) * fac, fac)
+    x1 = np.arange(fac_half + 1 - ((fac % 2) == 0) / 2, (Z.shape[dim]) * fac, fac)
 
     # coordinates of image pixels
     ix1 = np.arange(1, size + 1)
 
-    y_j = 0
+    interpolated_image = 0
 
-    for jj in range(max(1, n_iter)):
+    for j in range(max(1, n_iter)):
         # residual
-        if jj > 0:
-            r_j = z - horizontal_binning(y_j, h, dim)
+        if j > 0:
+            residual = Z - horizontal_binning(interpolated_image, fac, dim)
         else:
-            r_j = z
+            residual = Z
 
         # interpolation
         if dim == 0:
             interp = interp1d(
                 x1,
-                r_j / n_counter[x1c, :],
+                residual / n_counter[x1c, :],
                 kind="cubic",
                 fill_value="extrapolate",
                 axis=0,
             )
         else:
             interp = interp1d(
-                x1, r_j / n_counter[:, x1c], kind="cubic", fill_value="extrapolate"
+                x1, residual / n_counter[:, x1c], kind="cubic", fill_value="extrapolate"
             )
-        y_j = y_j + interp(ix1)
+        interpolated_image = interpolated_image + interp(ix1)
 
-    return y_j
+    return interpolated_image
 
 
 def estimate_background_intensity(

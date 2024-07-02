@@ -2,11 +2,12 @@ import numpy as np
 import matplotlib.pyplot as plt
 import bm3d_streak_removal as bm3dsr
 
+print("Reading sinogram from file ...")
 
-with open("sino.npy", "rb") as f:
+with open("../bm3dornl-data/sino.npy", "rb") as f:
     sino_noisy = np.load(f)
 
-print(sino_noisy)
+print("done")
 
 sino_bm3d = bm3dsr.multiscale_streak_removal(
     data=sino_noisy,
