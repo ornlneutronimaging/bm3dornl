@@ -92,11 +92,13 @@ def horizontal_binning(Z: np.ndarray, fac: int = 2, dim: int = 1) -> np.ndarray:
         # get coordinates of bin centres
         if dim == 0:
             binned_zs = binned_zs[
-                fac_half + ((fac % 2) == 1) : binned_zs.shape[dim] - fac_half + 1 : fac, :
+                fac_half + ((fac % 2) == 1) : binned_zs.shape[dim] - fac_half + 1 : fac,
+                :,
             ]
         else:
             binned_zs = binned_zs[
-                :, fac_half + ((fac % 2) == 1) : binned_zs.shape[dim] - fac_half + 1 : fac
+                :,
+                fac_half + ((fac % 2) == 1) : binned_zs.shape[dim] - fac_half + 1 : fac,
             ]
 
         return binned_zs
