@@ -8,6 +8,7 @@ from bm3dornl.bm3d import bm3d_ring_artifact_removal_ms
 def setup_sinogram():
     return np.random.rand(256, 256)
 
+
 @pytest.mark.skip(reason="Change function signature")
 @patch("bm3dornl.bm3d.horizontal_binning")
 @patch("bm3dornl.bm3d.horizontal_debinning")
