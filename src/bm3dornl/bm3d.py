@@ -749,7 +749,9 @@ def bm3d_ring_artifact_removal_ms(
 
     # Bin horizontally
     for i in range(0, k):
-        binned_sinos_orig.append(horizontal_binning(binned_sinos_orig[-1], fac=2, dim=1))
+        binned_sinos_orig.append(
+            horizontal_binning(binned_sinos_orig[-1], fac=2, dim=1)
+        )
         binned_sinos.append(np.zeros(0))
 
     binned_sinos[-1] = binned_sinos_orig[-1]
