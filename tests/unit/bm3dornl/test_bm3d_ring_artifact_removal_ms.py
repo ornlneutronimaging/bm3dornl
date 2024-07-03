@@ -11,7 +11,7 @@ size_y = 256
 def setup_sinogram():
     return np.random.rand(size_x, size_y)
 
-
+@pytest.mark.cuda_required
 def test_bm3d_ring_artifact_removal_ms(
     setup_sinogram,
 ):
