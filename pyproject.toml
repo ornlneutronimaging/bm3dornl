@@ -12,12 +12,14 @@ dependencies = [
 ]
 license = { text = "MIT" }
 keywords = ["BM3D", "image processing", "neutron imaging", "denoising", "CuPy", "Numba"]
+readme = "README.md"
 
 [project.urls]
 homepage = "https://github.com/neutrons/python_project_template/"
 repository = "https://github.com/ornlneutronimaging/bm3dornl"
 documentation = "https://bm3dornl.readthedocs.io/en/latest/"
 issues = "https://github.com/ornlneutronimaging/bm3dornl/issues"
+
 
 [build-system]
 requires = [
