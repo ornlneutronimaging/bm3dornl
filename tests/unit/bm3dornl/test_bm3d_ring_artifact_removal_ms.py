@@ -7,6 +7,7 @@ from bm3dornl.bm3d import bm3d_ring_artifact_removal_ms
 size_x = 256
 size_y = 256
 
+
 @pytest.fixture
 def setup_sinogram():
     return np.random.rand(size_x, size_y)
