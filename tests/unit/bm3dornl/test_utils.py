@@ -44,8 +44,9 @@ def test_is_within_threshold():
     result = is_within_threshold(ref_patch, cmp_patch_close, threshold)
     assert not result, "Failed: Slightly different patches should not be within very small distance of 0.1"
 
+
 def test_horizontal_binning():
-    size_x , size_y = 64, 64
+    size_x, size_y = 64, 64
     k = 6
     # Initial setup: Create a test image
     Z = np.random.rand(size_y, size_y)
@@ -57,8 +58,11 @@ def test_horizontal_binning():
         expected_width = (expected_width + 1) // 2  # Calculate the next expected width
         binned_image = horizontal_binning(Z, fac=2)
         assert binned_image.shape[0] == 64, f"Height of image {i} is incorrect"
-        assert binned_image.shape[1] == expected_width, f"Width of image {i} is incorrect"
+        assert (
+            binned_image.shape[1] == expected_width
+        ), f"Width of image {i} is incorrect"
         Z = binned_image
+
 
 @pytest.mark.parametrize(
     "original_width, target_width", [(32, 64), (64, 128), (128, 256)]
@@ -66,7 +70,9 @@ def test_horizontal_binning():
 def test_horizontal_debinning_scaling(original_width, target_width):
     original_image = np.random.rand(64, original_width)
     target_shape = (64, target_width)
-    debinned_image = horizontal_debinning(original_image, target_width, fac=2, dim=1, n_iter=1)
+    debinned_image = horizontal_debinning(
+        original_image, target_width, fac=2, dim=1, n_iter=1
+    )
     assert (
         debinned_image.shape == target_shape
     ), f"Failed to scale from {original_width} to {target_width}"
