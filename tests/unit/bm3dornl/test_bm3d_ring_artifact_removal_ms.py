@@ -1,5 +1,4 @@
 import pytest
-from unittest.mock import patch
 import numpy as np
 from bm3dornl.bm3d import bm3d_ring_artifact_removal_ms
 
