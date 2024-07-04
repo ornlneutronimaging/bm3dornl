@@ -47,14 +47,20 @@ def is_within_threshold(
 def create_array(base_arr: np.ndarray, h: int, dim: int):
     """
     Create a padded and convolved array used in both binning and debinning.
+
     Parameters
     ----------
-    base_arr: Input array
-           h: bin count
-         dim: bin dimension (0 or 1)
+    base_arr: np.ndarray
+        Input array
+    h: int
+        bin count
+    dim: int
+        bin dimension (0 or 1)
+
     Returns
     -------
-    resulting array
+    np.ndarray
+        The resulting array
     """
     mod_pad = h - ((base_arr.shape[dim] - 1) % h) - 1
     if dim == 0:
