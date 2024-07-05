@@ -49,6 +49,9 @@ jobs:
   pypi-publish:
     name: upload release to PyPI
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash -l {0}
     permissions:
       # IMPORTANT: this permission is mandatory for trusted publishing
       id-token: write
@@ -64,7 +67,7 @@ jobs:
           cache-downloads-key: ${{ runner.os }}-downloads-${{ hashFiles('**/environment.yml') }}
       - name: build pypi pacakge
         run: |
-          conda activate test
+          echo "versioningit $(versioningit .)"
           # build the package
           VERSION=$(versioningit .) python -m build
       # retrieve your distributions here
