@@ -35,6 +35,20 @@ requirements:
 
   run:
     - python
+    - numpy
+    - scipy<1.13
+    - numba
+    - cupy
+    - scikit-image
+
+test:
+  imports:
+    - bm3dornl
+
+channels:
+  - conda-forge
+  - nvidia
+  - defaults
 
 about:
   home: {{ url }}
@@ -42,3 +56,7 @@ about:
   license_family: MIT
   license_file: ../LICENSE
   summary: {{ description }}
+
+extra:
+  recipe-maintainers:
+    - kedokudo
