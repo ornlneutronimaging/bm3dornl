@@ -60,8 +60,11 @@ jobs:
           channels: conda-forge,defaults
           mamba-version: "*"
           environment-file: environment.yml
+          cache-environment-key: ${{ runner.os }}-env-${{ hashFiles('**/environment.yml') }}
+          cache-downloads-key: ${{ runner.os }}-downloads-${{ hashFiles('**/environment.yml') }}
       - name: build pypi pacakge
         run: |
+          conda activate test
           # build the package
           VERSION=$(versioningit .) python -m build
       # retrieve your distributions here
