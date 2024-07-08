@@ -45,3 +45,32 @@ jobs:
           if [ "${IS_RC}" = "true" ]; then CONDA_LABEL="rc"; fi
           echo pushing ${{ github.ref }} with label $CONDA_LABEL
           anaconda upload --label $CONDA_LABEL conda.recipe/noarch/bm3dornl*.tar.bz2
+
+  pypi-publish:
+    name: upload release to PyPI
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash -l {0}
+    permissions:
+      # IMPORTANT: this permission is mandatory for trusted publishing
+      id-token: write
+    steps:
+      - uses: actions/checkout@v3
+      - uses: conda-incubator/setup-miniconda@v2
+        with:
+          auto-update-conda: true
+          channels: conda-forge,defaults
+          mamba-version: "*"
+          environment-file: environment.yml
+          cache-environment-key: ${{ runner.os }}-env-${{ hashFiles('**/environment.yml') }}
+          cache-downloads-key: ${{ runner.os }}-downloads-${{ hashFiles('**/environment.yml') }}
+      - name: build pypi pacakge
+        run: |
+          echo "versioningit $(versioningit .)"
+          # build the package
+          VERSION=$(versioningit .) python -m build
+      # retrieve your distributions here
+      - name: Publish package distributions to PyPI
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: pypa/gh-action-pypi-publish@release/v1
