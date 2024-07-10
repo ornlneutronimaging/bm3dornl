@@ -4,7 +4,7 @@
 import logging
 import numpy as np
 from typing import Tuple, Callable
-from scipy.ndimage import gaussian_filter
+from scipy.signal import medfilt2d
 from .block_matching import (
     get_signal_patch_positions,
     get_patch_numba,
@@ -294,31 +294,14 @@ def estimate_noise_free_sinogram(sinogram: np.ndarray) -> np.ndarray:
     np.ndarray
         Noise-free sinogram.
     """
-    # Perform the hard-thresholding using FFT
-    sinogram_fft_shifted = np.fft.fftshift(np.fft.fft2(sinogram))
-    mask = np.ones_like(sinogram_fft_shifted)
-    crow = sinogram_fft_shifted.shape[0] // 2
-    mask[crow] /= 1e3  # suppress all vertical frequencies
-    sinogram_fft_shifted *= mask
-    sinogram_filtered = np.fft.ifft2(np.fft.ifftshift(sinogram_fft_shifted)).real
-
-    # Renormalize the sinogram to [0, 1] as the hard threshold mess up the intensity distribution
-    sinogram_filtered -= sinogram_filtered.min()
-    sinogram_filtered /= sinogram_filtered.max()
-
-    # use 1/20 of the sinogram width as the sigma for Gaussian filter, minimum
-    # sigma is 5
-    sigma_gaussian = max(int(sinogram.shape[1] / 20), 5)
-
-    sino_blurred = gaussian_filter(sinogram, sigma=sigma_gaussian)
-    scale_profile = np.sum(sinogram_filtered, axis=0) / np.sum(sino_blurred, axis=0)
-    sinogram_filtered /= scale_profile + 1e-8
-
-    # renormalize the sinogram to [0, 1]
-    sinogram_filtered -= sinogram_filtered.min()
-    sinogram_filtered /= sinogram_filtered.max()
-
-    return sinogram_filtered
+    # subtract column-wise median
+    sinogram = sinogram - np.median(sinogram, axis=0)
+    # perform median filtering to remove salt-and-pepper noise
+    sinogram = medfilt2d(sinogram, kernel_size=3)
+    # rescale to [0, 1]
+    sinogram -= sinogram.min()
+    sinogram /= sinogram.max()
+    return sinogram
 
 
 def bm3d_full(
