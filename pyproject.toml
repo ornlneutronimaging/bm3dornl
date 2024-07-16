@@ -5,7 +5,7 @@ dynamic = ["version"]
 requires-python = ">=3.10"
 dependencies = [
   "numpy",
-  "scipy<1.13",  # avoid a bug
+  "scipy",
   "numba",
   "cupy-cuda12x",  # use pre-built wheels
   "scikit-image",
