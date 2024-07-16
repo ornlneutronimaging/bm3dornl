@@ -4,7 +4,7 @@
 import logging
 import numpy as np
 from typing import Tuple, Callable
-from scipy.ndimage import gaussian_filter
+from scipy.signal import medfilt2d
 from .block_matching import (
     get_signal_patch_positions,
     get_patch_numba,
@@ -35,6 +35,21 @@ from .utils import (
     horizontal_binning,
     horizontal_debinning,
 )
+
+# NOTE: These default parameters are based on the parameter tuning study.
+#       For more information, please refer to study/parameter_tuning/
+default_block_matching_kwargs = {
+    "patch_size": (7, 7),
+    "stride": 2,
+    "background_threshold": 0.0,
+    "cut_off_distance": (40, 40),
+    "num_patches_per_group": 64,
+    "padding_mode": "circular",
+}
+default_filter_kwargs = {
+    "filter_function": "fft",
+    "shrinkage_factor": 4e-2,
+}
 
 
 def shrinkage_via_hardthresholding(
@@ -294,47 +309,20 @@ def estimate_noise_free_sinogram(sinogram: np.ndarray) -> np.ndarray:
     np.ndarray
         Noise-free sinogram.
     """
-    # Perform the hard-thresholding using FFT
-    sinogram_fft_shifted = np.fft.fftshift(np.fft.fft2(sinogram))
-    mask = np.ones_like(sinogram_fft_shifted)
-    crow = sinogram_fft_shifted.shape[0] // 2
-    mask[crow] /= 1e3  # suppress all vertical frequencies
-    sinogram_fft_shifted *= mask
-    sinogram_filtered = np.fft.ifft2(np.fft.ifftshift(sinogram_fft_shifted)).real
-
-    # Renormalize the sinogram to [0, 1] as the hard threshold mess up the intensity distribution
-    sinogram_filtered -= sinogram_filtered.min()
-    sinogram_filtered /= sinogram_filtered.max()
-
-    # use 1/20 of the sinogram width as the sigma for Gaussian filter, minimum
-    # sigma is 5
-    sigma_gaussian = max(int(sinogram.shape[1] / 20), 5)
-
-    sino_blurred = gaussian_filter(sinogram, sigma=sigma_gaussian)
-    scale_profile = np.sum(sinogram_filtered, axis=0) / np.sum(sino_blurred, axis=0)
-    sinogram_filtered /= scale_profile + 1e-8
-
-    # renormalize the sinogram to [0, 1]
-    sinogram_filtered -= sinogram_filtered.min()
-    sinogram_filtered /= sinogram_filtered.max()
-
-    return sinogram_filtered
+    # subtract column-wise median
+    sinogram = sinogram - np.median(sinogram, axis=0)
+    # perform median filtering to remove salt-and-pepper noise
+    sinogram = medfilt2d(sinogram, kernel_size=3)
+    # rescale to [0, 1]
+    sinogram -= sinogram.min()
+    sinogram /= sinogram.max()
+    return sinogram
 
 
 def bm3d_full(
     sinogram: np.ndarray,
-    block_matching_kwargs: dict = {
-        "patch_size": (8, 8),
-        "stride": 3,
-        "background_threshold": 0.0,
-        "cut_off_distance": (64, 64),
-        "num_patches_per_group": 32,
-        "padding_mode": "circular",
-    },
-    filter_kwargs: dict = {
-        "filter_function": "fft",
-        "shrinkage_factor": 3e-2,
-    },
+    block_matching_kwargs: dict = default_block_matching_kwargs,
+    filter_kwargs: dict = default_filter_kwargs,
 ) -> np.ndarray:
     """Remove ring artifacts from a sinogram using BM3D following the full six steps.
 
@@ -502,17 +490,8 @@ def bm3d_full(
 
 def bm3d_lite(
     sinogram: np.ndarray,
-    block_matching_kwargs: dict = {
-        "patch_size": (8, 8),
-        "stride": 3,
-        "background_threshold": 0.0,
-        "cut_off_distance": (64, 64),
-        "num_patches_per_group": 32,
-        "padding_mode": "circular",
-    },
-    filter_kwargs: dict = {
-        "filter_function": "fft",
-    },
+    block_matching_kwargs: dict = default_block_matching_kwargs,
+    filter_kwargs: dict = default_filter_kwargs,
     use_refiltering: bool = True,
 ) -> np.ndarray:
     """Remove ring artifacts from a sinogram using BM3D in simple and express mode.
@@ -630,18 +609,8 @@ def bm3d_lite(
 def bm3d_ring_artifact_removal(
     sinogram: np.ndarray,
     mode: str = "simple",  # express, simple, full
-    block_matching_kwargs: dict = {
-        "patch_size": (8, 8),
-        "stride": 3,
-        "background_threshold": 0.0,
-        "cut_off_distance": (64, 64),
-        "num_patches_per_group": 32,
-        "padding_mode": "circular",
-    },
-    filter_kwargs: dict = {
-        "filter_function": "fft",
-        "shrinkage_factor": 3e-2,
-    },
+    block_matching_kwargs: dict = default_block_matching_kwargs,
+    filter_kwargs: dict = default_filter_kwargs,
 ) -> np.ndarray:
     """Remove ring artifacts from a sinogram using BM3D.
 
@@ -687,20 +656,10 @@ def bm3d_ring_artifact_removal(
 
 def bm3d_ring_artifact_removal_ms(
     sinogram: np.ndarray,
-    k: int = 4,
+    k: int = 3,
     mode: str = "simple",  # express, simple, full
-    block_matching_kwargs: dict = {
-        "patch_size": (8, 8),
-        "stride": 3,
-        "background_threshold": 0.0,
-        "cut_off_distance": (64, 64),
-        "num_patches_per_group": 32,
-        "padding_mode": "circular",
-    },
-    filter_kwargs: dict = {
-        "filter_function": "fft",
-        "shrinkage_factor": 3e-2,
-    },
+    block_matching_kwargs: dict = default_block_matching_kwargs,
+    filter_kwargs: dict = default_filter_kwargs,
 ) -> np.ndarray:
     """Multiscale BM3D for streak removal
 

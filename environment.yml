@@ -10,8 +10,10 @@ dependencies:
   # compute
   - cupy
   - numba
-  - scipy<1.13  # avoid a bug in 1.13
+  - scipy<1.13  # bm3d-streak-removal is using a removed function in scipy 1.13
   - scikit-image
+  # I/O
+  - h5py
   # [Optional]visualization
   - matplotlib
   # [Optional]jupyter
@@ -39,3 +41,4 @@ dependencies:
   # pip packages
   - pip:
     - bm3d-streak-removal  # this is our reference package
+    - optuna  # for hyperparameter optimization
