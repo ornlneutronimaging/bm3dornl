@@ -41,3 +41,4 @@ dependencies:
   # pip packages
   - pip:
     - bm3d-streak-removal  # this is our reference package
+    - optuna  # for hyperparameter optimization
