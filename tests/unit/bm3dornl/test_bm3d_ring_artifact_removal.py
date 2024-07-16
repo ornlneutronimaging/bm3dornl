@@ -1,7 +1,7 @@
 import pytest
 from unittest.mock import patch
 import numpy as np
-from bm3dornl.bm3d import bm3d_ring_artifact_removal
+from bm3dornl.bm3d import bm3d_ring_artifact_removal, default_block_matching_kwargs, default_filter_kwargs
 
 
 @pytest.fixture
@@ -26,50 +26,20 @@ def test_bm3d_ring_artifact_removal(mock_bm3d_lite, mock_bm3d_full, setup_sinogr
 
     mock_bm3d_lite.assert_any_call(
         sinogram=sinogram,
-        block_matching_kwargs={
-            "patch_size": (8, 8),
-            "stride": 3,
-            "background_threshold": 0.0,
-            "cut_off_distance": (64, 64),
-            "num_patches_per_group": 32,
-            "padding_mode": "circular",
-        },
-        filter_kwargs={
-            "filter_function": "fft",
-            "shrinkage_factor": 3e-2,
-        },
+        block_matching_kwargs=default_block_matching_kwargs,
+        filter_kwargs=default_filter_kwargs,
         use_refiltering=True,
     )
     mock_bm3d_lite.assert_any_call(
         sinogram=sinogram,
-        block_matching_kwargs={
-            "patch_size": (8, 8),
-            "stride": 3,
-            "background_threshold": 0.0,
-            "cut_off_distance": (64, 64),
-            "num_patches_per_group": 32,
-            "padding_mode": "circular",
-        },
-        filter_kwargs={
-            "filter_function": "fft",
-            "shrinkage_factor": 3e-2,
-        },
+        block_matching_kwargs=default_block_matching_kwargs,
+        filter_kwargs=default_filter_kwargs,
         use_refiltering=False,
     )
     mock_bm3d_full.assert_called_once_with(
         sinogram=sinogram,
-        block_matching_kwargs={
-            "patch_size": (8, 8),
-            "stride": 3,
-            "background_threshold": 0.0,
-            "cut_off_distance": (64, 64),
-            "num_patches_per_group": 32,
-            "padding_mode": "circular",
-        },
-        filter_kwargs={
-            "filter_function": "fft",
-            "shrinkage_factor": 3e-2,
-        },
+        block_matching_kwargs=default_block_matching_kwargs,
+        filter_kwargs=default_filter_kwargs,
     )
 
 
