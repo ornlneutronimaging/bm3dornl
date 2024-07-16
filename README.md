@@ -16,13 +16,13 @@ For more information, check out our [FAQ](docs/FAQ.md).
 How to install
 --------------
 
-For **users**, you can install the latest version published on our anaconda channel with:
+For **users**, you can install the latest version published on our [anaconda channel](https://anaconda.org/neutronimaging/bm3dornl) with:
 
 ```bash
 conda install neutronimaging::bm3dornl
 ```
 
-Or use `pip` to install from PyPI
+Or use `pip` to install from [PyPI](https://pypi.org/project/bm3dornl/0.3.1/)
 
 ```bash
 pip install bm3dornl
