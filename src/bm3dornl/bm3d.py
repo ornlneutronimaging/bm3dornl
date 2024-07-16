@@ -36,6 +36,21 @@ from .utils import (
     horizontal_debinning,
 )
 
+# NOTE: These default parameters are based on the parameter tuning study.
+#       For more information, please refer to study/parameter_tuning/
+default_block_matching_kwargs = {
+    "patch_size": (7, 7),
+    "stride": 2,
+    "background_threshold": 0.0,
+    "cut_off_distance": (40, 40),
+    "num_patches_per_group": 64,
+    "padding_mode": "circular",
+}
+default_filter_kwargs = {
+    "filter_function": "fft",
+    "shrinkage_factor": 4e-2,
+}
+
 
 def shrinkage_via_hardthresholding(
     sinogram: np.ndarray,
@@ -306,18 +321,8 @@ def estimate_noise_free_sinogram(sinogram: np.ndarray) -> np.ndarray:
 
 def bm3d_full(
     sinogram: np.ndarray,
-    block_matching_kwargs: dict = {
-        "patch_size": (8, 8),
-        "stride": 3,
-        "background_threshold": 0.0,
-        "cut_off_distance": (64, 64),
-        "num_patches_per_group": 32,
-        "padding_mode": "circular",
-    },
-    filter_kwargs: dict = {
-        "filter_function": "fft",
-        "shrinkage_factor": 3e-2,
-    },
+    block_matching_kwargs: dict = default_block_matching_kwargs,
+    filter_kwargs: dict = default_filter_kwargs,
 ) -> np.ndarray:
     """Remove ring artifacts from a sinogram using BM3D following the full six steps.
 
@@ -485,17 +490,8 @@ def bm3d_full(
 
 def bm3d_lite(
     sinogram: np.ndarray,
-    block_matching_kwargs: dict = {
-        "patch_size": (8, 8),
-        "stride": 3,
-        "background_threshold": 0.0,
-        "cut_off_distance": (64, 64),
-        "num_patches_per_group": 32,
-        "padding_mode": "circular",
-    },
-    filter_kwargs: dict = {
-        "filter_function": "fft",
-    },
+    block_matching_kwargs: dict = default_block_matching_kwargs,
+    filter_kwargs: dict = default_filter_kwargs,
     use_refiltering: bool = True,
 ) -> np.ndarray:
     """Remove ring artifacts from a sinogram using BM3D in simple and express mode.
@@ -613,18 +609,8 @@ def bm3d_lite(
 def bm3d_ring_artifact_removal(
     sinogram: np.ndarray,
     mode: str = "simple",  # express, simple, full
-    block_matching_kwargs: dict = {
-        "patch_size": (8, 8),
-        "stride": 3,
-        "background_threshold": 0.0,
-        "cut_off_distance": (64, 64),
-        "num_patches_per_group": 32,
-        "padding_mode": "circular",
-    },
-    filter_kwargs: dict = {
-        "filter_function": "fft",
-        "shrinkage_factor": 3e-2,
-    },
+    block_matching_kwargs: dict = default_block_matching_kwargs,
+    filter_kwargs: dict = default_filter_kwargs,
 ) -> np.ndarray:
     """Remove ring artifacts from a sinogram using BM3D.
 
@@ -670,20 +656,10 @@ def bm3d_ring_artifact_removal(
 
 def bm3d_ring_artifact_removal_ms(
     sinogram: np.ndarray,
-    k: int = 4,
+    k: int = 3,
     mode: str = "simple",  # express, simple, full
-    block_matching_kwargs: dict = {
-        "patch_size": (8, 8),
-        "stride": 3,
-        "background_threshold": 0.0,
-        "cut_off_distance": (64, 64),
-        "num_patches_per_group": 32,
-        "padding_mode": "circular",
-    },
-    filter_kwargs: dict = {
-        "filter_function": "fft",
-        "shrinkage_factor": 3e-2,
-    },
+    block_matching_kwargs: dict = default_block_matching_kwargs,
+    filter_kwargs: dict = default_filter_kwargs,
 ) -> np.ndarray:
     """Multiscale BM3D for streak removal
 
