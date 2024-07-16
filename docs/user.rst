@@ -29,9 +29,19 @@ If you prefer installing from source directly from the repository, you can clone
 
 .. code-block:: bash
 
-    git clone
+    git clone git@github.com:ornlneutronimaging/bm3dornl.git
     cd bm3dornl
     pip install .
+
+If you want to setup a development environment and use editable install, please run the following command:
+
+.. code-block:: bash
+
+    git clone git@github.com:ornlneutronimaging/bm3dornl.git
+    cd bm3dornl
+    conda env create -f environment.yml
+    conda activate bm3dornl
+    pip install --no-deps -e .
 
 -----
 Usage
