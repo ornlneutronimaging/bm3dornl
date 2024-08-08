@@ -1,6 +1,6 @@
 <!-- Badges -->
 
-[![Build Status](https://github.com/ornlneutronimaging/bm3dornl/actions/workflows/actions.yml/badge.svg?branch=next)](https://github.com/ornlneutronimaging/bm3dornl/actions/workflows/actions.yml?query=branch?next)
+[![Build Status](https://github.com/ornlneutronimaging/bm3dornl/actions/workflows/unittest.yml/badge.svg?branch=next)](https://github.com/ornlneutronimaging/bm3dornl/actions/workflows/unittest.yml?query=branch?next)
 [![codecov](https://codecov.io/gh/ornlneutronimaging/bm3dornl/branch/next/graph/badge.svg)](https://codecov.io/gh/ornlneutronimaging/bm3dornl/tree/next)
 [![CII Best Practices](https://bestpractices.coreinfrastructure.org/projects/6650/badge)](https://bestpractices.coreinfrastructure.org/projects/6650)
 [![pre-commit.ci status](https://results.pre-commit.ci/badge/github/ornlneutronimaging/bm3dornl/next.svg)](https://results.pre-commit.ci/latest/github/ornlneutronimaging/bm3dornl/next)
