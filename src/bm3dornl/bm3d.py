@@ -32,8 +32,8 @@ from .signal import (
     hadamard_transform,
 )
 from .utils import (
-    horizontal_binning,
-    horizontal_debinning,
+    downscale_2d_horizontal,
+    upscale_2d_horizontal,
 )
 
 # NOTE: These default parameters are based on the parameter tuning study.
@@ -654,14 +654,56 @@ def bm3d_ring_artifact_removal(
         raise ValueError(f"Unknown mode: {mode}")
 
 
+def get_scale_adjusted_params(original_params: dict, scale_factor: int) -> dict:
+    """Scale the parameters based on the given factor.
+
+    Parameters
+    ----------
+    original_params : dict
+        The original parameters.
+    scale_factor : int
+        The scale factor.
+
+    Returns
+    -------
+    dict
+        The adjusted parameters.
+    """
+    adjusted_params = original_params.copy()
+
+    # Adjust patch size
+    adjusted_params["patch_size"] = tuple(
+        int(x * scale_factor) for x in original_params["patch_size"]
+    )
+
+    # Adjust stride
+    adjusted_params["stride"] = int(original_params["stride"] * scale_factor)
+
+    # Adjust cut-off distance
+    adjusted_params["cut_off_distance"] = tuple(
+        int(x / scale_factor) for x in original_params["cut_off_distance"]
+    )
+
+    # Optionally adjust number of patches per group
+    if scale_factor > 1:
+        adjusted_params["num_patches_per_group"] = max(
+            16, original_params["num_patches_per_group"] // scale_factor
+        )
+
+    return adjusted_params
+
+
 def bm3d_ring_artifact_removal_ms(
     sinogram: np.ndarray,
     k: int = 3,
     mode: str = "simple",  # express, simple, full
     block_matching_kwargs: dict = default_block_matching_kwargs,
     filter_kwargs: dict = default_filter_kwargs,
+    use_iterative_refinement: bool = True,
+    refinement_iterations: int = 3,
 ) -> np.ndarray:
-    """Multiscale BM3D for streak removal
+    """
+    Multiscale BM3D for streak removal
 
     Parameters
     ----------
@@ -675,6 +717,10 @@ def bm3d_ring_artifact_removal_ms(
         The block matching parameters.
     filter_kwargs : dict
         The filter parameters.
+    use_iterative_refinement : bool, optional
+        Whether to use iterative refinement in upscaling, by default True
+    refinement_iterations : int, optional
+        Number of refinement iterations if using iterative refinement, by default 3
 
     Returns
     -------
@@ -686,8 +732,8 @@ def bm3d_ring_artifact_removal_ms(
     [1] ref: `Collaborative Filtering of Correlated Noise <https://doi.org/10.1109/TIP.2020.3014721>`_
     [2] ref: `Ring artifact reduction via multiscale nonlocal collaborative filtering of spatially correlated noise <https://doi.org/10.1107/S1600577521001910>`_
     """
-    # step 0: median filter the sinogram
-    sino_star = sinogram
+    # step 0: initialize
+    sino_star = np.array(sinogram)
 
     if k == 0:
         # single pass
@@ -698,46 +744,62 @@ def bm3d_ring_artifact_removal_ms(
             filter_kwargs=filter_kwargs,
         )
 
-    denoised_sino = None
-    # Make a copy of an original sinogram
-    sino_orig = horizontal_binning(sino_star, 1, dim=0)
-    binned_sinos_orig = [np.copy(sino_orig)]
-
-    # Contains upscaled denoised sinograms
-    binned_sinos = [np.zeros(0)]
+    binned_sinos_orig = [sino_star]
 
     # Bin horizontally
-    for i in range(0, k):
-        binned_sinos_orig.append(
-            horizontal_binning(binned_sinos_orig[-1], fac=2, dim=1)
-        )
-        binned_sinos.append(np.zeros(0))
+    for i in range(k):
+        binned_sinos_orig.append(downscale_2d_horizontal(binned_sinos_orig[-1], 2))
 
-    binned_sinos[-1] = binned_sinos_orig[-1]
-
+    # Multi-scale denoising
     for i in range(k, -1, -1):
-        logging.info(f"Processing binned sinogram {i + 1} of {k}")
+        logging.info(f"Processing binned sinogram {i + 1} of {k + 1}")
+
+        # compute the adjusted parameters
+        block_matching_kwargs_adjusted = get_scale_adjusted_params(
+            block_matching_kwargs, 2**i
+        )
+
         # Denoise binned sinogram
         denoised_sino = bm3d_ring_artifact_removal(
-            binned_sinos[i],
+            binned_sinos_orig[i],
             mode=mode,
-            block_matching_kwargs=block_matching_kwargs,
+            block_matching_kwargs=block_matching_kwargs_adjusted,
             filter_kwargs=filter_kwargs,
         )
+
+        # Check if denoising had any effect
+        if np.allclose(denoised_sino, binned_sinos_orig[i]):
+            logging.warning(f"No denoising effect at scale {i}")
+
         # For iterations except the last, create the next noisy image with a finer scale residual
         if i > 0:
-            debinned_sino = horizontal_debinning(
-                denoised_sino - binned_sinos_orig[i],
-                binned_sinos_orig[i - 1].shape[1],
+            # Calculate the noise at current scale
+            noise_at_scale_i = binned_sinos_orig[i] - denoised_sino
+
+            # Upscale the noise to the next finer scale
+            upscaled_noise = upscale_2d_horizontal(
+                noise_at_scale_i,
                 2,
-                30,
-                dim=1,
+                original_width=binned_sinos_orig[i - 1].shape[1],
+                use_iterative_refinement=use_iterative_refinement,
+                refinement_iterations=refinement_iterations,
             )
-            binned_sinos[i - 1] = binned_sinos_orig[i - 1] + debinned_sino
 
-    # residual
-    sino_star = sino_star + horizontal_debinning(
-        denoised_sino - sino_orig, sino_star.shape[0], fac=1, n_iter=30, dim=0
-    )
+            # Remove the upscaled noise from the finer scale
+            # NOTE: The subtraction of noise will also be upscaled in the next iteration, therefore
+            #       propagating the noise removal from coarser to finer scales
+            binned_sinos_orig[i - 1] -= upscaled_noise
 
-    return sino_star
+            # Check if noise removal had any effect
+            if np.allclose(
+                binned_sinos_orig[i - 1], binned_sinos_orig[i - 1] + upscaled_noise
+            ):
+                logging.warning(
+                    f"No noise removal effect when propagating from scale {i} to {i-1}"
+                )
+
+    # Check if the final result is different from the input
+    if np.allclose(binned_sinos_orig[0], sinogram):
+        logging.warning("Final result is identical to input")
+
+    return binned_sinos_orig[0]
