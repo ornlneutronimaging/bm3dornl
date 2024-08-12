@@ -92,9 +92,7 @@ def get_signal_patch_positions(
     # Note: raise error when couldn't find a single signal patch from the entire
     #       sinogram, which usually indicating a bad background estimation.
     if len(signal_patches) == 0:
-        raise ValueError(
-            "Couldn't find any signal patches in the image! Please check the background threshold."
-        )
+        raise ValueError("Couldn't find any signal patches in the image!")
 
     return np.array(signal_patches)
 
