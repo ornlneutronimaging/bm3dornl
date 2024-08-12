@@ -3,8 +3,8 @@
 
 import logging
 import numpy as np
+import cupy as cp
 from typing import Tuple, Callable
-from scipy.signal import medfilt2d
 from .block_matching import (
     get_signal_patch_positions,
     get_patch_numba,
@@ -295,6 +295,66 @@ def global_fourier_thresholding(
     return new_noisy_image
 
 
+def padded_piecewise_weighted_denoising(
+    sinogram: np.ndarray,
+    window_size: int = 50,
+    step_size: int = 10,
+    pad_size: int = None,
+) -> np.ndarray:
+    """
+    Perform piecewise weighted denoising on a sinogram with padding using CuPy for GPU acceleration.
+
+    Parameters
+    ----------
+    sinogram : np.ndarray
+        Input sinogram to be denoised.
+    window_size : int, optional
+        Size of the window used for piecewise denoising, by default 50.
+    step_size : int, optional
+        Step size for moving the window, by default 10.
+    pad_size : int, optional
+        Padding size added to the sinogram before denoising. If None, pad_size is set to 2 * window_size.
+
+    Returns
+    -------
+    np.ndarray
+        Denoised sinogram after piecewise weighted denoising.
+    """
+    if pad_size is None:
+        pad_size = window_size * 2
+
+    # Move data to GPU
+    sinogram_gpu = cp.asarray(sinogram)
+
+    # Pad the sinogram
+    padded_sinogram = cp.pad(sinogram_gpu, ((pad_size, pad_size), (0, 0)), mode="wrap")
+
+    rows, _ = padded_sinogram.shape
+    new_img = cp.zeros_like(padded_sinogram, dtype=cp.float32)
+    new_wgt = cp.zeros_like(padded_sinogram, dtype=cp.float32)
+
+    for i in range(0, rows, step_size):
+        end = min(i + window_size, rows)
+        start = max(0, end - window_size)
+        window = padded_sinogram[start:end, :]
+        median = cp.median(window, axis=0)
+        new_img[start:end, :] += window - median
+        new_wgt[start:end, :] += 1
+
+    # Avoid division by zero
+    new_wgt = cp.maximum(new_wgt, 1e-10)
+    denoised = new_img / new_wgt
+
+    # Restore the overall intensity level
+    denoised += cp.median(sinogram_gpu)
+
+    # Remove padding
+    denoised = denoised[pad_size:-pad_size, :]
+
+    # Move result back to CPU
+    return cp.asnumpy(denoised)
+
+
 def estimate_noise_free_sinogram(sinogram: np.ndarray) -> np.ndarray:
     """
     Estimate noise-free sinogram from noisy sinogram.
@@ -309,14 +369,14 @@ def estimate_noise_free_sinogram(sinogram: np.ndarray) -> np.ndarray:
     np.ndarray
         Noise-free sinogram.
     """
-    # subtract column-wise median
-    sinogram = sinogram - np.median(sinogram, axis=0)
-    # perform median filtering to remove salt-and-pepper noise
-    sinogram = medfilt2d(sinogram, kernel_size=3)
-    # rescale to [0, 1]
-    sinogram -= sinogram.min()
-    sinogram /= sinogram.max()
-    return sinogram
+    # use piecewise weighted denoising
+    denoised = padded_piecewise_weighted_denoising(sinogram)
+
+    # normalize to [0, 1]
+    denoised -= np.min(denoised)
+    denoised /= np.max(denoised)
+
+    return denoised
 
 
 def bm3d_full(
@@ -654,7 +714,9 @@ def bm3d_ring_artifact_removal(
         raise ValueError(f"Unknown mode: {mode}")
 
 
-def get_scale_adjusted_params(original_params: dict, scale_factor: int) -> dict:
+def get_scale_adjusted_blockmatching_params(
+    original_params: dict, scale_factor: int
+) -> dict:
     """Scale the parameters based on the given factor.
 
     Parameters
@@ -672,16 +734,19 @@ def get_scale_adjusted_params(original_params: dict, scale_factor: int) -> dict:
     adjusted_params = original_params.copy()
 
     # Adjust patch size
+    # minimum patch size is 3x3
     adjusted_params["patch_size"] = tuple(
-        int(x * scale_factor) for x in original_params["patch_size"]
+        max(3, int(x * scale_factor)) for x in original_params["patch_size"]
     )
 
     # Adjust stride
-    adjusted_params["stride"] = int(original_params["stride"] * scale_factor)
+    # minimum stride is 1
+    adjusted_params["stride"] = max(1, int(original_params["stride"] * scale_factor))
 
     # Adjust cut-off distance
+    # minimum cut-off distance is 8
     adjusted_params["cut_off_distance"] = tuple(
-        int(x / scale_factor) for x in original_params["cut_off_distance"]
+        max(8, int(x / scale_factor)) for x in original_params["cut_off_distance"]
     )
 
     # Optionally adjust number of patches per group
@@ -701,6 +766,7 @@ def bm3d_ring_artifact_removal_ms(
     filter_kwargs: dict = default_filter_kwargs,
     use_iterative_refinement: bool = True,
     refinement_iterations: int = 3,
+    scale_factor_base: int = 2,
 ) -> np.ndarray:
     """
     Multiscale BM3D for streak removal
@@ -721,6 +787,8 @@ def bm3d_ring_artifact_removal_ms(
         Whether to use iterative refinement in upscaling, by default True
     refinement_iterations : int, optional
         Number of refinement iterations if using iterative refinement, by default 3
+    scale_factor_base : int, optional
+        The base scale factor for binning, by default 2
 
     Returns
     -------
@@ -755,21 +823,22 @@ def bm3d_ring_artifact_removal_ms(
         logging.info(f"Processing binned sinogram {i + 1} of {k + 1}")
 
         # compute the adjusted parameters
-        block_matching_kwargs_adjusted = get_scale_adjusted_params(
-            block_matching_kwargs, 2**i
+        scale_factor = int(scale_factor_base ** (i / 2))
+        adjusted_block_matching_kwargs = get_scale_adjusted_blockmatching_params(
+            block_matching_kwargs, scale_factor
+        )
+        adjusted_filter_kwargs = filter_kwargs.copy()
+        adjusted_filter_kwargs["shrinkage_factor"] = (
+            filter_kwargs["shrinkage_factor"] / scale_factor
         )
 
         # Denoise binned sinogram
         denoised_sino = bm3d_ring_artifact_removal(
             binned_sinos_orig[i],
             mode=mode,
-            block_matching_kwargs=block_matching_kwargs_adjusted,
-            filter_kwargs=filter_kwargs,
+            block_matching_kwargs=adjusted_block_matching_kwargs,
+            filter_kwargs=adjusted_filter_kwargs,
         )
-
-        # Check if denoising had any effect
-        if np.allclose(denoised_sino, binned_sinos_orig[i]):
-            logging.warning(f"No denoising effect at scale {i}")
 
         # For iterations except the last, create the next noisy image with a finer scale residual
         if i > 0:
@@ -789,17 +858,5 @@ def bm3d_ring_artifact_removal_ms(
             # NOTE: The subtraction of noise will also be upscaled in the next iteration, therefore
             #       propagating the noise removal from coarser to finer scales
             binned_sinos_orig[i - 1] -= upscaled_noise
-
-            # Check if noise removal had any effect
-            if np.allclose(
-                binned_sinos_orig[i - 1], binned_sinos_orig[i - 1] + upscaled_noise
-            ):
-                logging.warning(
-                    f"No noise removal effect when propagating from scale {i} to {i-1}"
-                )
-
-    # Check if the final result is different from the input
-    if np.allclose(binned_sinos_orig[0], sinogram):
-        logging.warning("Final result is identical to input")
 
     return binned_sinos_orig[0]
