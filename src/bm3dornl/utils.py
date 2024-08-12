@@ -4,7 +4,8 @@
 import numpy as np
 from numba import njit
 from scipy.signal import convolve2d
-from scipy.interpolate import RectBivariateSpline
+from scipy.signal.windows import gaussian
+from scipy.ndimage import zoom
 
 
 @njit
@@ -42,35 +43,6 @@ def is_within_threshold(
     False
     """
     return np.linalg.norm(ref_patch - cmp_patch) <= intensity_diff_threshold
-
-
-def create_array(base_arr: np.ndarray, h: int, dim: int):
-    """
-    Create a padded and convolved array used in both binning and debinning.
-
-    Parameters
-    ----------
-    base_arr: np.ndarray
-        Input array
-    h: int
-        bin count
-    dim: int
-        bin dimension (0 or 1)
-
-    Returns
-    -------
-    np.ndarray
-        The resulting array
-    """
-    mod_pad = h - ((base_arr.shape[dim] - 1) % h) - 1
-    if dim == 0:
-        pads = ((0, mod_pad), (0, 0))
-        kernel = np.ones((h, 1))
-    else:
-        pads = ((0, 0), (0, mod_pad))
-        kernel = np.ones((1, h))
-
-    return convolve2d(np.pad(base_arr, pads, "symmetric"), kernel, "same", "fill")
 
 
 def estimate_background_intensity(
@@ -117,8 +89,9 @@ def downscale_2d_horizontal(array: np.ndarray, scale_factor: int) -> np.ndarray:
     """
     _, cols = array.shape
 
-    # Create and apply the convolution kernel
-    kernel = np.ones((1, scale_factor)) / scale_factor
+    # Create and apply the Gaussian convolution kernel
+    kernel = gaussian(scale_factor, std=scale_factor / 2).reshape(1, -1)
+    kernel /= kernel.sum()  # Normalize the kernel
     binned = convolve2d(array, kernel, mode="same")
 
     # Calculate the size of the downscaled array
@@ -157,28 +130,19 @@ def upscale_2d_horizontal(
     np.ndarray
         The horizontally upscaled 2D array.
     """
-    rows, cols = input_array.shape
-    x = np.arange(cols)
-    y = np.arange(rows)
-    x_upscaled = np.linspace(0, cols - 1, original_width)
-
-    # Initial upscaling
-    interp_func = RectBivariateSpline(y, x, input_array)
-    upscaled_array = interp_func(y, x_upscaled)
+    zoom_factor = original_width / input_array.shape[1]
+    upscaled_array = zoom(input_array, (1, zoom_factor), order=3)
 
     if use_iterative_refinement:
         for _ in range(refinement_iterations):
-            # Downscale the current estimate
+            # Downscale the current upscaled array
             downscaled = downscale_2d_horizontal(upscaled_array, scale_factor)
 
-            # Calculate residual
+            # Calculate the residual between the original input and the downscaled version
             residual = input_array - downscaled
 
-            # Upscale the residual
-            residual_interp = RectBivariateSpline(y, x, residual)
-            upscaled_residual = residual_interp(y, x_upscaled)
-
-            # Add the upscaled residual to the current estimate
+            # Upscale the residual and add it back to the upscaled array
+            upscaled_residual = zoom(residual, (1, zoom_factor), order=3)
             upscaled_array += upscaled_residual
 
     return upscaled_array
