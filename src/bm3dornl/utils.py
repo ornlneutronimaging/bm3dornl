@@ -130,6 +130,10 @@ def upscale_2d_horizontal(
     np.ndarray
         The horizontally upscaled 2D array.
     """
+    if scale_factor <= 0:
+        raise ValueError("Scale factor must be a positive integer.")
+
+    input_array = input_array.astype(np.float64)  # Ensure consistent type
     zoom_factor = original_width / input_array.shape[1]
     upscaled_array = zoom(input_array, (1, zoom_factor), order=3)
 

@@ -7,8 +7,8 @@ import numpy as np
 from bm3dornl.utils import (
     estimate_background_intensity,
     is_within_threshold,
-    horizontal_binning,
-    horizontal_debinning,
+    downscale_2d_horizontal,
+    upscale_2d_horizontal,
 )
 
 
@@ -45,39 +45,6 @@ def test_is_within_threshold():
     assert not result, "Failed: Slightly different patches should not be within very small distance of 0.1"
 
 
-def test_horizontal_binning():
-    size_x, size_y = 64, 64
-    k = 6
-    # Initial setup: Create a test image
-    Z = np.random.rand(size_y, size_y)
-
-    # Assert that each image has the correct dimensions
-    expected_width = size_x
-    for i in range(k):
-        # Perform the binning
-        expected_width = (expected_width + 1) // 2  # Calculate the next expected width
-        binned_image = horizontal_binning(Z, fac=2)
-        assert binned_image.shape[0] == 64, f"Height of image {i} is incorrect"
-        assert (
-            binned_image.shape[1] == expected_width
-        ), f"Width of image {i} is incorrect"
-        Z = binned_image
-
-
-@pytest.mark.parametrize(
-    "original_width, target_width", [(32, 64), (64, 128), (128, 256)]
-)
-def test_horizontal_debinning_scaling(original_width, target_width):
-    original_image = np.random.rand(64, original_width)
-    target_shape = (64, target_width)
-    debinned_image = horizontal_debinning(
-        original_image, target_width, fac=2, dim=1, n_iter=1
-    )
-    assert (
-        debinned_image.shape == target_shape
-    ), f"Failed to scale from {original_width} to {target_width}"
-
-
 def test_estimate_background_intensity():
     # Create a sample 3D tomostack
     tomostack = np.array(
@@ -98,6 +65,50 @@ def test_estimate_background_intensity():
     assert np.isclose(
         result, expected_intensity
     ), f"Expected {expected_intensity}, but got {result}"
+
+
+def test_upscale_basic():
+    # Test a basic upscaling
+    array = np.array([[1, 2], [3, 4]])
+    scale_factor = 2
+    original_width = 4
+    result = upscale_2d_horizontal(array, scale_factor, original_width)
+
+    assert result.shape == (2, 4)  # Ensure upscaled shape is correct
+
+
+def test_upscale_with_refinement():
+    # Test upscaling with iterative refinement
+    array = np.array([[1, 2], [3, 4]])
+    scale_factor = 2
+    original_width = 4
+    result = upscale_2d_horizontal(
+        array, scale_factor, original_width, use_iterative_refinement=True
+    )
+
+    assert result.shape == (2, 4)  # Ensure upscaled shape is correct
+
+
+def test_upscale_recover_original():
+    # Test upscaling to recover the original array
+    original_array = np.random.rand(8, 8)
+    scale_factor = 2
+    downscaled_array = downscale_2d_horizontal(original_array, scale_factor)
+    upscaled_array = upscale_2d_horizontal(
+        downscaled_array, scale_factor, original_array.shape[1]
+    )
+
+    # ensure the shape is correct
+    assert upscaled_array.shape == original_array.shape
+
+
+def test_upscale_invalid_input():
+    # Test with invalid input (e.g., scale_factor = 0)
+    array = np.array([[1, 2], [3, 4]])
+    scale_factor = 0
+    original_width = 4
+    with pytest.raises(ValueError):
+        upscale_2d_horizontal(array, scale_factor, original_width)
 
 
 if __name__ == "__main__":
