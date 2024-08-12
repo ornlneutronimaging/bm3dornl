@@ -370,7 +370,11 @@ def estimate_noise_free_sinogram(sinogram: np.ndarray) -> np.ndarray:
         Noise-free sinogram.
     """
     # use piecewise weighted denoising
-    denoised = padded_piecewise_weighted_denoising(sinogram)
+    window_size = sinogram.shape[0] // 4
+    step_size = 1
+    denoised = padded_piecewise_weighted_denoising(
+        sinogram, window_size=window_size, step_size=step_size
+    )
 
     # normalize to [0, 1]
     denoised -= np.min(denoised)
