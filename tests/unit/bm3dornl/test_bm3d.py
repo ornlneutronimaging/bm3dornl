@@ -31,6 +31,7 @@ def test_global_wiener_filtering():
     assert np.max(result) <= 1
 
 
+@pytest.mark.cuda_required
 def test_estimate_noise_free_sinogram():
     sinogram = np.random.rand(256, 256)
 

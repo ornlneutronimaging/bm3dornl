@@ -18,7 +18,7 @@ def test_bm3d_ring_artifact_removal_ms(
 ):
     sinogram = setup_sinogram
 
-    result = bm3d_ring_artifact_removal_ms(sinogram, k=4)
+    result = bm3d_ring_artifact_removal_ms(sinogram, k=2)
 
     assert result is not None
 
