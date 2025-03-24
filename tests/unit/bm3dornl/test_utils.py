@@ -42,7 +42,9 @@ def test_is_within_threshold():
     # Test case 5: Slightly different patches, very small threshold
     threshold = 0.1
     result = is_within_threshold(ref_patch, cmp_patch_close, threshold)
-    assert not result, "Failed: Slightly different patches should not be within very small distance of 0.1"
+    assert not result, (
+        "Failed: Slightly different patches should not be within very small distance of 0.1"
+    )
 
 
 def test_estimate_background_intensity():
@@ -62,9 +64,9 @@ def test_estimate_background_intensity():
     result = estimate_background_intensity(tomostack, quantile=0.05)
 
     # Assert the result is as expected
-    assert np.isclose(
-        result, expected_intensity
-    ), f"Expected {expected_intensity}, but got {result}"
+    assert np.isclose(result, expected_intensity), (
+        f"Expected {expected_intensity}, but got {result}"
+    )
 
 
 def test_upscale_basic():
