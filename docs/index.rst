@@ -15,6 +15,7 @@ Welcome to bm3dornl's documentation!
    developer
    api/modules
    FAQ
+   JAX_MIGRATION_PLAN
 
 
 ==================

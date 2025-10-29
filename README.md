@@ -56,3 +56,8 @@ The option `--no-deps` here is critical as `pip` will try to install a second se
 Since conda does not check packages compatibility installed from `pip`, we need to avoid bring in in-compatible packages.
 
 Once your feature implementation is ready, please make a pull request and ping one of our developers for review.
+
+Future Development
+------------------
+
+We are planning to migrate to JAX as the core computing library to unify CPU/GPU support and simplify the codebase. For more information, see our [JAX Migration Plan](docs/JAX_MIGRATION_PLAN.md).
