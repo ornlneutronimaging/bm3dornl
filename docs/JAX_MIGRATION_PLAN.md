@@ -265,13 +265,13 @@ Maintain both implementations during migration:
 def test_signal_fft_parity():
     """Test that JAX implementation matches NumPy implementation."""
     x = np.random.randn(100, 100)
-    
+
     # Original NumPy/SciPy
     result_numpy = fft_transform_numpy(x)
-    
+
     # New JAX implementation
     result_jax = jax.device_get(fft_transform_jax(x))
-    
+
     np.testing.assert_allclose(result_numpy, result_jax, rtol=1e-5)
 ```
 
@@ -300,24 +300,24 @@ def benchmark_comparison():
         ("medium", (512, 1024)),
         ("large", (1024, 2048)),
     ]
-    
+
     results = {}
     for name, shape in test_cases:
         # Original implementation
         time_original = time_function(original_impl, shape)
-        
+
         # JAX implementation (CPU)
         time_jax_cpu = time_function(jax_impl_cpu, shape)
-        
+
         # JAX implementation (GPU)
         time_jax_gpu = time_function(jax_impl_gpu, shape)
-        
+
         results[name] = {
             "original": time_original,
             "jax_cpu": time_jax_cpu,
             "jax_gpu": time_jax_gpu,
         }
-    
+
     return results
 ```
 
@@ -385,18 +385,18 @@ import cupy as cp
 def denoise_gpu(data):
     # Move to GPU
     data_gpu = cp.asarray(data)
-    
+
     # Process on GPU
     result_gpu = cp.fft.fft2(data_gpu)
     result_gpu = cp.where(cp.abs(result_gpu) > threshold, result_gpu, 0)
-    
+
     # Move back to CPU
     result = cp.asnumpy(result_gpu)
-    
+
     # Manual cleanup
     del data_gpu, result_gpu
     cp.get_default_memory_pool().free_all_blocks()
-    
+
     return result
 ```
 
@@ -775,14 +775,14 @@ def find_candidate_patch_ids(
     num_patches = signal_patches.shape[0]
     ref_pos = signal_patches[ref_index]
     candidate_patch_ids = [ref_index]
-    
+
     for i in range(ref_index + 1, num_patches):
         if (
             np.abs(signal_patches[i, 0] - ref_pos[0]) <= cut_off_distance[0]
             and np.abs(signal_patches[i, 1] - ref_pos[1]) <= cut_off_distance[1]
         ):
             candidate_patch_ids.append(i)
-    
+
     return candidate_patch_ids
 ```
 
@@ -798,21 +798,21 @@ def find_candidate_patch_ids(
     """
     num_patches = signal_patches.shape[0]
     ref_pos = signal_patches[ref_index]
-    
+
     # Vectorized distance check
     indices = jnp.arange(num_patches)
     within_row = jnp.abs(signal_patches[:, 0] - ref_pos[0]) <= cut_off_distance[0]
     within_col = jnp.abs(signal_patches[:, 1] - ref_pos[1]) <= cut_off_distance[1]
     after_ref = indices > ref_index
-    
+
     # Combine conditions
     is_candidate = within_row & within_col & after_ref
     is_candidate = is_candidate.at[ref_index].set(True)  # Include reference
-    
+
     # Return indices of candidates (pad with -1 for fixed size)
     candidate_indices = jnp.where(is_candidate, indices, -1)
     candidate_indices = candidate_indices[candidate_indices >= 0]
-    
+
     return candidate_indices
 ```
 
@@ -826,28 +826,28 @@ def shrinkage_fft(
     # Send data to GPU
     denoised_hyper_blocks = cp.asarray(hyper_blocks)
     variance_blocks = cp.asarray(variance_blocks)
-    
+
     # Compute the threshold for shrinkage
     threshold = threshold_factor * cp.sqrt(variance_blocks)
-    
+
     # Transform the hyper blocks to the frequency domain
     denoised_hyper_blocks = cp.fft.fftn(denoised_hyper_blocks, axes=(-3, -2, -1))
-    
+
     # Apply shrinkage (hard thresholding) in the frequency domain
     denoised_hyper_blocks = cp.where(
         np.abs(denoised_hyper_blocks) > threshold, denoised_hyper_blocks, 0
     )
-    
+
     # Apply inverse 3D FFT to obtain the denoised hyper blocks
     denoised_hyper_blocks = cp.fft.ifftn(denoised_hyper_blocks, axes=(-3, -2, -1)).real
-    
+
     # Send data back to CPU
     hyper_blocks = cp.asnumpy(denoised_hyper_blocks)
-    
+
     # Clear memory cache
     del denoised_hyper_blocks, variance_blocks, threshold
     memory_cleanup()
-    
+
     return hyper_blocks
 ```
 
@@ -855,8 +855,8 @@ def shrinkage_fft(
 ```python
 @jax.jit  # Automatically runs on GPU if available
 def shrinkage_fft(
-    hyper_blocks: jnp.ndarray, 
-    variance_blocks: jnp.ndarray, 
+    hyper_blocks: jnp.ndarray,
+    variance_blocks: jnp.ndarray,
     threshold_factor: float = 3
 ) -> jnp.ndarray:
     """
@@ -865,20 +865,20 @@ def shrinkage_fft(
     """
     # Compute the threshold for shrinkage
     threshold = threshold_factor * jnp.sqrt(variance_blocks)
-    
+
     # Transform the hyper blocks to the frequency domain
     denoised_hyper_blocks = jnp.fft.fftn(hyper_blocks, axes=(-3, -2, -1))
-    
+
     # Apply shrinkage (hard thresholding) in the frequency domain
     denoised_hyper_blocks = jnp.where(
-        jnp.abs(denoised_hyper_blocks) > threshold, 
-        denoised_hyper_blocks, 
+        jnp.abs(denoised_hyper_blocks) > threshold,
+        denoised_hyper_blocks,
         0
     )
-    
+
     # Apply inverse 3D FFT to obtain the denoised hyper blocks
     denoised_hyper_blocks = jnp.fft.ifftn(denoised_hyper_blocks, axes=(-3, -2, -1)).real
-    
+
     return denoised_hyper_blocks
 ```
 
