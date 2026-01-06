@@ -163,3 +163,6 @@ src/bm3dornl/_version.py
 .vscode/settings.json
 tmp/*
 dev*.ipynb
+# pixi environments
+.pixi/*
+!.pixi/config.toml
