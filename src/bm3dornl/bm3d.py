@@ -25,7 +25,7 @@ from scipy.ndimage import gaussian_filter1d
 
 from scipy.signal import convolve
 from scipy.signal.windows import gaussian
-from scipy.fft import fft2
+from scipy.fft import fft2, ifft2, fftshift, ifftshift
 
 def _estimate_static_streaks(sino):
     """
@@ -160,6 +160,44 @@ def construct_streak_psd(
     
     return sigma_map
 
+def fft_streak_removal(sinogram, sigma_y=1.0, sigma_protect_x=20.0):
+    """
+    Remove vertical streaks using a FFT-based Notch Filter.
+    
+    Streaks correspond to the DC component in the vertical frequency axis (v_y = 0).
+    We dampen this axis using a Gaussian notch, while protecting the low-frequency 
+    horizontal components (centered at v_x=0) to preserve the object's mean structure.
+    """
+    H, W = sinogram.shape
+    
+    # 1. FFT
+    f = fft2(sinogram)
+    fshift = fftshift(f)
+    
+    # 2. Construct Filter
+    cy, cx = H // 2, W // 2
+    y, x = np.ogrid[-cy:H-cy, -cx:W-cx]
+    
+    # Gaussian Notch along v_y
+    notch_y = np.exp(-(y**2) / (2 * sigma_y**2))
+    
+    # Protection Mask along v_x (Center)
+    protect_x = np.exp(-(x**2) / (2 * sigma_protect_x**2))
+    
+    # Combined Mask: 1 - Notch + Notch*Protection
+    # Equivalently: 1 - Notch * (1 - Protection)
+    # If Protection=1 (Center), Mask=1 (No filtering).
+    # If Protection=0 (High Freq X), Mask=1-Notch (Filter out v_y=0).
+    mask = 1.0 - notch_y * (1.0 - protect_x)
+    
+    # 3. Apply
+    fshift_filtered = fshift * mask
+    
+    # 4. IFFT
+    img_filtered = np.real(ifft2(ifftshift(fshift_filtered)))
+    
+    return img_filtered.astype(np.float32)
+
 def bm3d_ring_artifact_removal(
     sinogram: np.ndarray,
     mode: str = "generic",  # "generic" or "streak"
@@ -199,25 +237,75 @@ def bm3d_ring_artifact_removal(
     if d_max > d_min:
         z_norm = (z - d_min) / (d_max - d_min)
 
-    if mode == "streak":
-        # Multiscale Strategy: Laplacian Pyramid
-        # Decompose image into frequency bands to target streaks of different widths.
-        scales = filter_kwargs.get("scales", 3)
-        # Gradient-Guided Estimator + Spatial Masking allows us to be VERY aggressive on streaks
-        # because the mask protects the structure.
-        strength = filter_kwargs.get("streak_strength", 0.6) 
-        use_hybrid = filter_kwargs.get("use_hybrid", True)
-        
-        # --- Hybrid Pre-processing: Estimate and Subtract Static Streaks ---
-        static_profile = None
-        if use_hybrid:
-            if "estimated_streaks" in filter_kwargs:
-                static_profile = filter_kwargs["estimated_streaks"]
-            else:
-                static_profile = _estimate_static_streaks(z_norm)
+        if mode == "streak":
+            use_fft = filter_kwargs.get("use_fft", True) # Default to FFT (New SOTA)
             
-            # Subtract static streaks from normalized image
-            z_norm = z_norm - static_profile[np.newaxis, :]
+            if use_fft:
+                # Spectral Filtering for Streaks
+                # This handles the "Streak Removal" part.
+                # We typically don't need Multiscale for this if FFT works well.
+                # But we might need BM3D for the *random* noise.
+                
+                # 1. FFT Streak Removal
+                sigma_notch = filter_kwargs.get("fft_notch_sigma", 1.0)
+                sigma_protect = filter_kwargs.get("fft_protect_width", 20.0)
+                
+                # Apply FFT Denoising
+                z_denoised_streaks = fft_streak_removal(z_norm, sigma_notch, sigma_protect)
+                
+                # 2. Run Generic BM3D on the streak-corrected image to remove Random Noise
+                # We treat the result as a "Generic" image now.
+                # Recursive call with mode="generic"
+                # Avoid infinite recursion? No, mode changed.
+                
+                # But we need to handle the denormalization wrapper.
+                # It's cleaner to just call the generic path logic here or recurse.
+                # Let's recurse.
+                
+                # Denormalize first? No, pass normalized.
+                # Wait, recursive call expects raw input.
+                # Better to just set z_norm = z_denoised_streaks and fall through to Generic Logic?
+                
+                # IMPORTANT: If we use FFT, we skip the Multiscale BM3D logic below.
+                # We switch to Standard BM3D on the filtered image.
+                
+                z_norm = z_denoised_streaks
+                # Fall through to Generic Mode logic (by changing 'mode' variable? No, risky).
+                # Explicitly run Generic logic here.
+                
+                # Generic Mode (Scalar Sigma)
+                sigma_psd_dummy = np.zeros((1, 1), dtype=np.float32)
+                sigma_norm = sigma
+                
+                yhat_ht = bm3d_rust.bm3d_hard_thresholding(
+                    z_norm, z_norm, sigma_psd_dummy, sigma_norm, threshold_hard,
+                    patch_size_dim, step_size, cut_off, num_patches
+                )
+                
+                z_gft_ht = yhat_ht 
+                yhat_ht_gft = bm3d_rust.bm3d_hard_thresholding(
+                    z_norm, z_gft_ht, sigma_psd_dummy, sigma_norm, threshold_hard,
+                    patch_size_dim, step_size, cut_off, num_patches
+                )
+                
+                yhat_wie = bm3d_rust.bm3d_wiener_filtering(
+                     z_norm, yhat_ht_gft, sigma_psd_dummy, sigma_norm,
+                     patch_size_dim, step_size, cut_off, num_patches
+                )
+                
+                z_gft_wie = yhat_wie
+                yhat_final = bm3d_rust.bm3d_wiener_filtering(
+                     z_norm, z_gft_wie, sigma_psd_dummy, sigma_norm,
+                     patch_size_dim, step_size, cut_off, num_patches
+                )
+                
+                # Denormalize and Return
+                if d_max > d_min:
+                    yhat_final = yhat_final * (d_max - d_min) + d_min
+                return yhat_final
+
+        # Fallback to Legacy Multiscale if use_fft=False
+        # Multiscale Strategy: Laplacian Pyramid
         
         # Manual Decomposition to safely handle ranges
         from skimage.transform import pyramid_reduce, pyramid_expand
