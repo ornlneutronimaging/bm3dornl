@@ -310,6 +310,11 @@ def bm3d_ring_artifact_removal(
         # Manual Decomposition to safely handle ranges
         from skimage.transform import pyramid_reduce, pyramid_expand
         
+        # Extract variables needed for legacy multiscale (Fallback)
+        scales = filter_kwargs.get("scales", 3)
+        # Default strength for feedback if fallback used (though FFT is separate)
+        strength = filter_kwargs.get("streak_strength", 0.6)
+        
         # 1. Build Gaussian Pyramid
         gaussians = [z_norm]
         for i in range(scales - 1):
@@ -385,7 +390,7 @@ def bm3d_ring_artifact_removal(
             
             y_est = expanded + detail
         
-            y_est = expanded + detail
+
         
         # --- Spatial Masking (Anti-Structure-Damage) ---
         # If enabled, we blend the result with the original image (or generic denoised) 
