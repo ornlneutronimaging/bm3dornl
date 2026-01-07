@@ -207,3 +207,529 @@ pub fn wht2d_8x8_inverse(input: &Array2<Complex<f32>>) -> Array2<f32> {
     }
     output
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ndarray::Array2;
+    use rustfft::FftPlanner;
+
+    // Helper: Simple Linear Congruential Generator for deterministic "random" test data
+    // This avoids adding rand as a dependency while still providing varied test inputs
+    struct SimpleLcg {
+        state: u64,
+    }
+
+    impl SimpleLcg {
+        fn new(seed: u64) -> Self {
+            Self { state: seed }
+        }
+
+        fn next_u64(&mut self) -> u64 {
+            // LCG parameters from Numerical Recipes
+            self.state = self.state.wrapping_mul(6364136223846793005).wrapping_add(1);
+            self.state
+        }
+
+        fn next_f32(&mut self) -> f32 {
+            // Generate f32 in range [-1.0, 1.0)
+            let u = self.next_u64();
+            ((u >> 40) as f32 / (1u64 << 24) as f32) * 2.0 - 1.0
+        }
+    }
+
+    // Helper: Create FFT plans for a given size
+    fn create_fft_plans(rows: usize, cols: usize) -> (
+        std::sync::Arc<dyn Fft<f32>>,
+        std::sync::Arc<dyn Fft<f32>>,
+        std::sync::Arc<dyn Fft<f32>>,
+        std::sync::Arc<dyn Fft<f32>>,
+    ) {
+        let mut planner = FftPlanner::<f32>::new();
+        let fft_row = planner.plan_fft_forward(cols);
+        let fft_col = planner.plan_fft_forward(rows);
+        let ifft_row = planner.plan_fft_inverse(cols);
+        let ifft_col = planner.plan_fft_inverse(rows);
+        (fft_row, fft_col, ifft_row, ifft_col)
+    }
+
+    // Helper: Check if two f32 arrays are approximately equal
+    fn arrays_approx_equal(a: &Array2<f32>, b: &Array2<f32>, epsilon: f32) -> bool {
+        if a.dim() != b.dim() {
+            return false;
+        }
+        a.iter().zip(b.iter()).all(|(x, y)| (x - y).abs() < epsilon)
+    }
+
+    // Helper: Generate deterministic "random" matrix
+    fn random_matrix(rows: usize, cols: usize, seed: u64) -> Array2<f32> {
+        let mut rng = SimpleLcg::new(seed);
+        Array2::from_shape_fn((rows, cols), |_| rng.next_f32())
+    }
+
+    // ==================== FFT Round-Trip Tests ====================
+
+    #[test]
+    fn test_fft2d_roundtrip_8x8() {
+        let input = random_matrix(8, 8, 12345);
+        let (fft_row, fft_col, ifft_row, ifft_col) = create_fft_plans(8, 8);
+
+        let freq = fft2d(input.view(), &fft_row, &fft_col);
+        let output = ifft2d(&freq, &ifft_row, &ifft_col);
+
+        assert!(
+            arrays_approx_equal(&input, &output, 1e-5),
+            "FFT roundtrip failed: max diff = {}",
+            input.iter().zip(output.iter()).map(|(a, b)| (a - b).abs()).fold(0.0f32, f32::max)
+        );
+    }
+
+    #[test]
+    fn test_fft2d_roundtrip_various_sizes() {
+        let sizes = [(4, 4), (8, 8), (16, 16), (32, 32), (4, 8), (8, 16)];
+
+        for (rows, cols) in sizes {
+            let input = random_matrix(rows, cols, (rows * 1000 + cols) as u64);
+            let (fft_row, fft_col, ifft_row, ifft_col) = create_fft_plans(rows, cols);
+
+            let freq = fft2d(input.view(), &fft_row, &fft_col);
+            let output = ifft2d(&freq, &ifft_row, &ifft_col);
+
+            let max_diff = input.iter().zip(output.iter())
+                .map(|(a, b)| (a - b).abs())
+                .fold(0.0f32, f32::max);
+
+            assert!(
+                arrays_approx_equal(&input, &output, 1e-5),
+                "FFT roundtrip failed for {}x{}: max diff = {}",
+                rows, cols, max_diff
+            );
+        }
+    }
+
+    #[test]
+    fn test_fft2d_roundtrip_multiple_seeds() {
+        // Test with 10 different random inputs to increase confidence
+        for seed in 0..10u64 {
+            let input = random_matrix(8, 8, seed * 7919); // Use prime multiplier for varied seeds
+            let (fft_row, fft_col, ifft_row, ifft_col) = create_fft_plans(8, 8);
+
+            let freq = fft2d(input.view(), &fft_row, &fft_col);
+            let output = ifft2d(&freq, &ifft_row, &ifft_col);
+
+            assert!(
+                arrays_approx_equal(&input, &output, 1e-5),
+                "FFT roundtrip failed for seed {}", seed
+            );
+        }
+    }
+
+    // ==================== FFT Known-Value Tests ====================
+
+    #[test]
+    fn test_fft2d_zeros() {
+        let input = Array2::<f32>::zeros((8, 8));
+        let (fft_row, fft_col, _, _) = create_fft_plans(8, 8);
+
+        let output = fft2d(input.view(), &fft_row, &fft_col);
+
+        // All frequency components should be zero
+        for val in output.iter() {
+            assert!(
+                val.norm() < 1e-10,
+                "FFT of zeros should be zeros, got magnitude {}",
+                val.norm()
+            );
+        }
+    }
+
+    #[test]
+    fn test_fft2d_constant() {
+        // All ones: DC component should be N*M, others should be ~0
+        let input = Array2::<f32>::ones((8, 8));
+        let (fft_row, fft_col, _, _) = create_fft_plans(8, 8);
+
+        let output = fft2d(input.view(), &fft_row, &fft_col);
+
+        // DC component (0,0) should equal sum of all inputs = 64
+        let dc = output[[0, 0]];
+        assert!(
+            (dc.re - 64.0).abs() < 1e-5 && dc.im.abs() < 1e-5,
+            "DC component should be 64+0i, got {:?}",
+            dc
+        );
+
+        // All other components should be ~0
+        for r in 0..8 {
+            for c in 0..8 {
+                if r != 0 || c != 0 {
+                    let val = output[[r, c]];
+                    assert!(
+                        val.norm() < 1e-5,
+                        "Non-DC component [{},{}] should be ~0, got magnitude {}",
+                        r, c, val.norm()
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_fft2d_impulse() {
+        // Single 1.0 at (0,0), rest zeros
+        // FFT of impulse should have constant magnitude across all bins
+        let mut input = Array2::<f32>::zeros((8, 8));
+        input[[0, 0]] = 1.0;
+        let (fft_row, fft_col, _, _) = create_fft_plans(8, 8);
+
+        let output = fft2d(input.view(), &fft_row, &fft_col);
+
+        // All frequency bins should have magnitude 1 (unnormalized FFT)
+        for r in 0..8 {
+            for c in 0..8 {
+                let mag = output[[r, c]].norm();
+                assert!(
+                    (mag - 1.0).abs() < 1e-5,
+                    "Impulse FFT at [{},{}] should have magnitude 1, got {}",
+                    r, c, mag
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_fft2d_parseval() {
+        // Parseval's theorem: sum of |x|^2 = (1/N) * sum of |X|^2
+        // For unnormalized FFT: sum of |x|^2 = (1/(N*M)) * sum of |X|^2
+        let input = random_matrix(8, 8, 42);
+        let (fft_row, fft_col, _, _) = create_fft_plans(8, 8);
+
+        let output = fft2d(input.view(), &fft_row, &fft_col);
+
+        let energy_spatial: f32 = input.iter().map(|x| x * x).sum();
+        let energy_freq: f32 = output.iter().map(|x| x.norm_sqr()).sum();
+
+        let expected_freq_energy = energy_spatial * 64.0; // N*M scaling for unnormalized FFT
+
+        assert!(
+            (energy_freq - expected_freq_energy).abs() / expected_freq_energy < 1e-4,
+            "Parseval's theorem violated: spatial={}, freq={}, expected={}",
+            energy_spatial, energy_freq, expected_freq_energy
+        );
+    }
+
+    // ==================== FFT Edge Case Tests ====================
+
+    #[test]
+    fn test_fft2d_single_element() {
+        let mut input = Array2::<f32>::zeros((1, 1));
+        input[[0, 0]] = 3.14;
+        let (fft_row, fft_col, ifft_row, ifft_col) = create_fft_plans(1, 1);
+
+        let freq = fft2d(input.view(), &fft_row, &fft_col);
+        assert!(
+            (freq[[0, 0]].re - 3.14).abs() < 1e-5,
+            "1x1 FFT should preserve value"
+        );
+
+        let output = ifft2d(&freq, &ifft_row, &ifft_col);
+        assert!(
+            (output[[0, 0]] - 3.14).abs() < 1e-5,
+            "1x1 roundtrip failed"
+        );
+    }
+
+    #[test]
+    fn test_fft2d_non_square() {
+        // Test non-square matrices
+        let sizes = [(4, 8), (8, 4), (2, 16), (16, 2)];
+
+        for (rows, cols) in sizes {
+            let input = random_matrix(rows, cols, (rows * 100 + cols) as u64);
+            let (fft_row, fft_col, ifft_row, ifft_col) = create_fft_plans(rows, cols);
+
+            let freq = fft2d(input.view(), &fft_row, &fft_col);
+            let output = ifft2d(&freq, &ifft_row, &ifft_col);
+
+            assert!(
+                arrays_approx_equal(&input, &output, 1e-5),
+                "Non-square {}x{} roundtrip failed",
+                rows, cols
+            );
+        }
+    }
+
+    #[test]
+    fn test_fft2d_large_values() {
+        // Test numerical stability with large values
+        let mut input = Array2::<f32>::zeros((8, 8));
+        for r in 0..8 {
+            for c in 0..8 {
+                input[[r, c]] = ((r * 8 + c) as f32) * 1e5;
+            }
+        }
+        let (fft_row, fft_col, ifft_row, ifft_col) = create_fft_plans(8, 8);
+
+        let freq = fft2d(input.view(), &fft_row, &fft_col);
+        let output = ifft2d(&freq, &ifft_row, &ifft_col);
+
+        // Use relative tolerance for large values
+        for r in 0..8 {
+            for c in 0..8 {
+                let diff = (input[[r, c]] - output[[r, c]]).abs();
+                let rel_err = diff / (input[[r, c]].abs() + 1e-10);
+                assert!(
+                    rel_err < 1e-4,
+                    "Large value roundtrip failed at [{},{}]: input={}, output={}, rel_err={}",
+                    r, c, input[[r, c]], output[[r, c]], rel_err
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_fft2d_small_values() {
+        // Test numerical stability with small values
+        let mut input = Array2::<f32>::zeros((8, 8));
+        for r in 0..8 {
+            for c in 0..8 {
+                input[[r, c]] = ((r * 8 + c) as f32 + 1.0) * 1e-6;
+            }
+        }
+        let (fft_row, fft_col, ifft_row, ifft_col) = create_fft_plans(8, 8);
+
+        let freq = fft2d(input.view(), &fft_row, &fft_col);
+        let output = ifft2d(&freq, &ifft_row, &ifft_col);
+
+        assert!(
+            arrays_approx_equal(&input, &output, 1e-10),
+            "Small value roundtrip failed"
+        );
+    }
+
+    // ==================== WHT Round-Trip Tests ====================
+
+    #[test]
+    fn test_wht_8x8_roundtrip() {
+        let input = random_matrix(8, 8, 54321);
+
+        let freq = wht2d_8x8_forward(input.view());
+        let output = wht2d_8x8_inverse(&freq);
+
+        assert!(
+            arrays_approx_equal(&input, &output, 1e-6),
+            "WHT roundtrip failed: max diff = {}",
+            input.iter().zip(output.iter()).map(|(a, b)| (a - b).abs()).fold(0.0f32, f32::max)
+        );
+    }
+
+    #[test]
+    fn test_wht_8x8_roundtrip_multiple() {
+        // Test with 10 different random inputs
+        for seed in 0..10u64 {
+            let input = random_matrix(8, 8, seed * 13331);
+
+            let freq = wht2d_8x8_forward(input.view());
+            let output = wht2d_8x8_inverse(&freq);
+
+            let max_diff = input.iter().zip(output.iter())
+                .map(|(a, b)| (a - b).abs())
+                .fold(0.0f32, f32::max);
+
+            assert!(
+                arrays_approx_equal(&input, &output, 1e-6),
+                "WHT roundtrip failed for seed {}: max diff = {}",
+                seed, max_diff
+            );
+        }
+    }
+
+    // ==================== WHT Known-Value Tests ====================
+
+    #[test]
+    fn test_wht_zeros() {
+        let input = Array2::<f32>::zeros((8, 8));
+        let output = wht2d_8x8_forward(input.view());
+
+        for val in output.iter() {
+            assert!(
+                val.norm() < 1e-10,
+                "WHT of zeros should be zeros, got magnitude {}",
+                val.norm()
+            );
+        }
+    }
+
+    #[test]
+    fn test_wht_constant() {
+        // All ones: First coefficient (DC) = 8*8 = 64, rest = 0
+        // (WHT of constant is impulse in first coefficient)
+        let input = Array2::<f32>::ones((8, 8));
+        let output = wht2d_8x8_forward(input.view());
+
+        // DC component should be 64 (sum of all 64 ones)
+        let dc = output[[0, 0]];
+        assert!(
+            (dc.re - 64.0).abs() < 1e-6,
+            "WHT DC component should be 64, got {}",
+            dc.re
+        );
+
+        // All other components should be 0
+        for r in 0..8 {
+            for c in 0..8 {
+                if r != 0 || c != 0 {
+                    let val = output[[r, c]];
+                    assert!(
+                        val.norm() < 1e-6,
+                        "Non-DC component [{},{}] should be 0, got {}",
+                        r, c, val.norm()
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_wht_impulse() {
+        // Single 1.0 at (0,0), rest zeros
+        // WHT of impulse at origin should spread to all coefficients
+        let mut input = Array2::<f32>::zeros((8, 8));
+        input[[0, 0]] = 1.0;
+
+        let output = wht2d_8x8_forward(input.view());
+
+        // All WHT coefficients should have the same value
+        let expected = output[[0, 0]].re;
+        for r in 0..8 {
+            for c in 0..8 {
+                assert!(
+                    (output[[r, c]].re - expected).abs() < 1e-6,
+                    "WHT of impulse should have uniform coefficients, got [{},{}]={}",
+                    r, c, output[[r, c]].re
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_wht_symmetry() {
+        // WHT is self-inverse (up to scaling)
+        // Applying it twice should give back scaled input
+        let input = random_matrix(8, 8, 99999);
+
+        let once = wht2d_8x8_forward(input.view());
+        // Convert Complex output to f32 for second forward pass
+        let mut once_real = Array2::<f32>::zeros((8, 8));
+        for r in 0..8 {
+            for c in 0..8 {
+                once_real[[r, c]] = once[[r, c]].re;
+            }
+        }
+        let twice = wht2d_8x8_forward(once_real.view());
+
+        // Should be 64 * input (WHT is self-inverse with scale N)
+        for r in 0..8 {
+            for c in 0..8 {
+                let expected = input[[r, c]] * 64.0;
+                let actual = twice[[r, c]].re;
+                assert!(
+                    (expected - actual).abs() < 1e-4,
+                    "WHT symmetry failed at [{},{}]: expected {}, got {}",
+                    r, c, expected, actual
+                );
+            }
+        }
+    }
+
+    // ==================== WHT Edge Case Tests ====================
+
+    #[test]
+    fn test_wht_near_zero() {
+        // Test numerical stability with very small values
+        let mut input = Array2::<f32>::zeros((8, 8));
+        let mut rng = SimpleLcg::new(11111);
+        for r in 0..8 {
+            for c in 0..8 {
+                input[[r, c]] = rng.next_f32() * 1e-10;
+            }
+        }
+
+        let freq = wht2d_8x8_forward(input.view());
+        let output = wht2d_8x8_inverse(&freq);
+
+        assert!(
+            arrays_approx_equal(&input, &output, 1e-14),
+            "WHT near-zero roundtrip failed"
+        );
+    }
+
+    #[test]
+    fn test_wht_large_values() {
+        // Test numerical stability with large values
+        let mut input = Array2::<f32>::zeros((8, 8));
+        for r in 0..8 {
+            for c in 0..8 {
+                input[[r, c]] = ((r * 8 + c) as f32 + 1.0) * 1e5;
+            }
+        }
+
+        let freq = wht2d_8x8_forward(input.view());
+        let output = wht2d_8x8_inverse(&freq);
+
+        // Use relative tolerance for large values
+        for r in 0..8 {
+            for c in 0..8 {
+                let diff = (input[[r, c]] - output[[r, c]]).abs();
+                let rel_err = diff / (input[[r, c]].abs() + 1e-10);
+                assert!(
+                    rel_err < 1e-5,
+                    "WHT large value roundtrip failed at [{},{}]: rel_err={}",
+                    r, c, rel_err
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_wht_alternating_pattern() {
+        // Test with checkerboard pattern (alternating +1, -1)
+        let mut input = Array2::<f32>::zeros((8, 8));
+        for r in 0..8 {
+            for c in 0..8 {
+                input[[r, c]] = if (r + c) % 2 == 0 { 1.0 } else { -1.0 };
+            }
+        }
+
+        let freq = wht2d_8x8_forward(input.view());
+        let output = wht2d_8x8_inverse(&freq);
+
+        assert!(
+            arrays_approx_equal(&input, &output, 1e-6),
+            "WHT alternating pattern roundtrip failed"
+        );
+    }
+
+    #[test]
+    fn test_wht_imaginary_part_ignored() {
+        // Verify that inverse WHT only uses real part of input
+        let input = random_matrix(8, 8, 77777);
+        let freq = wht2d_8x8_forward(input.view());
+
+        // Add imaginary components that should be ignored
+        let mut freq_with_imag = freq.clone();
+        for r in 0..8 {
+            for c in 0..8 {
+                freq_with_imag[[r, c]] = Complex::new(freq[[r, c]].re, 999.0);
+            }
+        }
+
+        let output_clean = wht2d_8x8_inverse(&freq);
+        let output_imag = wht2d_8x8_inverse(&freq_with_imag);
+
+        assert!(
+            arrays_approx_equal(&output_clean, &output_imag, 1e-10),
+            "WHT inverse should ignore imaginary part"
+        );
+    }
+}

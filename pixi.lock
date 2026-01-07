@@ -759,7 +759,7 @@ packages:
 - pypi: ./
   name: bm3dornl
   version: 0.1.0
-  sha256: e7a0852ec94d31cda01430be485701c39fb3ab53fb93f76a21742372de5eb715
+  sha256: 24108fb43ddf480b2394f8eb9e1863011e7ec0740afdb6ae2a9b0ca7aa8bee8f
   requires_dist:
   - numpy
   - scipy

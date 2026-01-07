@@ -83,7 +83,9 @@ bm3dornl = { path = ".", editable = true }
 
 [tool.pixi.tasks]
 build = "maturin develop --release"
-test = "pytest"
+test-rust = { cmd = "PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 cargo test", cwd = "src/rust_core" }
+test-python = "pytest"
+test = { depends-on = ["test-rust", "test-python"] }
 bench = "python benchmarks/measure_stack_speed.py"
 clean = "cargo clean --manifest-path src/rust_core/Cargo.toml"
 
