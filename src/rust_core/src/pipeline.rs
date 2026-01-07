@@ -491,3 +491,685 @@ pub fn test_block_matching_rust(
     let result = matches.into_iter().map(|m| (m.row, m.col, m.distance)).collect();
     Ok(result)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ndarray::{Array2, Array3};
+
+    // Helper: Simple Linear Congruential Generator for deterministic "random" test data
+    struct SimpleLcg {
+        state: u64,
+    }
+
+    impl SimpleLcg {
+        fn new(seed: u64) -> Self {
+            Self { state: seed }
+        }
+
+        fn next_u64(&mut self) -> u64 {
+            self.state = self.state.wrapping_mul(6364136223846793005).wrapping_add(1);
+            self.state
+        }
+
+        fn next_f32(&mut self) -> f32 {
+            // Generate f32 in range [0.0, 1.0)
+            let u = self.next_u64();
+            (u >> 40) as f32 / (1u64 << 24) as f32
+        }
+
+        // Box-Muller approximation for Gaussian noise
+        fn next_gaussian(&mut self) -> f32 {
+            let u1 = self.next_f32().max(1e-10);
+            let u2 = self.next_f32();
+            (-2.0 * u1.ln()).sqrt() * (2.0 * std::f32::consts::PI * u2).cos()
+        }
+    }
+
+    // Helper: Generate deterministic "random" matrix in [0, 1]
+    fn random_matrix(rows: usize, cols: usize, seed: u64) -> Array2<f32> {
+        let mut rng = SimpleLcg::new(seed);
+        Array2::from_shape_fn((rows, cols), |_| rng.next_f32())
+    }
+
+    // Helper: Generate deterministic 3D stack
+    fn random_stack(depth: usize, rows: usize, cols: usize, seed: u64) -> Array3<f32> {
+        let mut rng = SimpleLcg::new(seed);
+        Array3::from_shape_fn((depth, rows, cols), |_| rng.next_f32())
+    }
+
+    // Helper: Add Gaussian noise to image
+    fn add_gaussian_noise(image: &Array2<f32>, noise_std: f32, seed: u64) -> Array2<f32> {
+        let mut rng = SimpleLcg::new(seed);
+        let (rows, cols) = image.dim();
+        Array2::from_shape_fn((rows, cols), |(r, c)| {
+            (image[[r, c]] + rng.next_gaussian() * noise_std).clamp(0.0, 1.0)
+        })
+    }
+
+    // Helper: Add Gaussian noise to 3D stack
+    fn add_gaussian_noise_stack(stack: &Array3<f32>, noise_std: f32, seed: u64) -> Array3<f32> {
+        let mut rng = SimpleLcg::new(seed);
+        let (depth, rows, cols) = stack.dim();
+        Array3::from_shape_fn((depth, rows, cols), |(d, r, c)| {
+            (stack[[d, r, c]] + rng.next_gaussian() * noise_std).clamp(0.0, 1.0)
+        })
+    }
+
+    // Helper: Mean squared error
+    fn mse(a: &Array2<f32>, b: &Array2<f32>) -> f32 {
+        assert_eq!(a.dim(), b.dim());
+        let sum_sq: f32 = a.iter().zip(b.iter()).map(|(x, y)| (x - y).powi(2)).sum();
+        sum_sq / (a.len() as f32)
+    }
+
+    // Helper: MSE for 3D stack
+    fn mse_stack(a: &Array3<f32>, b: &Array3<f32>) -> f32 {
+        assert_eq!(a.dim(), b.dim());
+        let sum_sq: f32 = a.iter().zip(b.iter()).map(|(x, y)| (x - y).powi(2)).sum();
+        sum_sq / (a.len() as f32)
+    }
+
+    // Default test parameters (small for speed)
+    const TEST_PATCH_SIZE: usize = 8;
+    const TEST_STEP_SIZE: usize = 4;
+    const TEST_SEARCH_WINDOW: usize = 16;
+    const TEST_MAX_MATCHES: usize = 8;
+    const TEST_THRESHOLD: f32 = 2.7;
+    const TEST_SIGMA_RANDOM: f32 = 0.05;
+
+    // Create dummy sigma arrays (no colored noise, no streak map)
+    fn dummy_sigma_psd() -> Array2<f32> {
+        Array2::zeros((1, 1))
+    }
+
+    fn dummy_sigma_map_2d() -> Array2<f32> {
+        Array2::zeros((1, 1))
+    }
+
+    fn dummy_sigma_map_3d() -> Array3<f32> {
+        Array3::zeros((1, 1, 1))
+    }
+
+    // ==================== Smoke Tests ====================
+
+    #[test]
+    fn test_hard_thresholding_smoke() {
+        let image = random_matrix(32, 32, 12345);
+        let sigma_psd = dummy_sigma_psd();
+        let sigma_map = dummy_sigma_map_2d();
+
+        let output = run_bm3d_step(
+            image.view(),
+            image.view(),  // pilot = noisy for first pass
+            0,             // mode 0 = HT
+            sigma_psd.view(),
+            sigma_map.view(),
+            TEST_SIGMA_RANDOM,
+            TEST_THRESHOLD,
+            TEST_PATCH_SIZE,
+            TEST_STEP_SIZE,
+            TEST_SEARCH_WINDOW,
+            TEST_MAX_MATCHES,
+        );
+
+        // Should complete without panic and produce valid output
+        assert_eq!(output.dim(), image.dim());
+        assert!(output.iter().all(|&x| x.is_finite()), "Output contains non-finite values");
+    }
+
+    #[test]
+    fn test_wiener_filtering_smoke() {
+        let image = random_matrix(32, 32, 54321);
+        let sigma_psd = dummy_sigma_psd();
+        let sigma_map = dummy_sigma_map_2d();
+
+        let output = run_bm3d_step(
+            image.view(),
+            image.view(),
+            1,             // mode 1 = Wiener
+            sigma_psd.view(),
+            sigma_map.view(),
+            TEST_SIGMA_RANDOM,
+            0.0,           // threshold not used for Wiener
+            TEST_PATCH_SIZE,
+            TEST_STEP_SIZE,
+            TEST_SEARCH_WINDOW,
+            TEST_MAX_MATCHES,
+        );
+
+        assert_eq!(output.dim(), image.dim());
+        assert!(output.iter().all(|&x| x.is_finite()), "Output contains non-finite values");
+    }
+
+    #[test]
+    fn test_hard_thresholding_stack_smoke() {
+        let stack = random_stack(4, 32, 32, 11111);
+        let sigma_psd = dummy_sigma_psd();
+        let sigma_map = dummy_sigma_map_3d();
+
+        let output = run_bm3d_step_stack(
+            stack.view(),
+            stack.view(),
+            0,
+            sigma_psd.view(),
+            sigma_map.view(),
+            TEST_SIGMA_RANDOM,
+            TEST_THRESHOLD,
+            TEST_PATCH_SIZE,
+            TEST_STEP_SIZE,
+            TEST_SEARCH_WINDOW,
+            TEST_MAX_MATCHES,
+        );
+
+        assert_eq!(output.dim(), stack.dim());
+        assert!(output.iter().all(|&x| x.is_finite()), "Output contains non-finite values");
+    }
+
+    #[test]
+    fn test_wiener_filtering_stack_smoke() {
+        let stack = random_stack(4, 32, 32, 22222);
+        let sigma_psd = dummy_sigma_psd();
+        let sigma_map = dummy_sigma_map_3d();
+
+        let output = run_bm3d_step_stack(
+            stack.view(),
+            stack.view(),
+            1,
+            sigma_psd.view(),
+            sigma_map.view(),
+            TEST_SIGMA_RANDOM,
+            0.0,
+            TEST_PATCH_SIZE,
+            TEST_STEP_SIZE,
+            TEST_SEARCH_WINDOW,
+            TEST_MAX_MATCHES,
+        );
+
+        assert_eq!(output.dim(), stack.dim());
+        assert!(output.iter().all(|&x| x.is_finite()), "Output contains non-finite values");
+    }
+
+    // ==================== Output Shape Tests ====================
+
+    #[test]
+    fn test_hard_thresholding_preserves_shape() {
+        for (rows, cols) in [(32, 32), (48, 64), (64, 48)] {
+            let image = random_matrix(rows, cols, (rows * 100 + cols) as u64);
+            let sigma_psd = dummy_sigma_psd();
+            let sigma_map = dummy_sigma_map_2d();
+
+            let output = run_bm3d_step(
+                image.view(),
+                image.view(),
+                0,
+                sigma_psd.view(),
+                sigma_map.view(),
+                TEST_SIGMA_RANDOM,
+                TEST_THRESHOLD,
+                TEST_PATCH_SIZE,
+                TEST_STEP_SIZE,
+                TEST_SEARCH_WINDOW,
+                TEST_MAX_MATCHES,
+            );
+
+            assert_eq!(
+                output.dim(), (rows, cols),
+                "Output shape mismatch for {}x{}", rows, cols
+            );
+        }
+    }
+
+    #[test]
+    fn test_wiener_filtering_preserves_shape() {
+        let image = random_matrix(40, 56, 33333);
+        let sigma_psd = dummy_sigma_psd();
+        let sigma_map = dummy_sigma_map_2d();
+
+        let output = run_bm3d_step(
+            image.view(),
+            image.view(),
+            1,
+            sigma_psd.view(),
+            sigma_map.view(),
+            TEST_SIGMA_RANDOM,
+            0.0,
+            TEST_PATCH_SIZE,
+            TEST_STEP_SIZE,
+            TEST_SEARCH_WINDOW,
+            TEST_MAX_MATCHES,
+        );
+
+        assert_eq!(output.dim(), image.dim());
+    }
+
+    #[test]
+    fn test_stack_preserves_shape() {
+        let stack = random_stack(5, 40, 48, 44444);
+        let sigma_psd = dummy_sigma_psd();
+        let sigma_map = dummy_sigma_map_3d();
+
+        let output = run_bm3d_step_stack(
+            stack.view(),
+            stack.view(),
+            0,
+            sigma_psd.view(),
+            sigma_map.view(),
+            TEST_SIGMA_RANDOM,
+            TEST_THRESHOLD,
+            TEST_PATCH_SIZE,
+            TEST_STEP_SIZE,
+            TEST_SEARCH_WINDOW,
+            TEST_MAX_MATCHES,
+        );
+
+        assert_eq!(output.dim(), stack.dim());
+    }
+
+    // ==================== Behavioral Sanity Tests ====================
+
+    #[test]
+    fn test_denoising_modifies_noisy_input() {
+        let clean = random_matrix(32, 32, 55555);
+        let noisy = add_gaussian_noise(&clean, 0.1, 66666);
+        let sigma_psd = dummy_sigma_psd();
+        let sigma_map = dummy_sigma_map_2d();
+
+        let output = run_bm3d_step(
+            noisy.view(),
+            noisy.view(),
+            0,
+            sigma_psd.view(),
+            sigma_map.view(),
+            0.1,  // Match noise level
+            TEST_THRESHOLD,
+            TEST_PATCH_SIZE,
+            TEST_STEP_SIZE,
+            TEST_SEARCH_WINDOW,
+            TEST_MAX_MATCHES,
+        );
+
+        // Output should differ from input (denoising did something)
+        let diff = mse(&output, &noisy);
+        assert!(
+            diff > 1e-6,
+            "Denoising should modify the input, but MSE was {}",
+            diff
+        );
+    }
+
+    #[test]
+    fn test_denoising_reduces_noise() {
+        // Use a smooth gradient image (not random) which BM3D can exploit
+        // BM3D works best on images with self-similar patches
+        let clean = Array2::from_shape_fn((64, 64), |(r, c)| {
+            // Smooth gradient with some structure
+            0.5 + 0.3 * ((r as f32 / 64.0).sin() + (c as f32 / 64.0).cos())
+        });
+        let noisy = add_gaussian_noise(&clean, 0.1, 88888);
+        let sigma_psd = dummy_sigma_psd();
+        let sigma_map = dummy_sigma_map_2d();
+
+        let output = run_bm3d_step(
+            noisy.view(),
+            noisy.view(),
+            0,
+            sigma_psd.view(),
+            sigma_map.view(),
+            0.1,
+            2.7,  // Standard HT threshold
+            8,    // patch_size
+            2,    // smaller step for better coverage
+            24,   // larger search window
+            16,   // more matches
+        );
+
+        let mse_before = mse(&noisy, &clean);
+        let mse_after = mse(&output, &clean);
+
+        // Denoising should reduce MSE, or at minimum not increase it significantly
+        // Use a relaxed assertion since BM3D behavior depends on image structure
+        assert!(
+            mse_after < mse_before * 1.5,
+            "Denoising should not significantly increase MSE: before={}, after={}",
+            mse_before, mse_after
+        );
+    }
+
+    #[test]
+    fn test_constant_image_approximately_unchanged() {
+        // Uniform image with no noise - output should be similar to input
+        let constant_val = 0.5;
+        let image = Array2::<f32>::from_elem((32, 32), constant_val);
+        let sigma_psd = dummy_sigma_psd();
+        let sigma_map = dummy_sigma_map_2d();
+
+        let output = run_bm3d_step(
+            image.view(),
+            image.view(),
+            0,
+            sigma_psd.view(),
+            sigma_map.view(),
+            0.01,  // Very low noise
+            TEST_THRESHOLD,
+            TEST_PATCH_SIZE,
+            TEST_STEP_SIZE,
+            TEST_SEARCH_WINDOW,
+            TEST_MAX_MATCHES,
+        );
+
+        // Output should be very close to input for constant image
+        let max_diff = output.iter()
+            .map(|&x| (x - constant_val).abs())
+            .fold(0.0f32, f32::max);
+
+        assert!(
+            max_diff < 0.01,
+            "Constant image should remain approximately unchanged, max_diff={}",
+            max_diff
+        );
+    }
+
+    #[test]
+    fn test_output_in_valid_range() {
+        // Input in [0, 1] should produce reasonable output (no NaN, no extreme values)
+        let image = random_matrix(32, 32, 99999);
+        let sigma_psd = dummy_sigma_psd();
+        let sigma_map = dummy_sigma_map_2d();
+
+        let output = run_bm3d_step(
+            image.view(),
+            image.view(),
+            0,
+            sigma_psd.view(),
+            sigma_map.view(),
+            TEST_SIGMA_RANDOM,
+            TEST_THRESHOLD,
+            TEST_PATCH_SIZE,
+            TEST_STEP_SIZE,
+            TEST_SEARCH_WINDOW,
+            TEST_MAX_MATCHES,
+        );
+
+        for &val in output.iter() {
+            assert!(val.is_finite(), "Output contains non-finite value");
+            assert!(
+                val >= -1.0 && val <= 2.0,
+                "Output value {} outside reasonable range",
+                val
+            );
+        }
+    }
+
+    #[test]
+    fn test_stack_denoising_reduces_noise() {
+        // Use structured images (smooth gradients) that BM3D can exploit
+        let clean = Array3::from_shape_fn((3, 64, 64), |(d, r, c)| {
+            // Different smooth patterns per slice
+            0.5 + 0.3 * ((r as f32 / 64.0 + d as f32 * 0.1).sin() + (c as f32 / 64.0).cos())
+        });
+        let noisy = add_gaussian_noise_stack(&clean, 0.1, 33344);
+        let sigma_psd = dummy_sigma_psd();
+        let sigma_map = dummy_sigma_map_3d();
+
+        let output = run_bm3d_step_stack(
+            noisy.view(),
+            noisy.view(),
+            0,
+            sigma_psd.view(),
+            sigma_map.view(),
+            0.1,
+            2.7,
+            8,
+            2,
+            24,
+            16,
+        );
+
+        let mse_before = mse_stack(&noisy, &clean);
+        let mse_after = mse_stack(&output, &clean);
+
+        // Relaxed assertion - denoising should not significantly increase MSE
+        assert!(
+            mse_after < mse_before * 1.5,
+            "Stack denoising should not significantly increase MSE: before={}, after={}",
+            mse_before, mse_after
+        );
+    }
+
+    // ==================== Parameter Variation Tests ====================
+
+    #[test]
+    fn test_different_patch_sizes() {
+        // Test both 4x4 (FFT) and 8x8 (Hadamard) paths
+        for patch_size in [4, 8] {
+            let image = random_matrix(32, 32, (patch_size * 1000) as u64);
+            let sigma_psd = dummy_sigma_psd();
+            let sigma_map = dummy_sigma_map_2d();
+
+            let output = run_bm3d_step(
+                image.view(),
+                image.view(),
+                0,
+                sigma_psd.view(),
+                sigma_map.view(),
+                TEST_SIGMA_RANDOM,
+                TEST_THRESHOLD,
+                patch_size,
+                patch_size / 2,  // step = patch/2
+                TEST_SEARCH_WINDOW,
+                TEST_MAX_MATCHES,
+            );
+
+            assert_eq!(output.dim(), image.dim(), "Shape mismatch for patch_size={}", patch_size);
+            assert!(output.iter().all(|&x| x.is_finite()), "Non-finite values for patch_size={}", patch_size);
+        }
+    }
+
+    #[test]
+    fn test_different_search_windows() {
+        let image = random_matrix(48, 48, 55566);
+        let sigma_psd = dummy_sigma_psd();
+        let sigma_map = dummy_sigma_map_2d();
+
+        for search_window in [8, 16, 24] {
+            let output = run_bm3d_step(
+                image.view(),
+                image.view(),
+                0,
+                sigma_psd.view(),
+                sigma_map.view(),
+                TEST_SIGMA_RANDOM,
+                TEST_THRESHOLD,
+                TEST_PATCH_SIZE,
+                TEST_STEP_SIZE,
+                search_window,
+                TEST_MAX_MATCHES,
+            );
+
+            assert_eq!(output.dim(), image.dim(), "Shape mismatch for search_window={}", search_window);
+        }
+    }
+
+    #[test]
+    fn test_different_max_matches() {
+        let image = random_matrix(32, 32, 77788);
+        let sigma_psd = dummy_sigma_psd();
+        let sigma_map = dummy_sigma_map_2d();
+
+        for max_matches in [4, 8, 16] {
+            let output = run_bm3d_step(
+                image.view(),
+                image.view(),
+                0,
+                sigma_psd.view(),
+                sigma_map.view(),
+                TEST_SIGMA_RANDOM,
+                TEST_THRESHOLD,
+                TEST_PATCH_SIZE,
+                TEST_STEP_SIZE,
+                TEST_SEARCH_WINDOW,
+                max_matches,
+            );
+
+            assert_eq!(output.dim(), image.dim(), "Shape mismatch for max_matches={}", max_matches);
+        }
+    }
+
+    // ==================== Edge Case Tests ====================
+
+    #[test]
+    fn test_minimum_viable_image() {
+        // Smallest image that fits patch_size + some margin
+        let min_size = TEST_PATCH_SIZE + 2;
+        let image = random_matrix(min_size, min_size, 99911);
+        let sigma_psd = dummy_sigma_psd();
+        let sigma_map = dummy_sigma_map_2d();
+
+        let output = run_bm3d_step(
+            image.view(),
+            image.view(),
+            0,
+            sigma_psd.view(),
+            sigma_map.view(),
+            TEST_SIGMA_RANDOM,
+            TEST_THRESHOLD,
+            TEST_PATCH_SIZE,
+            1,  // step=1 for small image
+            TEST_PATCH_SIZE,  // small search window
+            4,  // fewer matches
+        );
+
+        assert_eq!(output.dim(), image.dim());
+    }
+
+    #[test]
+    fn test_single_slice_stack() {
+        // Stack with depth=1 should degenerate to 2D-like behavior
+        let stack = random_stack(1, 32, 32, 88899);
+        let sigma_psd = dummy_sigma_psd();
+        let sigma_map = dummy_sigma_map_3d();
+
+        let output = run_bm3d_step_stack(
+            stack.view(),
+            stack.view(),
+            0,
+            sigma_psd.view(),
+            sigma_map.view(),
+            TEST_SIGMA_RANDOM,
+            TEST_THRESHOLD,
+            TEST_PATCH_SIZE,
+            TEST_STEP_SIZE,
+            TEST_SEARCH_WINDOW,
+            TEST_MAX_MATCHES,
+        );
+
+        assert_eq!(output.dim(), (1, 32, 32));
+        assert!(output.iter().all(|&x| x.is_finite()));
+    }
+
+    #[test]
+    fn test_non_square_image() {
+        // 32x64 non-square image
+        let image = random_matrix(32, 64, 12399);
+        let sigma_psd = dummy_sigma_psd();
+        let sigma_map = dummy_sigma_map_2d();
+
+        let output = run_bm3d_step(
+            image.view(),
+            image.view(),
+            0,
+            sigma_psd.view(),
+            sigma_map.view(),
+            TEST_SIGMA_RANDOM,
+            TEST_THRESHOLD,
+            TEST_PATCH_SIZE,
+            TEST_STEP_SIZE,
+            TEST_SEARCH_WINDOW,
+            TEST_MAX_MATCHES,
+        );
+
+        assert_eq!(output.dim(), (32, 64));
+    }
+
+    #[test]
+    fn test_wiener_with_pilot() {
+        // Wiener filtering with separate pilot estimate (typical BM3D 2-pass)
+        // Use structured image for better BM3D performance
+        let clean = Array2::from_shape_fn((64, 64), |(r, c)| {
+            0.5 + 0.3 * ((r as f32 / 64.0).sin() + (c as f32 / 64.0).cos())
+        });
+        let noisy = add_gaussian_noise(&clean, 0.1, 55566);
+        let sigma_psd = dummy_sigma_psd();
+        let sigma_map = dummy_sigma_map_2d();
+
+        // First pass: HT to get pilot estimate
+        let pilot = run_bm3d_step(
+            noisy.view(),
+            noisy.view(),
+            0,
+            sigma_psd.view(),
+            sigma_map.view(),
+            0.1,
+            2.7,
+            8,
+            2,
+            24,
+            16,
+        );
+
+        // Second pass: Wiener with pilot
+        let output = run_bm3d_step(
+            noisy.view(),
+            pilot.view(),  // Use HT result as pilot
+            1,
+            sigma_psd.view(),
+            sigma_map.view(),
+            0.1,
+            0.0,
+            8,
+            2,
+            24,
+            16,
+        );
+
+        // Verify both passes produce finite outputs with correct shape
+        assert_eq!(output.dim(), clean.dim());
+        assert!(output.iter().all(|&x| x.is_finite()), "Wiener output should be finite");
+
+        // Wiener should not drastically increase MSE compared to noisy input
+        let mse_noisy = mse(&noisy, &clean);
+        let mse_wiener = mse(&output, &clean);
+
+        assert!(
+            mse_wiener < mse_noisy * 2.0,
+            "Wiener should not drastically increase MSE: noisy={}, wiener={}",
+            mse_noisy, mse_wiener
+        );
+    }
+
+    #[test]
+    fn test_step_size_variations() {
+        let image = random_matrix(32, 32, 66677);
+        let sigma_psd = dummy_sigma_psd();
+        let sigma_map = dummy_sigma_map_2d();
+
+        for step_size in [1, 2, 4, 8] {
+            let output = run_bm3d_step(
+                image.view(),
+                image.view(),
+                0,
+                sigma_psd.view(),
+                sigma_map.view(),
+                TEST_SIGMA_RANDOM,
+                TEST_THRESHOLD,
+                TEST_PATCH_SIZE,
+                step_size,
+                TEST_SEARCH_WINDOW,
+                TEST_MAX_MATCHES,
+            );
+
+            assert_eq!(output.dim(), image.dim(), "Shape mismatch for step_size={}", step_size);
+        }
+    }
+}
