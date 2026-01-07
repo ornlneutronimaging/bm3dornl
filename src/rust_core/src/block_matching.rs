@@ -59,7 +59,6 @@ pub fn find_similar_patches(
     let (h, w) = image.dim();
 
     // Extract reference patch
-    // Note: Caller must ensure ref_pos is valid.
     let ref_patch = image.slice(s![ref_r..ref_r + ph, ref_c..ref_c + pw]);
 
     // Define search bounds
@@ -68,46 +67,45 @@ pub fn find_similar_patches(
     let search_c_start = ref_c.saturating_sub(search_window.1 / 2);
     let search_c_end = (ref_c + search_window.1 / 2).min(w - pw);
 
-    let mut matches = Vec::with_capacity(max_matches);
+    let mut heap = std::collections::BinaryHeap::with_capacity(max_matches + 1);
 
     // Initial match (self)
-    matches.push(PatchMatch {
+    heap.push(PatchMatch {
         row: ref_r,
         col: ref_c,
-        distance: 0.0,
+        distance: 0.0, // Distance to self is 0
     });
 
     for r in (search_r_start..=search_r_end).step_by(step) {
         for c in (search_c_start..=search_c_end).step_by(step) {
-            if r == ref_r && c == ref_c {
+             if r == ref_r && c == ref_c {
                 continue;
             }
 
             let candidate_patch = image.slice(s![r..r + ph, c..c + pw]);
             let dist = compute_squared_distance(ref_patch, candidate_patch);
 
-            // Simple selection sort logic/insertion logic
-            // Since max_matches is small (e.g., 16 or 32), a simple linear scan or
-            // just collecting all and sorting partially might be fine.
-            // But strict "keep top K" usually implies a heap or bounded buffer.
-            
-            // Optimization: if we already have K matches, check if this is smaller than the worst one.
-             matches.push(PatchMatch {
-                row: r,
-                col: c,
-                distance: dist,
-            });
-
+            // Optimization: Maintain heap of size max_matches
+            if heap.len() < max_matches {
+                heap.push(PatchMatch { row: r, col: c, distance: dist });
+            } else {
+                // Peek at the worst match (largest distance)
+                // If new distance is smaller, replace it.
+                // BinaryHeap::peek returns reference to max element.
+                if let Some(max_match) = heap.peek() {
+                    if dist < max_match.distance {
+                        heap.pop();
+                        heap.push(PatchMatch { row: r, col: c, distance: dist });
+                    }
+                }
+            }
         }
     }
     
-    // Sort by distance
-    matches.sort_by(|a, b| a.distance.partial_cmp(&b.distance).unwrap());
+    // Convert to sorted vector (BinaryHeap pops in descending order, we want ascending)
+    let mut sorted_matches = heap.into_vec();
+    // Sort by distance ascending
+    sorted_matches.sort_by(|a, b| a.distance.partial_cmp(&b.distance).unwrap());
     
-    // Keep top K
-    if matches.len() > max_matches {
-        matches.truncate(max_matches);
-    }
-
-    matches
+    sorted_matches
 }

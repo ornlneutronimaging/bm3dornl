@@ -5,6 +5,8 @@ use crate::transforms::{fft2d, ifft2d}; // We'll use inline 1D for now or fix tr
 use rayon::prelude::*;
 use ndarray::{Array2, Array3, ArrayView2, s};
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::Arc;
+use rustfft::num_complex::Complex;
 
 /// Helper for atomic float addition
 #[inline]
@@ -62,6 +64,32 @@ fn run_bm3d_step(
     
     let scalar_sigma_sq = sigma_random * sigma_random;
 
+    // --- FFT Plan Pre-computation ---
+    let mut planner = rustfft::FftPlanner::new();
+    let fft_2d_row = planner.plan_fft_forward(patch_size);
+    let fft_2d_col = planner.plan_fft_forward(patch_size);
+    let ifft_2d_row = planner.plan_fft_inverse(patch_size);
+    let ifft_2d_col = planner.plan_fft_inverse(patch_size);
+    
+    // Pre-compute 1D plans for group dimension K (1 to max_matches)
+    // We store them in a Vec where index i corresponds to size i+1? Or just size i.
+    // Size 0 is unused.
+    let mut fft_1d_plans = Vec::with_capacity(max_matches + 1);
+    let mut ifft_1d_plans = Vec::with_capacity(max_matches + 1);
+    
+    // Fill dummy for 0
+    fft_1d_plans.push(planner.plan_fft_forward(1)); 
+    ifft_1d_plans.push(planner.plan_fft_inverse(1));
+
+    for k in 1..=max_matches {
+        fft_1d_plans.push(planner.plan_fft_forward(k));
+        ifft_1d_plans.push(planner.plan_fft_inverse(k));
+    }
+    
+    // Arc them for sharing across threads
+    // FftPlanner returns Arc<dyn Fft>, so we just collect them.
+    // We already have Arcs.
+    
     // Accumulation buffers
     let num_elements = rows * cols;
     let mut numerator_vec: Vec<AtomicU32> = (0..num_elements).map(|_| AtomicU32::new(0)).collect();
@@ -81,6 +109,14 @@ fn run_bm3d_step(
     let numerator_slice = &numerator_vec;
     let denominator_slice = &denominator_vec;
     
+    // Local refs for closure
+    let fft_2d_row_ref = &fft_2d_row;
+    let fft_2d_col_ref = &fft_2d_col;
+    let ifft_2d_row_ref = &ifft_2d_row;
+    let ifft_2d_col_ref = &ifft_2d_col;
+    let fft_1d_plans_ref = &fft_1d_plans;
+    let ifft_1d_plans_ref = &ifft_1d_plans;
+    
     // Use input_pilot for block matching
     let matching_target = input_pilot;
 
@@ -97,16 +133,14 @@ fn run_bm3d_step(
         let k = matches.len();
         if k == 0 { return; }
         
-        // 1.5 Get Local Noise Level from Map (Using Reference Patch position)
-        // We use the top-left value, or average? Top-left is fast.
-        // Usually streaks are column-based, so checking `ref_c` is enough.
-        // Assuming sigma_map is aligned.
+        // 1.5 Get Local Noise Level
         let local_sigma_streak = if use_sigma_map {
-             sigma_map[[ref_r, ref_c]] // Takes the value at the corner. Could be improved to gather max/mean in patch.
+             sigma_map[[ref_r, ref_c]] 
         } else {
              0.0
         };
 
+        // Stack building
         let mut group_noisy = Array3::<f32>::zeros((k, patch_size, patch_size));
         let mut group_pilot = Array3::<f32>::zeros((k, patch_size, patch_size));
         
@@ -117,32 +151,35 @@ fn run_bm3d_step(
             group_pilot.slice_mut(s![idx, .., ..]).assign(&p_p);
         }
         
-        // Transform
+        // 2D Transform
         let mut g_noisy_c = ndarray::Array3::<rustfft::num_complex::Complex<f32>>::zeros((k, patch_size, patch_size));
         let mut g_pilot_c = ndarray::Array3::<rustfft::num_complex::Complex<f32>>::zeros((k, patch_size, patch_size));
         
         for i in 0..k {
              let slice_n = group_noisy.slice(s![i, .., ..]);
-             let fft_n = fft2d(slice_n);
+             let fft_n = fft2d(slice_n, fft_2d_row_ref, fft_2d_col_ref);
              g_noisy_c.slice_mut(s![i, .., ..]).assign(&fft_n);
              if mode == 1 {
                  let slice_p = group_pilot.slice(s![i, .., ..]);
-                 let fft_p = fft2d(slice_p);
+                 let fft_p = fft2d(slice_p, fft_2d_row_ref, fft_2d_col_ref);
                  g_pilot_c.slice_mut(s![i, .., ..]).assign(&fft_p);
              }
         }
         
-        // 1D FFT along K
-        let mut planner = rustfft::FftPlanner::new();
-        let fft_k = planner.plan_fft_forward(k);
+        // 1D Transform along K
+        // Use the pre-computed plan for size K
+        let fft_k_plan = &fft_1d_plans_ref[k]; // Index k is size k
+        
+        // Let's implement the loop inline efficiently using the plan `fft_k_plan`.
         for r in 0..patch_size {
             for c in 0..patch_size {
                 let mut vec_n: Vec<rustfft::num_complex::Complex<f32>> = (0..k).map(|i| g_noisy_c[[i, r, c]]).collect();
-                fft_k.process(&mut vec_n);
+                fft_k_plan.process(&mut vec_n);
                 for i in 0..k { g_noisy_c[[i, r, c]] = vec_n[i]; }
+                
                 if mode == 1 {
                     let mut vec_p: Vec<rustfft::num_complex::Complex<f32>> = (0..k).map(|i| g_pilot_c[[i, r, c]]).collect();
-                    fft_k.process(&mut vec_p);
+                    fft_k_plan.process(&mut vec_p);
                     for i in 0..k { g_pilot_c[[i, r, c]] = vec_p[i]; }
                 }
             }
@@ -158,26 +195,16 @@ fn run_bm3d_step(
             let mut nz_count = 0;
             
              for i in 0..k {
-                 // let is_dc = i == 0; // Unused
                  for r in 0..patch_size {
                      for c in 0..patch_size {
                          let coeff = g_noisy_c[[i, r, c]];
                          
                          let noise_std_coeff = {
                              let sigma_s_dist = if use_colored_noise { sigma_psd[[r, c]] } else { 0.0 };
-                             // Spatially Adaptive: Scale the PSD shape by the Local Streak Intensity
                              let effective_sigma_s = sigma_s_dist * local_sigma_streak;
                              
-                             // Variance Model:
-                             // Var_Total = Var_Random + Var_Streak
-                             // Var_Random = k * sigma_random^2 (White noise grows with sqrt(k) in transform? No, var grows with k)
-                             // wait, Haar/Unitary transform preserves L2.
-                             // Input Var = sigma^2.
-                             // After 2D FFT (normalized): Var = sigma^2.
-                             // After 1D FFT along K (unnormalized): Var = k * sigma^2.
-                             
                              let var_r = k as f32 * scalar_sigma_sq;
-                             let var_s = (k*k) as f32 * effective_sigma_s * effective_sigma_s; // Correlated noise grows with k^2
+                             let var_s = (k*k) as f32 * effective_sigma_s * effective_sigma_s; 
                              (var_r + var_s).sqrt() * spatial_scale
                          };
                          
@@ -197,7 +224,6 @@ fn run_bm3d_step(
              // Wiener Filtering
              let mut wiener_sum = 0.0;
              for i in 0..k {
-                 // Apply aggressive sigma_psd logic to all i
                  for r in 0..patch_size {
                      for c in 0..patch_size {
                          let p_val = g_pilot_c[[i, r, c]];
@@ -205,12 +231,12 @@ fn run_bm3d_step(
                          let p_sq = p_val.norm_sqr();
                          
                          let noise_var_coeff = {
-                              let sigma_s_dist = if use_colored_noise { sigma_psd[[r, c]] } else { 0.0 };
-                              let effective_sigma_s = sigma_s_dist * local_sigma_streak;
-                              
-                              let var_r = k as f32 * scalar_sigma_sq;
-                              let var_s = (k*k) as f32 * effective_sigma_s * effective_sigma_s;
-                              (var_r + var_s) * spatial_scale_sq
+                               let sigma_s_dist = if use_colored_noise { sigma_psd[[r, c]] } else { 0.0 };
+                               let effective_sigma_s = sigma_s_dist * local_sigma_streak;
+                               
+                               let var_r = k as f32 * scalar_sigma_sq;
+                               let var_s = (k*k) as f32 * effective_sigma_s * effective_sigma_s;
+                               (var_r + var_s) * spatial_scale_sq
                          };
                          
                          let w = p_sq / (p_sq + noise_var_coeff + 1e-8);
@@ -221,26 +247,26 @@ fn run_bm3d_step(
                  }
              }
              
-             // Group weight: Simplification
              let noise_var_global = scalar_sigma_sq; 
              weight_g = 1.0 / (wiener_sum * noise_var_global + 1e-8); 
              if weight_g > 1e6 { weight_g = 1e6; }
         }
 
-        // 5. Inverse transforms
-        let ifft_k = planner.plan_fft_inverse(k);
+        // 5. Inverse transforms (1D along K first)
+        let ifft_k_plan = &ifft_1d_plans_ref[k];
         let norm_k = 1.0 / k as f32;
          for r in 0..patch_size {
             for c in 0..patch_size {
                 let mut vec: Vec<rustfft::num_complex::Complex<f32>> = (0..k).map(|i| g_noisy_c[[i, r, c]]).collect();
-                ifft_k.process(&mut vec);
+                ifft_k_plan.process(&mut vec);
                 for i in 0..k { g_noisy_c[[i, r, c]] = vec[i] * norm_k; }
             }
         }
         
+        // 2D Inverse
         for i in 0..k {
             let complex_slice = g_noisy_c.slice(s![i, .., ..]).to_owned();
-            let spatial = ifft2d(&complex_slice); 
+            let spatial = ifft2d(&complex_slice, ifft_2d_row_ref, ifft_2d_col_ref); 
             
             let m = matches[i];
             
