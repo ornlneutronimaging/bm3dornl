@@ -3,7 +3,7 @@
 
 import logging
 import numpy as np
-from scipy.ndimage import gaussian_filter
+from scipy.ndimage import gaussian_filter, gaussian_filter1d
 from . import bm3d_rust
 
 # Default parameters (simplified for Rust backend)
@@ -27,7 +27,8 @@ def estimate_streak_profile(sinogram, sigma_smooth=3.0):
     3. Compute Column-wise Median of Residuals (Robust estimate of the static vertical offset).
     """
     # 1. Estimate Object (Smooth heavily to remove streaks and noise, keep shape)
-    z_smooth = gaussian_filter(sinogram, (sigma_smooth, sigma_smooth))
+    # Allows anisotropic sigma: (sigma_y, sigma_x)
+    z_smooth = gaussian_filter(sinogram, sigma_smooth)
     
     # 2. Residual (Contains Noise + Streaks + Fine Details)
     residual = sinogram - z_smooth
@@ -38,7 +39,7 @@ def estimate_streak_profile(sinogram, sigma_smooth=3.0):
     
     # 4. Refine Profile (Optional: slight smoothing to prevent 1px jaggedness)
     # sigma=1.0 is gentle enough to keep sharp streak edges but kill single-pixel outliers
-    streak_profile = gaussian_filter(streak_profile, 1.0)
+    streak_profile = gaussian_filter1d(streak_profile, 1.0)
     
     return streak_profile
 
@@ -88,8 +89,11 @@ def bm3d_ring_artifact_removal(
         # Data-Driven Streak Removal
         # Instead of FFT Filtering, we estimate the streak vector and subtract it.
         
+        # Default smooth is 3.0. Use larger (e.g. 15.0) to capture wider streaks in Low SNR.
+        sigma_smooth = filter_kwargs.get("sigma_smooth", 3.0)
+        
         # 1. Estimate the additive streak profile
-        streak_profile = estimate_streak_profile(z_norm)
+        streak_profile = estimate_streak_profile(z_norm, sigma_smooth=sigma_smooth)
         
         # 2. Subtract streaks
         # Broadcast 1D profile to 2D
