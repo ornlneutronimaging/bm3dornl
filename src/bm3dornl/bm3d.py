@@ -82,57 +82,73 @@ def bm3d_ring_artifact_removal(
     if d_max > d_min:
         z_norm = (z - d_min) / (d_max - d_min)
 
-    # --- Mode Support ---
-    sigma_psd = np.zeros((1, 1), dtype=np.float32) # Default dummy
+    # --- Spatially Adaptive BM3D Setup ---
+    # 1. Estimate Streak MAP (Spatially Varying Variance)
+    sigma_map = filter_kwargs.get("sigma_map", None)
+    
+    # If not provided, estimate from the single image (Data-Driven)
+    if sigma_map is None:
+        # Use simple gradient-based or residual-based estimator
+        # We assume streaks are vertical.
+        # High-pass filter along X (rows) to find vertical edges, filter along Y (cols) to find long structures.
+        
+        # Re-use our robust estimator logic:
+        # Residual = Sinogram - Smooth(Sinogram)
+        # StreakProfile = Median(Residual)
+        # SigmaMap = Abs(StreakProfile) broadcasted.
+        
+        # We reuse the logic from `mode="streak"` loop below, or pre-calc it?
+        # Let's pre-calc it effectively.
+        sigma_smooth_est = 3.0
+        z_smooth_est = gaussian_filter(z_norm, (sigma_smooth_est, sigma_smooth_est))
+        residual_est = z_norm - z_smooth_est
+        profile_est = np.median(residual_est, axis=0) # (W,)
+        
+        # Refine profile (remove DC offset of object)
+        profile_smooth = gaussian_filter1d(profile_est, 50.0)
+        streak_signal = profile_est - profile_smooth
+        
+        # Map is the Magnitude of the Streak Signal (Assuming Noise ~ Signal strength for these artifacts)
+        # We broadcast to (H, W)
+        sigma_streak_1d = np.abs(streak_signal).astype(np.float32)
+        # Amplify? User complained of "insufficient cleaning".
+        # Let's scale it slightly to be aggressive on streaks.
+        sigma_map = np.tile(sigma_streak_1d, (z_norm.shape[0], 1))
+        
+    sigma_map = np.ascontiguousarray(sigma_map, dtype=np.float32)
+    
+    # 2. Sigma Random (White Noise Floor)
+    sigma_random = float(sigma)
+
+    # --- Mode Support (Streak Subtraction) ---
+    sigma_psd = np.zeros((1, 1), dtype=np.float32) 
     
     if mode == "streak":
-        # Data-Driven Streak Removal
-        # Instead of FFT Filtering, we estimate the streak vector and subtract it.
-        
-        # Default smooth is 3.0. Use larger (e.g. 15.0) to capture wider streaks in Low SNR.
+        # Additional Mean Subtraction (Shift).
+        # We keep this as it works well for the DC component.
         sigma_smooth = filter_kwargs.get("sigma_smooth", 3.0)
         iterations = filter_kwargs.get("streak_iterations", 1)
         
         for i in range(iterations):
-            # 1. Estimate the additive streak profile
             streak_profile = estimate_streak_profile(z_norm, sigma_smooth=sigma_smooth)
-            
-            # 2. Subtract streaks
-            # Broadcast 1D profile to 2D
             correction = np.tile(streak_profile, (z_norm.shape[0], 1))
             z_norm = z_norm - correction
-        
-        # 3. Post-Correction Clipping?
-        # Subtraction might push values < 0 slightly. 
-        # But BM3D handles floats fine.
-        
-    # --- Generic BM3D Execution ---
-
-    # --- Generic BM3D Execution ---
-    # Generic Mode (Scalar Sigma)
-    sigma_norm = sigma
+    
+    # --- BM3D Execution (Adaptive) ---
     
     # Step 1: Hard Thresholding
+    # Note: We now pass sigma_map and sigma_random
     yhat_ht = bm3d_rust.bm3d_hard_thresholding(
-        z_norm, z_norm, sigma_psd, sigma_norm, threshold_hard,
-        patch_size_dim, step_size, cut_off, num_patches
-    )
-    
-    z_gft_ht = yhat_ht 
-    yhat_ht_gft = bm3d_rust.bm3d_hard_thresholding(
-        z_norm, z_gft_ht, sigma_psd, sigma_norm, threshold_hard,
+        z_norm, z_norm, sigma_psd, 
+        sigma_map, sigma_random, 
+        threshold_hard,
         patch_size_dim, step_size, cut_off, num_patches
     )
     
     # Step 2: Wiener Filtering
-    yhat_wie = bm3d_rust.bm3d_wiener_filtering(
-         z_norm, yhat_ht_gft, sigma_psd, sigma_norm,
-         patch_size_dim, step_size, cut_off, num_patches
-    )
-    
-    z_gft_wie = yhat_wie
     yhat_final = bm3d_rust.bm3d_wiener_filtering(
-         z_norm, z_gft_wie, sigma_psd, sigma_norm,
+         z_norm, yhat_ht, sigma_psd, 
+         sigma_map, sigma_random,
          patch_size_dim, step_size, cut_off, num_patches
     )
     

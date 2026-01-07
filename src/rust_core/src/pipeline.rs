@@ -28,6 +28,7 @@ fn run_bm3d_step(
     input_pilot: ArrayView2<f32>,
     mode: usize, // 0: HT, 1: Wiener
     sigma_psd: ArrayView2<f32>, // PatchxPatch (colored static) or 1x1 (ignored if use_colored_noise=false effectively)
+    sigma_map: ArrayView2<f32>, // SPATIALLY ADAPTIVE: (H, W) map of local correlated noise intensity (streaks)
     sigma_random: f32,          // Base Random Noise Standard Deviation
     threshold: f32,
     patch_size: usize,
@@ -41,6 +42,14 @@ fn run_bm3d_step(
     if input_pilot.dim() != (rows, cols) {
         panic!("Noisy and Pilot images must have same dimensions");
     }
+    // Validate sigma_map shape
+    if sigma_map.dim() != (rows, cols) {
+         // If 1x1 passed (no map), we can handle it, but better strict or check dim
+         if sigma_map.dim() != (1, 1) {
+             panic!("sigma_map must match image dimensions or be 1x1");
+         }
+    }
+    let use_sigma_map = sigma_map.dim() == (rows, cols);
     
     // Check PSD shape
     let use_colored_noise = if sigma_psd.dim() == (patch_size, patch_size) {
@@ -75,11 +84,11 @@ fn run_bm3d_step(
     // Use input_pilot for block matching
     let matching_target = input_pilot;
 
-    ref_coords.par_iter().for_each(|&(r, c)| {
+    ref_coords.par_iter().for_each(|&(ref_r, ref_c)| {
         // 1. Block Matching on PILOT
         let matches = find_similar_patches(
             matching_target, 
-            (r, c), 
+            (ref_r, ref_c), 
             (patch_size, patch_size), 
             (search_window, search_window), 
             max_matches,
@@ -87,6 +96,16 @@ fn run_bm3d_step(
         );
         let k = matches.len();
         if k == 0 { return; }
+        
+        // 1.5 Get Local Noise Level from Map (Using Reference Patch position)
+        // We use the top-left value, or average? Top-left is fast.
+        // Usually streaks are column-based, so checking `ref_c` is enough.
+        // Assuming sigma_map is aligned.
+        let local_sigma_streak = if use_sigma_map {
+             sigma_map[[ref_r, ref_c]] // Takes the value at the corner. Could be improved to gather max/mean in patch.
+        } else {
+             0.0
+        };
 
         let mut group_noisy = Array3::<f32>::zeros((k, patch_size, patch_size));
         let mut group_pilot = Array3::<f32>::zeros((k, patch_size, patch_size));
@@ -139,19 +158,26 @@ fn run_bm3d_step(
             let mut nz_count = 0;
             
              for i in 0..k {
-                 let is_dc = i == 0;
+                 // let is_dc = i == 0; // Unused
                  for r in 0..patch_size {
                      for c in 0..patch_size {
                          let coeff = g_noisy_c[[i, r, c]];
                          
                          let noise_std_coeff = {
-                             let sigma_s = if use_colored_noise { sigma_psd[[r, c]] } else { 0.0 };
-                             // Aggressive Streak Removal: Treat sigma_s as Static Noise (k^2 variance)
-                             // This targets correlated noise (streaks). Even if grouped horizontally (uncorrelated),
-                             // this high threshold ensures removal. Object (Signal) is safe as long as it's spectrally disjoint
-                             // (Horizontal Object is at r > 0, Streaks are at r = 0).
+                             let sigma_s_dist = if use_colored_noise { sigma_psd[[r, c]] } else { 0.0 };
+                             // Spatially Adaptive: Scale the PSD shape by the Local Streak Intensity
+                             let effective_sigma_s = sigma_s_dist * local_sigma_streak;
+                             
+                             // Variance Model:
+                             // Var_Total = Var_Random + Var_Streak
+                             // Var_Random = k * sigma_random^2 (White noise grows with sqrt(k) in transform? No, var grows with k)
+                             // wait, Haar/Unitary transform preserves L2.
+                             // Input Var = sigma^2.
+                             // After 2D FFT (normalized): Var = sigma^2.
+                             // After 1D FFT along K (unnormalized): Var = k * sigma^2.
+                             
                              let var_r = k as f32 * scalar_sigma_sq;
-                             let var_s = (k*k) as f32 * sigma_s * sigma_s;
+                             let var_s = (k*k) as f32 * effective_sigma_s * effective_sigma_s; // Correlated noise grows with k^2
                              (var_r + var_s).sqrt() * spatial_scale
                          };
                          
@@ -179,10 +205,11 @@ fn run_bm3d_step(
                          let p_sq = p_val.norm_sqr();
                          
                          let noise_var_coeff = {
-                              let sigma_s = if use_colored_noise { sigma_psd[[r, c]] } else { 0.0 };
-                              // Aggressive Streak Removal (k^2 variance scale)
+                              let sigma_s_dist = if use_colored_noise { sigma_psd[[r, c]] } else { 0.0 };
+                              let effective_sigma_s = sigma_s_dist * local_sigma_streak;
+                              
                               let var_r = k as f32 * scalar_sigma_sq;
-                              let var_s = (k*k) as f32 * sigma_s * sigma_s;
+                              let var_s = (k*k) as f32 * effective_sigma_s * effective_sigma_s;
                               (var_r + var_s) * spatial_scale_sq
                          };
                          
@@ -256,7 +283,8 @@ pub fn bm3d_hard_thresholding<'py>(
     input_noisy: PyReadonlyArray2<f32>,
     input_pilot: PyReadonlyArray2<f32>,
     sigma_psd: PyReadonlyArray2<f32>,
-    sigma_random: f32, // New argument
+    sigma_map: PyReadonlyArray2<f32>, // New Arg
+    sigma_random: f32, 
     threshold: f32,
     patch_size: usize,
     step_size: usize,
@@ -268,6 +296,7 @@ pub fn bm3d_hard_thresholding<'py>(
         input_pilot.as_array(),
         0, // HT mode
         sigma_psd.as_array(),
+        sigma_map.as_array(),
         sigma_random,
         threshold,
         patch_size,
@@ -284,7 +313,8 @@ pub fn bm3d_wiener_filtering<'py>(
     input_noisy: PyReadonlyArray2<f32>,
     input_pilot: PyReadonlyArray2<f32>,
     sigma_psd: PyReadonlyArray2<f32>,
-    sigma_random: f32, // New argument
+    sigma_map: PyReadonlyArray2<f32>, // New Arg
+    sigma_random: f32, 
     patch_size: usize,
     step_size: usize,
     search_window: usize,
@@ -295,6 +325,7 @@ pub fn bm3d_wiener_filtering<'py>(
         input_pilot.as_array(),
         1, // Wiener mode
         sigma_psd.as_array(),
+        sigma_map.as_array(),
         sigma_random,
         0.0, // threshold ignored
         patch_size,
