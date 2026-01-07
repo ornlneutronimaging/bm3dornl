@@ -128,9 +128,9 @@ def bm3d_ring_artifact_removal(
         sigma_streak_1d = np.abs(streak_signal).astype(np.float32)
         
         # Amplify?
-        # User feedback suggests "slightly worse", maybe under-estimating.
-        # Let's boost the estimate slightly for robust removal.
-        scale_factor = filter_kwargs.get("streak_sigma_scale", 1.5)
+        # User feedback suggests "borderline over correcting" and "artifacts in low SNR".
+        # Reduced scale factor to be clearer and less aggressive.
+        scale_factor = filter_kwargs.get("streak_sigma_scale", 1.1)
         sigma_map = np.tile(sigma_streak_1d * scale_factor, (z_norm.shape[0], 1))
         
     sigma_map = np.ascontiguousarray(sigma_map, dtype=np.float32)
@@ -144,7 +144,7 @@ def bm3d_ring_artifact_removal(
     if mode == "streak":
         # Additional Mean Subtraction (Shift).
         # We keep this as it works well for the DC component.
-        sigma_smooth = filter_kwargs.get("sigma_smooth", 5.0)
+        sigma_smooth = filter_kwargs.get("sigma_smooth", 3.0)
         iterations = filter_kwargs.get("streak_iterations", 2)
         
         # Iterative pre-subtraction
@@ -162,12 +162,12 @@ def bm3d_ring_artifact_removal(
             # Gaussian Profile along Y axis (Vertical Freq)
             # Centered at 0 (DC). Width determines how "wobbly" streaks can be.
             # Narrow width = perfectly vertical. Wider = varying.
-            # We want to suppress low V-freqs.
+            # Reduced width to 0.6 to apply only to very vertical components, reducing "ringing" artifacts.
             
             # Simple 1D Gaussian decay
             y_coords = np.arange(patch_size_dim)
             # Use small sigma for freq domain (concentration)
-            psd_profile = np.exp(-0.5 * (y_coords / 0.8)**2) 
+            psd_profile = np.exp(-0.5 * (y_coords / 0.6)**2) 
             
             # Replicate along X (all horizontal freqs affected equally for a vertical line)
             for x in range(patch_size_dim):
