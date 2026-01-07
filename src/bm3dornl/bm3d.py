@@ -3,8 +3,7 @@
 
 import logging
 import numpy as np
-from scipy.fft import fft2, ifft2, fftshift, ifftshift
-from scipy.ndimage import gaussian_filter, sobel, binary_dilation
+from scipy.ndimage import gaussian_filter
 from . import bm3d_rust
 
 # Default parameters (simplified for Rust backend)
@@ -17,42 +16,31 @@ default_block_matching_kwargs = {
 # Legacy filter kwargs preserved just for signature compatibility if needed
 default_filter_kwargs = {}
 
-def fft_streak_removal(sinogram, sigma_y=1.0, sigma_protect_x=20.0):
+def estimate_streak_profile(sinogram, sigma_smooth=3.0):
     """
-    Remove vertical streaks using a FFT-based Notch Filter.
+    Estimate the static vertical streak profile using a data-driven residual median approach.
     
-    Streaks correspond to the DC component in the vertical frequency axis (v_y = 0).
-    We dampen this axis using a Gaussian notch, while protecting the low-frequency 
-    horizontal components (centered at v_x=0) to preserve the object's mean structure.
+    Assumption: Ring artifacts appear as constant vertical lines in the sinogram.
+    Method:
+    1. Estimate the object structure (Low Frequency) using strong smoothing.
+    2. Compute Residual = Original - Object.
+    3. Compute Column-wise Median of Residuals (Robust estimate of the static vertical offset).
     """
-    H, W = sinogram.shape
+    # 1. Estimate Object (Smooth heavily to remove streaks and noise, keep shape)
+    z_smooth = gaussian_filter(sinogram, (sigma_smooth, sigma_smooth))
     
-    # 1. FFT
-    f = fft2(sinogram)
-    fshift = fftshift(f)
+    # 2. Residual (Contains Noise + Streaks + Fine Details)
+    residual = sinogram - z_smooth
     
-    # 2. Construct Filter
-    cy, cx = H // 2, W // 2
-    y, x = np.ogrid[-cy:H-cy, -cx:W-cx]
+    # 3. Streak Profile (Median along vertical axis)
+    # This isolates the constant vertical component, rejecting random noise and moving object features.
+    streak_profile = np.median(residual, axis=0)
     
-    # Gaussian Notch along v_y
-    notch_y = np.exp(-(y**2) / (2 * sigma_y**2))
+    # 4. Refine Profile (Optional: slight smoothing to prevent 1px jaggedness)
+    # sigma=1.0 is gentle enough to keep sharp streak edges but kill single-pixel outliers
+    streak_profile = gaussian_filter(streak_profile, 1.0)
     
-    # Protection Mask along v_x (Center)
-    protect_x = np.exp(-(x**2) / (2 * sigma_protect_x**2))
-    
-    # Combined Mask: 1 - Notch + Notch*Protection
-    # If Protection=1 (Center), Mask=1 (No filtering).
-    # If Protection=0 (High Freq X), Mask=1-Notch (Filter out v_y=0).
-    mask = 1.0 - notch_y * (1.0 - protect_x)
-    
-    # 3. Apply
-    fshift_filtered = fshift * mask
-    
-    # 4. IFFT
-    img_filtered = np.real(ifft2(ifftshift(fshift_filtered)))
-    
-    return img_filtered.astype(np.float32)
+    return streak_profile
 
 def bm3d_ring_artifact_removal(
     sinogram: np.ndarray,
@@ -69,7 +57,7 @@ def bm3d_ring_artifact_removal(
         The sinogram (2D float array).
     mode : str
         "generic": Standard BM3D (assume white noise).
-        "streak": FFT-based Streak Removal + Standard BM3D.
+        "streak": Additive Streak Removal (Residual Median) + Standard BM3D.
     sigma : float
         Noise standard deviation.
     """
@@ -97,61 +85,22 @@ def bm3d_ring_artifact_removal(
     sigma_psd = np.zeros((1, 1), dtype=np.float32) # Default dummy
     
     if mode == "streak":
-        # 1. FFT Pre-processing
-        # "Dual FFT" Strategy:
-        # Compute two versions:
-        # A. Safe: Conservative filter to protect structure.
-        # B. Clean: Aggressive filter to remove faint streaks.
-        # Blend them using an Edge Mask (Vertical Edges -> Use Safe, Flat -> Use Clean).
+        # Data-Driven Streak Removal
+        # Instead of FFT Filtering, we estimate the streak vector and subtract it.
         
-        sigma_notch_safe = filter_kwargs.get("fft_notch_sigma", 1.0)
-        sigma_protect_safe = filter_kwargs.get("fft_protect_width", 20.0)
+        # 1. Estimate the additive streak profile
+        streak_profile = estimate_streak_profile(z_norm)
         
-        # Base Safe Version
-        z_safe = fft_streak_removal(z_norm, sigma_notch_safe, sigma_protect_safe)
+        # 2. Subtract streaks
+        # Broadcast 1D profile to 2D
+        correction = np.tile(streak_profile, (z_norm.shape[0], 1))
+        z_norm = z_norm - correction
         
-        use_dual_fft = filter_kwargs.get("use_dual_fft", True)
+        # 3. Post-Correction Clipping?
+        # Subtraction might push values < 0 slightly. 
+        # But BM3D handles floats fine.
         
-        if use_dual_fft:
-            # Aggressive params
-            sigma_notch_clean = 3.0
-            sigma_protect_clean = 25.0
-            
-            z_clean = fft_streak_removal(z_norm, sigma_notch_clean, sigma_protect_clean)
-            
-            # Compute Gradient Mask on the SAFE version
-            # Goal: Detect Structure (Vertical Edges) vs Flat/Streak regions.
-            # Challenge: Noisy sinograms have high gradients everywhere.
-            # Solution: Strong pre-smoothing to isolate structural edges.
-            
-            # 1. Strong smoothing (sigma=3) to suppress noise but keep large edges
-            g_smooth = gaussian_filter(z_safe, (3, 3)) 
-            grad_y = np.abs(sobel(g_smooth, axis=0))
-            
-            # 2. Robust Thresholding
-            g_mean = np.mean(grad_y)
-            g_std = np.std(grad_y)
-            
-            # Edges are outliers in the gradient map.
-            # Threshold: Mean + 0.5 * Std (Lower threshold -> More protection)
-            threshold = g_mean + 0.5 * g_std
-            
-            # 3. Binary Mask + Morphological Dilation
-            # We identify "Core Edges" then expand the protection zone.
-            binary_mask = grad_y > threshold
-            
-            # Dilate to cover the "slope" of the edge, not just the peak gradient.
-            # Interactions 10 ~= 10 pixels expansion.
-            mask_dilated = binary_dilation(binary_mask, iterations=10)
-            
-            # Smooth the binary mask for soft blending
-            mask = gaussian_filter(mask_dilated.astype(np.float32), (2, 2))
-            
-            # Blend: Mask=1 (Edge) -> Safe, Mask=0 (Flat) -> Clean
-            z_norm = mask * z_safe + (1.0 - mask) * z_clean
-            
-        else:
-            z_norm = z_safe
+    # --- Generic BM3D Execution ---
 
     # --- Generic BM3D Execution ---
     # Generic Mode (Scalar Sigma)

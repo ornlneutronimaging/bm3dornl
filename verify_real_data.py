@@ -36,10 +36,7 @@ def verify_real_data():
             noisy_sino, 
             mode="streak",
             sigma=0.002,
-            filter_kwargs={
-                "use_fft": True, 
-                "use_dual_fft": True
-            } # Dual-FFT Blending (Refined Mask)
+            filter_kwargs={} # Data-Driven Residual Median Mode (Defaults)
         ) 
         end_t = time.time()
         
