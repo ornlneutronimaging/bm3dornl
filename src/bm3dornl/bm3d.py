@@ -66,17 +66,22 @@ def bm3d_ring_artifact_removal(
     block_matching_kwargs: dict = default_block_matching_kwargs,
     filter_kwargs: dict = default_filter_kwargs,
 ) -> np.ndarray:
-    """Remove ring artifacts (streaks) from a sinogram.
+    """Remove ring artifacts (streaks) from a sinogram or a stack of sinograms.
     
     Parameters
     ----------
     sinogram : np.ndarray
-        The sinogram (2D float array).
+        The input data. Can be 2D (H, W) or 3D (N, H, W).
     mode : str
         "generic": Standard BM3D (assume white noise).
         "streak": Additive Streak Removal (Residual Median) + Standard BM3D.
     sigma : float
         Noise standard deviation.
+        
+    Returns
+    -------
+    np.ndarray
+        Denoised data (same shape as input).
     """
     # Unpack parameters
     patch_size = block_matching_kwargs.get("patch_size", (7, 7))
@@ -90,6 +95,9 @@ def bm3d_ring_artifact_removal(
     
     logger = logging.getLogger(__name__)
     
+    # Check Dimension
+    is_stack = sinogram.ndim == 3
+    
     # Ensure float32 and normalize
     z = sinogram.astype(np.float32)
     d_min = z.min()
@@ -100,100 +108,97 @@ def bm3d_ring_artifact_removal(
 
     # --- Spatially Adaptive BM3D Setup ---
     # 1. Estimate Streak MAP (Spatially Varying Variance)
-    sigma_map = filter_kwargs.get("sigma_map", None)
+    sigma_map_arg = filter_kwargs.get("sigma_map", None)
     
-    # If not provided, estimate from the single image (Data-Driven)
-    if sigma_map is None:
-        # Improved Data-Driven Estimation
-        # We need a robust estimate of the LOCAL streak intensity.
-        # Previous method: global residual median.
-        # Better: Local standard deviation of the "streak component".
-        
-        # 1. Extract Streak Component roughly
-        streak_profile_rough = estimate_streak_profile(z_norm, sigma_smooth=5.0, iterations=1)
-        
-        # 2. High-pass filter this profile? 
-        # Actually, the streak profile itself contains the "magnitude" info.
-        # But we want the "Noise Standard Deviation" map.
-        # Where the streak is strong, the "correlated noise" variance is high.
-        # We map |Streak| -> Sigma.
-        
-        # Remove low-freq trends from profile to get just the "spikes" (streaks)
+    scale_factor = filter_kwargs.get("streak_sigma_scale", 1.1)
+    
+    # Helper to compute map for one 2D slice
+    def compute_slice_map(slice_img):
+        streak_profile_rough = estimate_streak_profile(slice_img, sigma_smooth=5.0, iterations=1)
         profile_smooth = gaussian_filter1d(streak_profile_rough, 20.0)
         streak_signal = streak_profile_rough - profile_smooth
-        
-        # Map is the Magnitude of the Streak Signal
-        # We assume the "streak noise" variance is proportional to the streak intensity squared?
-        # Or just linear? Linear is a good approximation for amplitude.
         sigma_streak_1d = np.abs(streak_signal).astype(np.float32)
-        
-        # Amplify?
-        # User feedback suggests "borderline over correcting" and "artifacts in low SNR".
-        # Reduced scale factor to be clearer and less aggressive.
-        scale_factor = filter_kwargs.get("streak_sigma_scale", 1.1)
-        sigma_map = np.tile(sigma_streak_1d * scale_factor, (z_norm.shape[0], 1))
-        
+        return np.tile(sigma_streak_1d * scale_factor, (slice_img.shape[0], 1))
+
+    if sigma_map_arg is None:
+        if is_stack:
+            # 3D: Compute per slice
+            # We can loop. Pre-allocate.
+            n, h, w = z_norm.shape
+            sigma_map = np.zeros((n, h, w), dtype=np.float32)
+            for i in range(n):
+                sigma_map[i] = compute_slice_map(z_norm[i])
+        else:
+            # 2D
+            sigma_map = compute_slice_map(z_norm)
+    else:
+        sigma_map = np.ascontiguousarray(sigma_map_arg, dtype=np.float32)
+        if is_stack and sigma_map.ndim != 3:
+            raise ValueError("sigma_map must be 3D for stack input")
+    
     sigma_map = np.ascontiguousarray(sigma_map, dtype=np.float32)
     
-    # 2. Sigma Random (White Noise Floor)
+    # 2. Sigma Random
     sigma_random = float(sigma)
 
     # --- Mode Support (Streak Subtraction) ---
     sigma_psd = np.zeros((1, 1), dtype=np.float32) 
     
+    # Prepare PSD (Shared)
+    if mode == "streak" and patch_size_dim > 0:
+        sigma_psd = np.zeros((patch_size_dim, patch_size_dim), dtype=np.float32)
+        y_coords = np.arange(patch_size_dim)
+        psd_profile = np.exp(-0.5 * (y_coords / 0.6)**2) 
+        for x in range(patch_size_dim):
+            sigma_psd[:, x] = psd_profile
+        sigma_psd = sigma_psd.astype(np.float32) 
+
+    # Apply Pre-subtraction
     if mode == "streak":
-        # Additional Mean Subtraction (Shift).
-        # We keep this as it works well for the DC component.
         sigma_smooth = filter_kwargs.get("sigma_smooth", 3.0)
         iterations = filter_kwargs.get("streak_iterations", 2)
         
-        # Iterative pre-subtraction
-        # This removes the "mean" of the streak, leaving residual noise/wobbble
-        # tailored for BM3D to clean up.
-        current_streak_profile = estimate_streak_profile(z_norm, sigma_smooth=sigma_smooth, iterations=iterations)
-        correction = np.tile(current_streak_profile, (z_norm.shape[0], 1))
-        z_norm = z_norm - correction
-        
-        # Construct PSD for Vertical Streaks
-        # Vertical streaks (constant in Y) corresponds to energy in the first row of the 2D transform (freq Y = 0)
-        if patch_size_dim > 0:
-            sigma_psd = np.zeros((patch_size_dim, patch_size_dim), dtype=np.float32)
-            
-            # Gaussian Profile along Y axis (Vertical Freq)
-            # Centered at 0 (DC). Width determines how "wobbly" streaks can be.
-            # Narrow width = perfectly vertical. Wider = varying.
-            # Reduced width to 0.6 to apply only to very vertical components, reducing "ringing" artifacts.
-            
-            # Simple 1D Gaussian decay
-            y_coords = np.arange(patch_size_dim)
-            # Use small sigma for freq domain (concentration)
-            psd_profile = np.exp(-0.5 * (y_coords / 0.6)**2) 
-            
-            # Replicate along X (all horizontal freqs affected equally for a vertical line)
-            for x in range(patch_size_dim):
-                sigma_psd[:, x] = psd_profile
-                
-            # Normalize peak to 1.0 (relative to sigma_map)
-            sigma_psd = sigma_psd.astype(np.float32) 
+        if is_stack:
+            n = z_norm.shape[0]
+            for i in range(n):
+                prof = estimate_streak_profile(z_norm[i], sigma_smooth=sigma_smooth, iterations=iterations)
+                corr = np.tile(prof, (z_norm[i].shape[0], 1))
+                z_norm[i] -= corr
+        else:
+            prof = estimate_streak_profile(z_norm, sigma_smooth=sigma_smooth, iterations=iterations)
+            corr = np.tile(prof, (z_norm.shape[0], 1))
+            z_norm -= corr
 
+    # --- BM3D Execution ---
     
-    # --- BM3D Execution (Adaptive) ---
-    
-    # Step 1: Hard Thresholding
-    # Note: We now pass sigma_map and sigma_random
-    yhat_ht = bm3d_rust.bm3d_hard_thresholding(
-        z_norm, z_norm, sigma_psd, 
-        sigma_map, sigma_random, 
-        threshold_hard,
-        patch_size_dim, step_size, cut_off, num_patches
-    )
-    
-    # Step 2: Wiener Filtering
-    yhat_final = bm3d_rust.bm3d_wiener_filtering(
-         z_norm, yhat_ht, sigma_psd, 
-         sigma_map, sigma_random,
-         patch_size_dim, step_size, cut_off, num_patches
-    )
+    if is_stack:
+        # Stack Processing
+        yhat_ht = bm3d_rust.bm3d_hard_thresholding_stack(
+            z_norm, z_norm, sigma_psd, 
+            sigma_map, sigma_random, 
+            threshold_hard,
+            patch_size_dim, step_size, cut_off, num_patches
+        )
+        
+        yhat_final = bm3d_rust.bm3d_wiener_filtering_stack(
+             z_norm, yhat_ht, sigma_psd, 
+             sigma_map, sigma_random,
+             patch_size_dim, step_size, cut_off, num_patches
+        )
+    else:
+        # Single Slice
+        yhat_ht = bm3d_rust.bm3d_hard_thresholding(
+            z_norm, z_norm, sigma_psd, 
+            sigma_map, sigma_random, 
+            threshold_hard,
+            patch_size_dim, step_size, cut_off, num_patches
+        )
+        
+        yhat_final = bm3d_rust.bm3d_wiener_filtering(
+             z_norm, yhat_ht, sigma_psd, 
+             sigma_map, sigma_random,
+             patch_size_dim, step_size, cut_off, num_patches
+        )
     
     # Denormalize and Return
     if d_max > d_min:

@@ -152,3 +152,102 @@ pub fn ifft1d_group(
 }
 
 
+
+/// In-place Fast Walsh-Hadamard Transform (Natural Order) for 8 elements
+#[inline(always)]
+fn fwht8(buf: &mut [f32; 8]) {
+    // Stage 1 (Stride 1)
+    let t0 = buf[0] + buf[1]; buf[1] = buf[0] - buf[1]; buf[0] = t0;
+    let t2 = buf[2] + buf[3]; buf[3] = buf[2] - buf[3]; buf[2] = t2;
+    let t4 = buf[4] + buf[5]; buf[5] = buf[4] - buf[5]; buf[4] = t4;
+    let t6 = buf[6] + buf[7]; buf[7] = buf[6] - buf[7]; buf[6] = t6;
+
+    // Stage 2 (Stride 2)
+    let t0 = buf[0] + buf[2]; buf[2] = buf[0] - buf[2]; buf[0] = t0;
+    let t1 = buf[1] + buf[3]; buf[3] = buf[1] - buf[3]; buf[1] = t1;
+    let t4 = buf[4] + buf[6]; buf[6] = buf[4] - buf[6]; buf[4] = t4;
+    let t5 = buf[5] + buf[7]; buf[7] = buf[5] - buf[7]; buf[5] = t5;
+
+    // Stage 3 (Stride 4)
+    let t0 = buf[0] + buf[4]; buf[4] = buf[0] - buf[4]; buf[0] = t0;
+    let t1 = buf[1] + buf[5]; buf[5] = buf[1] - buf[5]; buf[1] = t1;
+    let t2 = buf[2] + buf[6]; buf[6] = buf[2] - buf[6]; buf[2] = t2;
+    let t3 = buf[3] + buf[7]; buf[7] = buf[3] - buf[7]; buf[3] = t3;
+}
+
+/// 2D WHT for 8x8 patch. Returns Complex (im=0) for compatibility.
+pub fn wht2d_8x8_forward(input: ArrayView2<f32>) -> Array2<Complex<f32>> {
+    let mut data = [0.0; 64];
+    let mut idx = 0;
+    for r in 0..8 {
+        for c in 0..8 {
+            data[idx] = input[[r, c]];
+            idx += 1;
+        }
+    }
+    for r in 0..8 {
+        let mut row_buf = [0.0; 8];
+        let offset = r * 8;
+        row_buf.copy_from_slice(&data[offset..offset+8]);
+        fwht8(&mut row_buf);
+        data[offset..offset+8].copy_from_slice(&row_buf);
+    }
+    for c in 0..8 {
+        let mut col_buf = [0.0; 8];
+        for r in 0..8 {
+            col_buf[r] = data[r*8 + c];
+        }
+        fwht8(&mut col_buf);
+        for r in 0..8 {
+            data[r*8 + c] = col_buf[r];
+        }
+    }
+    let mut output = Array2::<Complex<f32>>::zeros((8, 8));
+    idx = 0;
+    for r in 0..8 {
+        for c in 0..8 {
+            output[[r, c]] = Complex::new(data[idx], 0.0);
+            idx += 1;
+        }
+    }
+    output
+}
+
+/// 2D Inverse WHT for 8x8 patch.
+pub fn wht2d_8x8_inverse(input: &Array2<Complex<f32>>) -> Array2<f32> {
+    let mut data = [0.0; 64];
+    let mut idx = 0;
+    for r in 0..8 {
+        for c in 0..8 {
+            data[idx] = input[[r, c]].re;
+            idx += 1;
+        }
+    }
+    for r in 0..8 {
+        let mut row_buf = [0.0; 8];
+        let offset = r * 8;
+        row_buf.copy_from_slice(&data[offset..offset+8]);
+        fwht8(&mut row_buf);
+        data[offset..offset+8].copy_from_slice(&row_buf);
+    }
+    for c in 0..8 {
+        let mut col_buf = [0.0; 8];
+        for r in 0..8 {
+            col_buf[r] = data[r*8 + c];
+        }
+        fwht8(&mut col_buf);
+        for r in 0..8 {
+            data[r*8 + c] = col_buf[r];
+        }
+    }
+    let scale = 1.0 / 64.0;
+    let mut output = Array2::<f32>::zeros((8, 8));
+    idx = 0;
+    for r in 0..8 {
+        for c in 0..8 {
+            output[[r, c]] = data[idx] * scale;
+            idx += 1;
+        }
+    }
+    output
+}

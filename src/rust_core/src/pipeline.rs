@@ -1,70 +1,69 @@
 use pyo3::prelude::*;
-use numpy::{PyReadonlyArray2, PyArray2, ToPyArray};
+use numpy::{PyReadonlyArray2, PyArray2, PyReadonlyArray3, PyArray3, ToPyArray};
 use crate::block_matching::find_similar_patches;
 use rayon::prelude::*;
-use ndarray::{Array2, Array3, ArrayView2, s};
+use ndarray::{Array2, Array3, ArrayView2, ArrayView3, s, Axis};
+use std::sync::Arc;
+use rustfft::Fft;
 
-/// Internal helper for BM3D Step Execution (Parallel)
-/// This is not exposed to Python directly to ensure type safety and clarity.
-fn run_bm3d_step(
+struct Bm3dPlans {
+    fft_2d_row: Arc<dyn Fft<f32>>,
+    fft_2d_col: Arc<dyn Fft<f32>>,
+    ifft_2d_row: Arc<dyn Fft<f32>>,
+    ifft_2d_col: Arc<dyn Fft<f32>>,
+    fft_1d_plans: Vec<Arc<dyn Fft<f32>>>,
+    ifft_1d_plans: Vec<Arc<dyn Fft<f32>>>,
+}
+
+impl Bm3dPlans {
+    fn new(patch_size: usize, max_matches: usize) -> Self {
+        let mut planner = rustfft::FftPlanner::new();
+        let fft_2d_row = planner.plan_fft_forward(patch_size);
+        let fft_2d_col = planner.plan_fft_forward(patch_size);
+        let ifft_2d_row = planner.plan_fft_inverse(patch_size);
+        let ifft_2d_col = planner.plan_fft_inverse(patch_size);
+        
+        let mut fft_1d_plans = Vec::with_capacity(max_matches + 1);
+        let mut ifft_1d_plans = Vec::with_capacity(max_matches + 1);
+        
+        fft_1d_plans.push(planner.plan_fft_forward(1)); 
+        ifft_1d_plans.push(planner.plan_fft_inverse(1));
+    
+        for k in 1..=max_matches {
+            fft_1d_plans.push(planner.plan_fft_forward(k));
+            ifft_1d_plans.push(planner.plan_fft_inverse(k));
+        }
+
+        Self {
+            fft_2d_row, fft_2d_col, ifft_2d_row, ifft_2d_col,
+            fft_1d_plans, ifft_1d_plans
+        }
+    }
+}
+
+/// Core BM3D Single Image Kernel
+fn run_bm3d_kernel(
     input_noisy: ArrayView2<f32>,
     input_pilot: ArrayView2<f32>,
-    mode: usize, // 0: HT, 1: Wiener
-    sigma_psd: ArrayView2<f32>, // PatchxPatch (colored static) or 1x1 (ignored if use_colored_noise=false effectively)
-    sigma_map: ArrayView2<f32>, // SPATIALLY ADAPTIVE: (H, W) map of local correlated noise intensity (streaks)
-    sigma_random: f32,          // Base Random Noise Standard Deviation
+    mode: usize,
+    sigma_psd: ArrayView2<f32>,
+    sigma_map: ArrayView2<f32>,
+    sigma_random: f32,
     threshold: f32,
     patch_size: usize,
     step_size: usize,
     search_window: usize,
     max_matches: usize,
+    plans: &Bm3dPlans,
 ) -> Array2<f32> {
     let (rows, cols) = input_noisy.dim();
-    
-    // Validate shapes
-    if input_pilot.dim() != (rows, cols) {
-        panic!("Noisy and Pilot images must have same dimensions");
-    }
-    // Validate sigma_map shape
-    if sigma_map.dim() != (rows, cols) {
-         if sigma_map.dim() != (1, 1) {
-             panic!("sigma_map must match image dimensions or be 1x1");
-         }
-    }
     let use_sigma_map = sigma_map.dim() == (rows, cols);
-    
-    // Check PSD shape
-    let use_colored_noise = if sigma_psd.dim() == (patch_size, patch_size) {
-        true
-    } else if sigma_psd.dim() == (1, 1) {
-        false
-    } else {
-         panic!("sigma_psd must be 1x1 (unused) or patch_size x patch_size");
-    };
-    
+    let use_colored_noise = sigma_psd.dim() == (patch_size, patch_size);
     let scalar_sigma_sq = sigma_random * sigma_random;
+    
+    // Fast path for 8x8 patches using Hadamard
+    let use_hadamard = patch_size == 8;
 
-    // --- FFT Plan Pre-computation ---
-    let mut planner = rustfft::FftPlanner::new();
-    // Only pre-compute what's needed for *this* step to avoid overhead?
-    // Actually plans are cheap to create if sizes are small.
-    let fft_2d_row = planner.plan_fft_forward(patch_size);
-    let fft_2d_col = planner.plan_fft_forward(patch_size);
-    let ifft_2d_row = planner.plan_fft_inverse(patch_size);
-    let ifft_2d_col = planner.plan_fft_inverse(patch_size);
-    
-    let mut fft_1d_plans = Vec::with_capacity(max_matches + 1);
-    let mut ifft_1d_plans = Vec::with_capacity(max_matches + 1);
-    
-    fft_1d_plans.push(planner.plan_fft_forward(1)); 
-    ifft_1d_plans.push(planner.plan_fft_inverse(1));
-
-    for k in 1..=max_matches {
-        fft_1d_plans.push(planner.plan_fft_forward(k));
-        ifft_1d_plans.push(planner.plan_fft_inverse(k));
-    }
-    
-    // Grid generation
     let mut ref_coords = Vec::new();
     let r_end = rows.saturating_sub(patch_size) + 1;
     let c_end = cols.saturating_sub(patch_size) + 1;
@@ -74,19 +73,13 @@ fn run_bm3d_step(
             ref_coords.push((r, c));
         }
     }
-    
-    // Local refs for closure
-    let fft_2d_row_ref = &fft_2d_row;
-    let fft_2d_col_ref = &fft_2d_col;
-    let ifft_2d_row_ref = &ifft_2d_row;
-    let ifft_2d_col_ref = &ifft_2d_col;
-    let fft_1d_plans_ref = &fft_1d_plans;
-    let ifft_1d_plans_ref = &ifft_1d_plans;
-    
-    // Chunk size hint: give each thread decent work to amortize allocation
-    // 512x512 with step 4 ~ 16k patches. 16 threads -> 1k patches per thread.
-    // Allocation is 2x 512x512 floats ~ 2MB.
-    // It's efficient.
+
+    let fft_2d_row_ref = &plans.fft_2d_row;
+    let fft_2d_col_ref = &plans.fft_2d_col;
+    let ifft_2d_row_ref = &plans.ifft_2d_row;
+    let ifft_2d_col_ref = &plans.ifft_2d_col;
+    let fft_1d_plans_ref = &plans.fft_1d_plans;
+    let ifft_1d_plans_ref = &plans.ifft_1d_plans;
 
     let (final_num, final_den) = ref_coords.par_iter()
         .with_min_len(2048)
@@ -95,7 +88,7 @@ fn run_bm3d_step(
             |mut acc, &(ref_r, ref_c)| {
                 let (numerator_acc, denominator_acc) = &mut acc;
 
-                // 1. Block Matching on PILOT
+                // 1. Block Matching
                 let matches = crate::block_matching::find_similar_patches(
                     input_pilot, 
                     (ref_r, ref_c), 
@@ -107,12 +100,8 @@ fn run_bm3d_step(
                 let k = matches.len();
                 if k == 0 { return acc; }
                 
-                // 1.5 Get Local Noise Level
-                let local_sigma_streak = if use_sigma_map {
-                     sigma_map[[ref_r, ref_c]] 
-                } else {
-                     0.0
-                };
+                // 1.5 Local Noise Level
+                let local_sigma_streak = if use_sigma_map { sigma_map[[ref_r, ref_c]] } else { 0.0 };
 
                 // Stack building
                 let mut group_noisy = Array3::<f32>::zeros((k, patch_size, patch_size));
@@ -131,24 +120,33 @@ fn run_bm3d_step(
                 
                 for i in 0..k {
                      let slice_n = group_noisy.slice(s![i, .., ..]);
-                     let fft_n = crate::transforms::fft2d(slice_n, fft_2d_row_ref, fft_2d_col_ref);
-                     g_noisy_c.slice_mut(s![i, .., ..]).assign(&fft_n);
+                     if use_hadamard {
+                         let fft_n = crate::transforms::wht2d_8x8_forward(slice_n);
+                         g_noisy_c.slice_mut(s![i, .., ..]).assign(&fft_n);
+                     } else {
+                         let fft_n = crate::transforms::fft2d(slice_n, fft_2d_row_ref, fft_2d_col_ref);
+                         g_noisy_c.slice_mut(s![i, .., ..]).assign(&fft_n);
+                     }
+                     
                      if mode == 1 {
                          let slice_p = group_pilot.slice(s![i, .., ..]);
-                         let fft_p = crate::transforms::fft2d(slice_p, fft_2d_row_ref, fft_2d_col_ref);
-                         g_pilot_c.slice_mut(s![i, .., ..]).assign(&fft_p);
+                         if use_hadamard {
+                             let fft_p = crate::transforms::wht2d_8x8_forward(slice_p);
+                             g_pilot_c.slice_mut(s![i, .., ..]).assign(&fft_p);
+                         } else {
+                             let fft_p = crate::transforms::fft2d(slice_p, fft_2d_row_ref, fft_2d_col_ref);
+                             g_pilot_c.slice_mut(s![i, .., ..]).assign(&fft_p);
+                         }
                      }
                 }
                 
-                // 1D Transform along K
+                // 1D Transform
                 let fft_k_plan = &fft_1d_plans_ref[k]; 
-                
                 for r in 0..patch_size {
                     for c in 0..patch_size {
                         let mut vec_n: Vec<rustfft::num_complex::Complex<f32>> = (0..k).map(|i| g_noisy_c[[i, r, c]]).collect();
                         fft_k_plan.process(&mut vec_n);
                         for i in 0..k { g_noisy_c[[i, r, c]] = vec_n[i]; }
-                        
                         if mode == 1 {
                             let mut vec_p: Vec<rustfft::num_complex::Complex<f32>> = (0..k).map(|i| g_pilot_c[[i, r, c]]).collect();
                             fft_k_plan.process(&mut vec_p);
@@ -157,14 +155,14 @@ fn run_bm3d_step(
                     }
                 }
 
-                // 4. Filtering
+                // Filtering
                 let mut weight_g = 1.0; 
                 let spatial_scale = patch_size as f32;
-                let spatial_scale_sq = (patch_size * patch_size) as f32;
+                let spatial_scale_sq = spatial_scale * spatial_scale;
                 
                 if mode == 0 {
-                    // Hard Thresholding
-                    let mut nz_count = 0;
+                     // HT
+                     let mut nz_count = 0;
                      for i in 0..k {
                          for r in 0..patch_size {
                              for c in 0..patch_size {
@@ -186,14 +184,13 @@ fn run_bm3d_step(
                      }
                      if nz_count > 0 { weight_g = 1.0 / (nz_count as f32 + 1.0); } 
                 } else {
-                     // Wiener Filtering
+                     // Wiener
                      let mut wiener_sum = 0.0;
                      for i in 0..k {
                          for r in 0..patch_size {
                              for c in 0..patch_size {
                                  let p_val = g_pilot_c[[i, r, c]];
                                  let n_val = g_noisy_c[[i, r, c]];
-                                 
                                  let noise_var_coeff = {
                                        let sigma_s_dist = if use_colored_noise { sigma_psd[[r, c]] } else { 0.0 };
                                        let effective_sigma_s = sigma_s_dist * local_sigma_streak;
@@ -207,12 +204,11 @@ fn run_bm3d_step(
                              }
                          }
                      }
-                     let noise_var_global = scalar_sigma_sq; 
-                     weight_g = 1.0 / (wiener_sum * noise_var_global + 1e-8); 
+                     weight_g = 1.0 / (wiener_sum * scalar_sigma_sq + 1e-8); 
                      if weight_g > 1e6 { weight_g = 1e6; }
                 }
 
-                // 5. Inverse transforms
+                // Inverse Transforms
                 let ifft_k_plan = &ifft_1d_plans_ref[k];
                 let norm_k = 1.0 / k as f32;
                  for r in 0..patch_size {
@@ -225,16 +221,14 @@ fn run_bm3d_step(
                 
                 for i in 0..k {
                     let complex_slice = g_noisy_c.slice(s![i, .., ..]).to_owned();
-                    let spatial = crate::transforms::ifft2d(&complex_slice, ifft_2d_row_ref, ifft_2d_col_ref); 
+                    let spatial = if use_hadamard {
+                        crate::transforms::wht2d_8x8_inverse(&complex_slice)
+                    } else {
+                        crate::transforms::ifft2d(&complex_slice, ifft_2d_row_ref, ifft_2d_col_ref)
+                    };
                     
                     let m = matches[i];
-                    let w_spatial = weight_g; // Removed mut, plain copy is fine
-                    
-                    // Accumulate to Thread-Local Buffer (No Atomics!)
-                    // Bounds check is implicit or we can be careful.
-                    // patches should stay within image if loop bounds are correct.
-                    // But slice is safe.
-                    // We can slice the accumulator? Or just loop.
+                    let w_spatial = weight_g;
                     for pr in 0..patch_size {
                         for pc in 0..patch_size {
                             let tr = m.row + pr;
@@ -246,17 +240,11 @@ fn run_bm3d_step(
                         }
                     }
                 }
-                
                 acc
-            }
-        )
+            })
         .reduce(
             || (Array2::<f32>::zeros((rows, cols)), Array2::<f32>::zeros((rows, cols))),
-            |mut a, b| {
-                a.0 += &b.0;
-                a.1 += &b.1;
-                a
-            }
+            |mut a, b| { a.0 += &b.0; a.1 += &b.1; a }
         );
 
     // Finalize
@@ -265,7 +253,6 @@ fn run_bm3d_step(
         for c in 0..cols {
             let num = final_num[[r, c]];
             let den = final_den[[r, c]];
-            
             if den > 1e-6 {
                 output[[r, c]] = num / den;
             } else {
@@ -273,9 +260,84 @@ fn run_bm3d_step(
             }
         }
     }
-
     output
 }
+
+
+fn run_bm3d_step(
+    input_noisy: ArrayView2<f32>,
+    input_pilot: ArrayView2<f32>,
+    mode: usize, 
+    sigma_psd: ArrayView2<f32>, 
+    sigma_map: ArrayView2<f32>, 
+    sigma_random: f32,          
+    threshold: f32,
+    patch_size: usize,
+    step_size: usize,
+    search_window: usize,
+    max_matches: usize,
+) -> Array2<f32> {
+    if input_pilot.dim() != input_noisy.dim() { panic!("Dim mismatch"); }
+    if sigma_map.dim() != input_noisy.dim() && sigma_map.dim() != (1, 1) { panic!("Map dim mismatch"); }
+    
+    let plans = Bm3dPlans::new(patch_size, max_matches);
+    run_bm3d_kernel(input_noisy, input_pilot, mode, sigma_psd, sigma_map, sigma_random, threshold, patch_size, step_size, search_window, max_matches, &plans)
+}
+
+fn run_bm3d_step_stack(
+    input_noisy: ArrayView3<f32>,
+    input_pilot: ArrayView3<f32>,
+    mode: usize, 
+    sigma_psd: ArrayView2<f32>, 
+    sigma_map: ArrayView3<f32>, 
+    sigma_random: f32,          
+    threshold: f32,
+    patch_size: usize,
+    step_size: usize,
+    search_window: usize,
+    max_matches: usize,
+) -> Array3<f32> {
+    let (n, rows, cols) = input_noisy.dim();
+    if input_pilot.dim() != (n, rows, cols) { panic!("Stack dim mismatch pilot"); }
+    if sigma_map.dim() != (n, rows, cols) && sigma_map.dim() != (1, 1, 1) { 
+        // Support broadcasting if map is 1x1x1?
+        if sigma_map.dim() == (1,1,1) {
+            // we handle it inside loop effectively? No, slice fails.
+            // We should expect full map or broadcast carefully.
+            // To simplify, we demand full map if used, or dummy 1x1x1 is handled via logic.
+            // But strict check is safer.
+        } else {
+            panic!("Stack dim mismatch map");
+        }
+    }
+    
+    let plans = Bm3dPlans::new(patch_size, max_matches);
+    
+    let results: Vec<Array2<f32>> = (0..n).into_par_iter()
+        .map(|i| {
+            let noisy_slice = input_noisy.index_axis(Axis(0), i);
+            let pilot_slice = input_pilot.index_axis(Axis(0), i);
+            let map_slice = if sigma_map.dim() == (1,1,1) {
+                 sigma_map.index_axis(Axis(0), 0) // Dummy view
+            } else {
+                 sigma_map.index_axis(Axis(0), i)
+            };
+            
+            run_bm3d_kernel(
+                noisy_slice, pilot_slice, mode, sigma_psd, map_slice,
+                sigma_random, threshold, patch_size, step_size, search_window, max_matches, &plans
+            )
+        })
+        .collect();
+        
+    // Consolidate
+    let mut output = Array3::<f32>::zeros((n, rows, cols));
+    for (i, res) in results.into_iter().enumerate() {
+        output.slice_mut(s![i, .., ..]).assign(&res);
+    }
+    output
+}
+
 
 #[pyfunction]
 pub fn bm3d_hard_thresholding<'py>(
@@ -283,7 +345,7 @@ pub fn bm3d_hard_thresholding<'py>(
     input_noisy: PyReadonlyArray2<f32>,
     input_pilot: PyReadonlyArray2<f32>,
     sigma_psd: PyReadonlyArray2<f32>,
-    sigma_map: PyReadonlyArray2<f32>, // New Arg
+    sigma_map: PyReadonlyArray2<f32>, 
     sigma_random: f32, 
     threshold: f32,
     patch_size: usize,
@@ -294,7 +356,7 @@ pub fn bm3d_hard_thresholding<'py>(
     let output = run_bm3d_step(
         input_noisy.as_array(),
         input_pilot.as_array(),
-        0, // HT mode
+        0, 
         sigma_psd.as_array(),
         sigma_map.as_array(),
         sigma_random,
@@ -313,7 +375,7 @@ pub fn bm3d_wiener_filtering<'py>(
     input_noisy: PyReadonlyArray2<f32>,
     input_pilot: PyReadonlyArray2<f32>,
     sigma_psd: PyReadonlyArray2<f32>,
-    sigma_map: PyReadonlyArray2<f32>, // New Arg
+    sigma_map: PyReadonlyArray2<f32>,
     sigma_random: f32, 
     patch_size: usize,
     step_size: usize,
@@ -323,11 +385,11 @@ pub fn bm3d_wiener_filtering<'py>(
     let output = run_bm3d_step(
         input_noisy.as_array(),
         input_pilot.as_array(),
-        1, // Wiener mode
+        1, 
         sigma_psd.as_array(),
         sigma_map.as_array(),
         sigma_random,
-        0.0, // threshold ignored
+        0.0,
         patch_size,
         step_size,
         search_window,
@@ -335,6 +397,66 @@ pub fn bm3d_wiener_filtering<'py>(
     );
     Ok(output.to_pyarray(py))
 }
+
+#[pyfunction]
+pub fn bm3d_hard_thresholding_stack<'py>(
+    py: Python<'py>,
+    input_noisy: PyReadonlyArray3<f32>,
+    input_pilot: PyReadonlyArray3<f32>,
+    sigma_psd: PyReadonlyArray2<f32>,
+    sigma_map: PyReadonlyArray3<f32>, 
+    sigma_random: f32, 
+    threshold: f32,
+    patch_size: usize,
+    step_size: usize,
+    search_window: usize,
+    max_matches: usize,
+) -> PyResult<&'py PyArray3<f32>> {
+    let output = run_bm3d_step_stack(
+        input_noisy.as_array(),
+        input_pilot.as_array(),
+        0, 
+        sigma_psd.as_array(),
+        sigma_map.as_array(),
+        sigma_random,
+        threshold,
+        patch_size,
+        step_size,
+        search_window,
+        max_matches
+    );
+    Ok(output.to_pyarray(py))
+}
+
+#[pyfunction]
+pub fn bm3d_wiener_filtering_stack<'py>(
+    py: Python<'py>,
+    input_noisy: PyReadonlyArray3<f32>,
+    input_pilot: PyReadonlyArray3<f32>,
+    sigma_psd: PyReadonlyArray2<f32>,
+    sigma_map: PyReadonlyArray3<f32>,
+    sigma_random: f32, 
+    patch_size: usize,
+    step_size: usize,
+    search_window: usize,
+    max_matches: usize,
+) -> PyResult<&'py PyArray3<f32>> {
+    let output = run_bm3d_step_stack(
+        input_noisy.as_array(),
+        input_pilot.as_array(),
+        1, 
+        sigma_psd.as_array(),
+        sigma_map.as_array(),
+        sigma_random,
+        0.0,
+        patch_size,
+        step_size,
+        search_window,
+        max_matches
+    );
+    Ok(output.to_pyarray(py))
+}
+
 
 #[pyfunction]
 pub fn test_block_matching_rust(
