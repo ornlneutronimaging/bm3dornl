@@ -4,6 +4,7 @@
 import logging
 import numpy as np
 from scipy.fft import fft2, ifft2, fftshift, ifftshift
+from scipy.ndimage import gaussian_filter, sobel
 from . import bm3d_rust
 
 # Default parameters (simplified for Rust backend)
@@ -93,45 +94,76 @@ def bm3d_ring_artifact_removal(
         z_norm = (z - d_min) / (d_max - d_min)
 
     # --- Mode Support ---
+    sigma_psd = np.zeros((1, 1), dtype=np.float32) # Default dummy
+    
     if mode == "streak":
-        # Spectral Filtering for Streaks (FFT-based)
-        sigma_notch = filter_kwargs.get("fft_notch_sigma", 3.0)
-        sigma_protect = filter_kwargs.get("fft_protect_width", 25.0)
+        # 1. FFT Pre-processing
+        # "Dual FFT" Strategy:
+        # Compute two versions:
+        # A. Safe: Conservative filter to protect structure.
+        # B. Clean: Aggressive filter to remove faint streaks.
+        # Blend them using an Edge Mask (Vertical Edges -> Use Safe, Flat -> Use Clean).
         
-        # Apply FFT Denoising IN-PLACE on z_norm (conceptually)
-        z_norm = fft_streak_removal(z_norm, sigma_notch, sigma_protect)
+        sigma_notch_safe = filter_kwargs.get("fft_notch_sigma", 1.0)
+        sigma_protect_safe = filter_kwargs.get("fft_protect_width", 20.0)
         
-        # After removing streaks, the image typically still has random noise.
-        # We proceed to run Generic BM3D on this "streak-free" base.
+        # Base Safe Version
+        z_safe = fft_streak_removal(z_norm, sigma_notch_safe, sigma_protect_safe)
+        
+        use_dual_fft = filter_kwargs.get("use_dual_fft", True)
+        
+        if use_dual_fft:
+            # Aggressive params
+            sigma_notch_clean = 3.0
+            sigma_protect_clean = 25.0
+            
+            z_clean = fft_streak_removal(z_norm, sigma_notch_clean, sigma_protect_clean)
+            
+            # Compute Gradient Mask on the SAFE version
+            g_smooth = gaussian_filter(z_safe, (2, 2))
+            grad_y = np.abs(sobel(g_smooth, axis=0))
+            
+            # Thresholding for mask
+            g_mean = np.mean(grad_y)
+            g_std = np.std(grad_y)
+            
+            center = g_mean + 1.0 * g_std
+            width = g_std * 0.5
+            
+            # Sigmoid Mask (1.0 = Edge/Safe, 0.0 = Flat/Clean)
+            mask = 1.0 / (1.0 + np.exp(-(grad_y - center) / width))
+            
+            # Blend
+            z_norm = mask * z_safe + (1.0 - mask) * z_clean
+            
+        else:
+            z_norm = z_safe
 
     # --- Generic BM3D Execution ---
-    # (Used for both 'generic' mode and the post-FFT 'streak' mode)
-    
     # Generic Mode (Scalar Sigma)
-    sigma_psd_dummy = np.zeros((1, 1), dtype=np.float32)
     sigma_norm = sigma
     
     # Step 1: Hard Thresholding
     yhat_ht = bm3d_rust.bm3d_hard_thresholding(
-        z_norm, z_norm, sigma_psd_dummy, sigma_norm, threshold_hard,
+        z_norm, z_norm, sigma_psd, sigma_norm, threshold_hard,
         patch_size_dim, step_size, cut_off, num_patches
     )
     
     z_gft_ht = yhat_ht 
     yhat_ht_gft = bm3d_rust.bm3d_hard_thresholding(
-        z_norm, z_gft_ht, sigma_psd_dummy, sigma_norm, threshold_hard,
+        z_norm, z_gft_ht, sigma_psd, sigma_norm, threshold_hard,
         patch_size_dim, step_size, cut_off, num_patches
     )
     
     # Step 2: Wiener Filtering
     yhat_wie = bm3d_rust.bm3d_wiener_filtering(
-         z_norm, yhat_ht_gft, sigma_psd_dummy, sigma_norm,
+         z_norm, yhat_ht_gft, sigma_psd, sigma_norm,
          patch_size_dim, step_size, cut_off, num_patches
     )
     
     z_gft_wie = yhat_wie
     yhat_final = bm3d_rust.bm3d_wiener_filtering(
-         z_norm, z_gft_wie, sigma_psd_dummy, sigma_norm,
+         z_norm, z_gft_wie, sigma_psd, sigma_norm,
          patch_size_dim, step_size, cut_off, num_patches
     )
     

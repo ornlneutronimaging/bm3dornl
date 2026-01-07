@@ -35,8 +35,11 @@ def verify_real_data():
         denoised_sino = bm3d_ring_artifact_removal(
             noisy_sino, 
             mode="streak",
-            sigma=0.005,
-            filter_kwargs={"use_fft": True, "fft_notch_sigma": 3.0, "fft_protect_width": 25.0} # Optimized: Stronger Streak (3.0) + Safer Object (25.0)
+            sigma=0.002,
+            filter_kwargs={
+                "use_fft": True, 
+                "use_dual_fft": True
+            } # Dual-FFT Blending + Optimized BM3D Sigma
         ) 
         end_t = time.time()
         
