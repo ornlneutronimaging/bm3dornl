@@ -11,53 +11,94 @@
 BM3D ORNL
 =========
 
-This repository contains the BM3D ORNL code, which is a Python implementation of the BM3D denoising algorithm. The BM3D algorithm was originally proposed by K. Dabov, A. Foi, V. Katkovnik, and K. Egiazarian in the paper "Image Denoising by Sparse 3D Transform-Domain Collaborative Filtering" (2007).
-The BM3D algorithm is a state-of-the-art denoising algorithm that is widely used in the image processing community.
-The BM3D ORNL code is a Python implementation of the BM3D algorithm that has been optimized for performance using both `Numba` and `CuPy`.
-The BM3D ORNL code is designed to be easy to use and easy to integrate into existing Python workflows.
-The BM3D ORNL code is released under an open-source license, and is freely available for download and use.
+A high-performance BM3D denoising library for neutron imaging, optimized for streak/ring artifact removal from sinograms.
 
-For more information, check out our [FAQ](docs/FAQ.md).
+The BM3D algorithm was originally proposed by K. Dabov, A. Foi, V. Katkovnik, and K. Egiazarian in the paper "Image Denoising by Sparse 3D Transform-Domain Collaborative Filtering" (2007).
+
+**BM3D ORNL** provides a Python API with a **Rust backend** for efficient, parallel processing of tomography data. Key features:
+
+- **Streak/Ring Artifact Removal**: Specialized mode for removing vertical streak artifacts common in neutron and X-ray imaging
+- **Stack Processing**: Efficient batched processing of 3D sinogram stacks
+- **High Performance**: Rust backend with optimized block matching (integral images, early termination) and transforms (Hadamard, FFT)
 
 How to install
 --------------
 
-For **users**, you can install the latest version published on our [anaconda channel](https://anaconda.org/neutronimaging/bm3dornl) with:
+**Using Pixi (Recommended)**
 
 ```bash
-conda install neutronimaging::bm3dornl
+pixi install
+pixi run install
 ```
 
-Or use `pip` to install from [PyPI](https://pypi.org/project/bm3dornl/0.3.1/)
+**Using Pip**
 
 ```bash
 pip install bm3dornl
 ```
 
-Since the `PyPI` version relies on pre-built `CuPy` from PyPI, it is possible that the bundled latest version of `CuPy` might not be compatible.
-In such situations, please either install the correct pre-built version via pip, e.g. `pip install cupy-cuda11x` for Nvidia card with older drivers, or use local `nvcc` to build `CuPy` from source with `pip install cupy`.
+Usage
+-----
 
-How to contribute
------------------
+```python
+from bm3dornl import bm3d_ring_artifact_removal
+import numpy as np
 
-For **developers**, please fork this repo and create a conda development environment with
+# Load sinogram data - 2D (H, W) or 3D stack (N, H, W)
+sinogram = np.load("sinogram.npy")
 
-```bash
-conda env create -f environment.yml
+# Standard BM3D denoising (generic white noise)
+denoised = bm3d_ring_artifact_removal(sinogram, mode="generic", sigma=0.1)
+
+# Streak artifact removal (recommended for ring artifacts)
+denoised = bm3d_ring_artifact_removal(sinogram, mode="streak", sigma=0.1)
+
+# With custom parameters
+denoised = bm3d_ring_artifact_removal(
+    sinogram,
+    mode="streak",
+    sigma=0.1,
+    block_matching_kwargs={
+        "patch_size": 8,        # Patch size (7 or 8 recommended)
+        "stride": 2,            # Step size for patch extraction
+        "cut_off_distance": (40, 40),  # Max search distance
+        "num_patches_per_group": 64,   # Patches per 3D group
+        "batch_size": 32,       # Batch size for stack processing
+    }
+)
 ```
 
-followed by
+Performance
+-----------
+
+The **Rust backend** provides high performance for tomography stacks:
+
+| Metric | Value |
+|--------|-------|
+| **Speed** | ~0.63s per frame (512×512) on Apple Silicon |
+| **Memory** | >50% reduction via chunked processing |
+| **Parallelism** | Zero-overhead parallel processing via Rayon |
+
+Key optimizations:
+- Integral image pre-screening for fast block matching
+- Early termination in distance calculations
+- Pre-computed FFT plans
+- Fast Walsh-Hadamard transform for 8×8 patches
+
+Development
+-----------
+
+We use [pixi](https://prefix.dev) for development environment management.
+
+1.  Clone repo.
+2.  Run `pixi run build` to compile the Rust backend and install in editable mode.
+3.  Run `pixi run test` to run tests.
+4.  Run `pixi run bench` to run performance benchmarks.
 
 ```bash
-pip install --no-deps -e .
+git clone https://github.com/ornlneutronimaging/bm3dornl.git
+cd bm3dornl
+pixi run build
+pixi run test
 ```
 
-The option `--no-deps` here is critical as `pip` will try to install a second set of dependencies based on information from `pyproject.toml`.
-Since conda does not check packages compatibility installed from `pip`, we need to avoid bring in in-compatible packages.
-
-Once your feature implementation is ready, please make a pull request and ping one of our developers for review.
-
-Future Development
-------------------
-
-We are planning to migrate to JAX as the core computing library to unify CPU/GPU support and simplify the codebase. For more information, see our [JAX Migration Plan](docs/JAX_MIGRATION_PLAN.md).

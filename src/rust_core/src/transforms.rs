@@ -1,5 +1,5 @@
 use rustfft::{Fft, num_complex::Complex};
-use ndarray::{Array2, Array3, ArrayView2};
+use ndarray::{Array2, ArrayView2};
 use std::sync::Arc;
 
 /// Compute 2D FFT of a square patch using pre-computed plans.
@@ -101,59 +101,15 @@ pub fn ifft2d(
 /// Compute 1D FFT along the first dimension (Group dimension).
 /// Input shape: (K, P, P)
 /// Output shape: (K, P, P) (Complex)
-pub fn fft1d_group(
-    input: &Array3<f32>,
-    fft_k_plan: &Arc<dyn Fft<f32>>
-) -> Array3<Complex<f32>> {
-    let (k, rows, cols) = input.dim();
-    // if fft_k_plan.len() != k { panic!("FFT plan K mismatch"); }
-
-    let mut output = Array3::<Complex<f32>>::zeros((k, rows, cols));
-    let mut vec = vec![Complex::new(0.0, 0.0); k];
-
-    // Iterate over each pixel (r, c) and transform the vector along K
-    for r in 0..rows {
-        for c in 0..cols {
-            for i in 0..k {
-                vec[i] = Complex::new(input[[i, r, c]], 0.0);
-            }
-            fft_k_plan.process(&mut vec);
-            for i in 0..k {
-                output[[i, r, c]] = vec[i];
-            }
-        }
-    }
-    output
-}
-
-/// Compute 1D Inverse FFT along the first dimension.
-pub fn ifft1d_group(
-    input: &Array3<Complex<f32>>,
-    ifft_k_plan: &Arc<dyn Fft<f32>>
-) -> Array3<f32> {
-    let (k, rows, cols) = input.dim();
-    
-    let mut output = Array3::<f32>::zeros((k, rows, cols));
-    let norm = 1.0 / k as f32;
-    let mut vec = vec![Complex::new(0.0, 0.0); k];
-
-    for r in 0..rows {
-        for c in 0..cols {
-            for i in 0..k {
-                vec[i] = input[[i, r, c]];
-            }
-            ifft_k_plan.process(&mut vec);
-            for i in 0..k {
-                output[[i, r, c]] = vec[i].re * norm;
-            }
-        }
-    }
-    output
-}
 
 
 
-/// In-place Fast Walsh-Hadamard Transform (Natural Order) for 8 elements
+
+
+/// In-place Fast Walsh-Hadamard Transform (Natural Order) for 8 elements.
+/// Uses a butterfly network with only additions and subtractions.
+/// Complexity: 8 log2(8) = 24 ops.
+/// This allows "multiplication-free" transform, drastically speeding up processing for 8x8 blocks.
 #[inline(always)]
 fn fwht8(buf: &mut [f32; 8]) {
     // Stage 1 (Stride 1)

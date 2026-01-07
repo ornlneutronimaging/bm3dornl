@@ -2,18 +2,18 @@
 name = "bm3dornl"
 description = "BM3D for streak artifact removal in neutron imaging"
 dynamic = ["version"]
-requires-python = ">=3.10"
+requires-python = ">=3.12"
 dependencies = [
   "numpy",
   "scipy",
   "scikit-image",
 ]
 license = { text = "MIT" }
-keywords = ["BM3D", "image processing", "neutron imaging", "denoising", "CuPy", "Numba"]
+keywords = ["BM3D", "image processing", "neutron imaging", "denoising", "tomography", "ring artifacts", "Rust"]
 readme = "README.md"
 
 [project.urls]
-homepage = "https://github.com/neutrons/python_project_template/"
+homepage = "https://github.com/ornlneutronimaging/bm3dornl"
 repository = "https://github.com/ornlneutronimaging/bm3dornl"
 documentation = "https://bm3dornl.readthedocs.io/en/latest/"
 issues = "https://github.com/ornlneutronimaging/bm3dornl/issues"
@@ -54,12 +54,6 @@ exclude = ["tests*", "scripts*", "docs*", "notebooks*"]
 [tool.setuptools.package-data]
 "*" = ["*.yml","*.yaml","*.ini"]
 
-[project.scripts]
-packagename-cli = "packagenamepy.packagename:main"
-
-[project.gui-scripts]
-packagenamepy = "packagenamepy.packagename:gui"
-
 [tool.pytest.ini_options]
 pythonpath = [
   ".", "src", "scripts"
@@ -68,7 +62,7 @@ testpaths = ["tests"]
 python_files = ["test*.py"]
 norecursedirs = [".git", "tmp*", "_tmp*", "__pycache__", "*dataset*", "*data_set*"]
 markers = [
-    "cuda_required: test requires cuda to run."
+    "cuda_required: legacy test requires CUDA (no longer supported, kept for reference)."
 ]
 
 [tool.pylint]
@@ -82,12 +76,16 @@ disable = ["too-many-locals",
 
 [tool.pixi.workspace]
 channels = ["conda-forge"]
-platforms = ["osx-arm64"]
+platforms = ["osx-arm64", "linux-64"]
 
 [tool.pixi.pypi-dependencies]
 bm3dornl = { path = ".", editable = true }
 
 [tool.pixi.tasks]
+build = "maturin develop --release"
+test = "pytest"
+bench = "python benchmarks/measure_stack_speed.py"
+clean = "cargo clean --manifest-path src/rust_core/Cargo.toml"
 
 [tool.pixi.dependencies]
 python = "3.12.*"
@@ -97,5 +95,6 @@ numpy = "1.26.*"
 pip = ">=25.3,<26"
 setuptools = ">=80.9.0,<81"
 h5py = ">=3.15.1,<4"
+numba = ">=0.60.0"
 matplotlib = ">=3.10.8,<4"
 jupyter = ">=1.1.1,<2"
