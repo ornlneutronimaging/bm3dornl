@@ -63,6 +63,9 @@ fn run_bm3d_kernel(
     
     // Fast path for 8x8 patches using Hadamard
     let use_hadamard = patch_size == 8;
+    
+    // Pre-compute Integral Images for Block Matching acceleration
+    let (integral_sum, integral_sq_sum) = crate::block_matching::compute_integral_images(input_pilot);
 
     let mut ref_coords = Vec::new();
     let r_end = rows.saturating_sub(patch_size) + 1;
@@ -91,6 +94,8 @@ fn run_bm3d_kernel(
                 // 1. Block Matching
                 let matches = crate::block_matching::find_similar_patches(
                     input_pilot, 
+                    &integral_sum,
+                    &integral_sq_sum,
                     (ref_r, ref_c), 
                     (patch_size, patch_size), 
                     (search_window, search_window), 
@@ -468,8 +473,11 @@ pub fn test_block_matching_rust(
     max_matches: usize,
 ) -> PyResult<Vec<(usize, usize, f32)>> {
     let input_arr = input.as_array();
-    let matches = find_similar_patches(
+    let (sum_img, sq_sum_img) = crate::block_matching::compute_integral_images(input_arr);
+    let matches = crate::block_matching::find_similar_patches(
         input_arr,
+        &sum_img,
+        &sq_sum_img,
         (ref_r, ref_c),
         (patch_size, patch_size),
         (search_win, search_win),

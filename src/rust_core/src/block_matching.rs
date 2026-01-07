@@ -1,4 +1,4 @@
-use ndarray::{ArrayView2, s};
+use ndarray::{Array2, ArrayView2, s};
 use std::cmp::Ordering;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -12,9 +12,6 @@ impl Eq for PatchMatch {}
 
 impl PartialOrd for PatchMatch {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        // We want min-heap behavior for keeping the smallest distances.
-        // But standard BinaryHeap is a max-heap.
-        // So we reverse the comparison: bigger distance = "smaller" element (to be popped).
         self.distance.partial_cmp(&other.distance)
     }
 }
@@ -26,20 +23,14 @@ impl Ord for PatchMatch {
 }
 
 /// Compute squared L2 distance between two patches with early termination.
-/// Assumes patches have the same shape.
-/// optimized to check threshold only after each row to allow inner loop vectorization.
 #[inline]
 fn compute_squared_distance(p1: ArrayView2<f32>, p2: ArrayView2<f32>, threshold: f32) -> f32 {
     let mut sum_sq = 0.0;
-    // Iterate rows
     for (r1, r2) in p1.outer_iter().zip(p2.outer_iter()) {
-        // Compute row squared difference
         for (a, b) in r1.iter().zip(r2.iter()) {
             let diff = *a - *b;
             sum_sq += diff * diff;
         }
-        
-        // Check threshold after entire row
         if sum_sq >= threshold {
             return sum_sq;
         }
@@ -47,16 +38,50 @@ fn compute_squared_distance(p1: ArrayView2<f32>, p2: ArrayView2<f32>, threshold:
     sum_sq
 }
 
-/// Find similar patches within a search window.
-///
-/// # Arguments
-/// * `image` - The full image (2D array).
-/// * `ref_pos` - (row, col) of the top-left corner of the reference patch.
-/// * `patch_size` - Size of the patch (height, width).
-/// * `search_window` - (height, width) of the search area centered on ref_pos.
-/// * `max_matches` - Maximum number of similar patches to keep (N_hard).
+/// Compute Integral Images (Sum and Squared Sum).
+/// Returns (Sum, SqSum). Indexing: [row+1, col+1].
+pub fn compute_integral_images(image: ArrayView2<f32>) -> (Array2<f32>, Array2<f32>) {
+    let (h, w) = image.dim();
+    let mut sum_img = Array2::<f32>::zeros((h + 1, w + 1));
+    let mut sq_sum_img = Array2::<f32>::zeros((h + 1, w + 1));
+    
+    for r in 0..h {
+        let mut row_sum = 0.0;
+        let mut row_sq_sum = 0.0;
+        for c in 0..w {
+            let val = image[[r, c]];
+            row_sum += val;
+            row_sq_sum += val * val;
+            
+            sum_img[[r + 1, c + 1]] = sum_img[[r, c + 1]] + row_sum;
+            sq_sum_img[[r + 1, c + 1]] = sq_sum_img[[r, c + 1]] + row_sq_sum;
+        }
+    }
+    (sum_img, sq_sum_img)
+}
+
+#[inline(always)]
+fn get_patch_sums(
+    sum_img: &Array2<f32>,
+    sq_sum_img: &Array2<f32>,
+    r: usize, c: usize, h: usize, w: usize
+) -> (f32, f32) {
+    let r1 = r;
+    let c1 = c;
+    let r2 = r + h;
+    let c2 = c + w;
+    
+    let sum = sum_img[[r2, c2]] - sum_img[[r1, c2]] - sum_img[[r2, c1]] + sum_img[[r1, c1]];
+    let sq_sum = sq_sum_img[[r2, c2]] - sq_sum_img[[r1, c2]] - sq_sum_img[[r2, c1]] + sq_sum_img[[r1, c1]];
+    
+    (sum, sq_sum)
+}
+
+/// Find similar patches within a search window using Integral Image Pre-Screening.
 pub fn find_similar_patches(
     image: ArrayView2<f32>,
+    integral_sum: &Array2<f32>,
+    integral_sq_sum: &Array2<f32>,
     ref_pos: (usize, usize),
     patch_size: (usize, usize),
     search_window: (usize, usize),
@@ -67,10 +92,8 @@ pub fn find_similar_patches(
     let (ph, pw) = patch_size;
     let (h, w) = image.dim();
 
-    // Extract reference patch
     let ref_patch = image.slice(s![ref_r..ref_r + ph, ref_c..ref_c + pw]);
-
-    // Define search bounds
+    
     let search_r_start = ref_r.saturating_sub(search_window.0 / 2);
     let search_r_end = (ref_r + search_window.0 / 2).min(h - ph);
     let search_c_start = ref_c.saturating_sub(search_window.1 / 2);
@@ -78,37 +101,49 @@ pub fn find_similar_patches(
 
     let mut heap = std::collections::BinaryHeap::with_capacity(max_matches + 1);
 
-    // Initial match (self)
-    heap.push(PatchMatch {
-        row: ref_r,
-        col: ref_c,
-        distance: 0.0, 
-    });
+    heap.push(PatchMatch { row: ref_r, col: ref_c, distance: 0.0 });
 
-    // Current worst distance in the top-K. 
-    // If heap is not full, acceptance threshold is effectively infinite.
     let mut threshold = if max_matches > 1 { f32::MAX } else { 0.0 };
+    
+    // Pre-calculate Reference stats
+    let (ref_sum, ref_sq_sum) = get_patch_sums(integral_sum, integral_sq_sum, ref_r, ref_c, ph, pw);
+    let ref_norm = ref_sq_sum.max(0.0).sqrt(); 
+    let inv_n = 1.0 / ((ph * pw) as f32);
 
     for r in (search_r_start..=search_r_end).step_by(step) {
         for c in (search_c_start..=search_c_end).step_by(step) {
-             if r == ref_r && c == ref_c {
-                continue;
-            }
+             if r == ref_r && c == ref_c { continue; }
 
-            let candidate_patch = image.slice(s![r..r + ph, c..c + pw]);
+            // 1. Pre-Screening (Bounds Check)
+            // Bound 1: Mean Difference: (sum1 - sum2)^2 / N
+            // Bound 2: Norm Difference: (norm1 - norm2)^2
+            // If Max(Bound) > threshold, skip.
             
-            // Optimization: Early termination if distance exceeds current worst in heap
+            let (cand_sum, cand_sq_sum) = get_patch_sums(integral_sum, integral_sq_sum, r, c, ph, pw);
+            let check_threshold = threshold;
+            
+            // Mean Bound
+            let diff_sum = cand_sum - ref_sum;
+            let lb_mean = (diff_sum * diff_sum) * inv_n;
+            if lb_mean >= check_threshold { continue; }
+            
+            // Norm Bound
+            let cand_norm = cand_sq_sum.max(0.0).sqrt();
+            let diff_norm = (cand_norm - ref_norm).abs();
+            let lb_norm = diff_norm * diff_norm;
+            if lb_norm >= check_threshold { continue; }
+            
+            // 2. Full Distance Calculation
+            let candidate_patch = image.slice(s![r..r + ph, c..c + pw]);
             let dist = compute_squared_distance(ref_patch, candidate_patch, threshold);
 
             if dist < threshold {
                 if heap.len() < max_matches {
                     heap.push(PatchMatch { row: r, col: c, distance: dist });
                      if heap.len() == max_matches {
-                        // Heap just filled up. Set threshold to the worst element.
                         threshold = heap.peek().unwrap().distance;
                     }
                 } else {
-                    // Heap is full, replace the worst
                     heap.pop();
                     heap.push(PatchMatch { row: r, col: c, distance: dist });
                     threshold = heap.peek().unwrap().distance;
@@ -117,7 +152,6 @@ pub fn find_similar_patches(
         }
     }
     
-    // Convert to sorted vector
     let mut sorted_matches = heap.into_vec();
     sorted_matches.sort_by(|a, b| a.distance.partial_cmp(&b.distance).unwrap());
     
