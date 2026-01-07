@@ -16,32 +16,48 @@ default_block_matching_kwargs = {
 # Legacy filter kwargs preserved just for signature compatibility if needed
 default_filter_kwargs = {}
 
-def estimate_streak_profile(sinogram, sigma_smooth=3.0):
+def estimate_streak_profile(sinogram, sigma_smooth=3.0, iterations=3):
     """
-    Estimate the static vertical streak profile using a data-driven residual median approach.
+    Estimate the static vertical streak profile using an iterative robust approach.
     
-    Assumption: Ring artifacts appear as constant vertical lines in the sinogram.
-    Method:
-    1. Estimate the object structure (Low Frequency) using strong smoothing.
-    2. Compute Residual = Original - Object.
-    3. Compute Column-wise Median of Residuals (Robust estimate of the static vertical offset).
+    Iteration helps to separate object structure from the static streaks more cleanly,
+    especially when object features align vertically.
     """
-    # 1. Estimate Object (Smooth heavily to remove streaks and noise, keep shape)
-    # Allows anisotropic sigma: (sigma_y, sigma_x)
-    z_smooth = gaussian_filter(sinogram, sigma_smooth)
+    z_clean = sinogram.copy()
+    streak_acc = np.zeros(sinogram.shape[1], dtype=np.float32)
     
-    # 2. Residual (Contains Noise + Streaks + Fine Details)
-    residual = sinogram - z_smooth
-    
-    # 3. Streak Profile (Median along vertical axis)
-    # This isolates the constant vertical component, rejecting random noise and moving object features.
-    streak_profile = np.median(residual, axis=0)
-    
-    # 4. Refine Profile (Optional: slight smoothing to prevent 1px jaggedness)
-    # sigma=1.0 is gentle enough to keep sharp streak edges but kill single-pixel outliers
-    streak_profile = gaussian_filter1d(streak_profile, 1.0)
-    
-    return streak_profile
+    for _ in range(iterations):
+        # 1. Smooth along columns to estimate object (Low Frequency in Y)
+        # We use a large sigma for Y to blur out the streaks, small for X to keep edges
+        # But for streaks (constant X), we mainly want to reject them.
+        # Smoothing isotropicly or anisotropicly?
+        # A strong vertical smooth will keep vertical structures (streaks).
+        # We want to REMOVE streaks to get object.
+        # Actually, Gaussian filter is not robust. Median filter is better for rejecting outliers (streaks).
+        # But median is slow.
+        
+        # Standard approach: Smooth heavily to get object "trend"
+        # Since streaks are high-freq in X (edges) and DC in Y.
+        z_smooth = gaussian_filter(z_clean, (sigma_smooth, 3.0)) # Strong smooth vertical, moderate horizontal
+        
+        # 2. Residual
+        residual = z_clean - z_smooth
+        
+        # 3. Estimate Streak update (Robust average along columns)
+        streak_update = np.median(residual, axis=0) # (W,)
+        
+        # 4. Refine update (smooth slightly to remove single-pixel noise, keep streak structures)
+        # Streaks can be sharp, so small sigma.
+        streak_update = gaussian_filter1d(streak_update, 1.0)
+        
+        # Accumulate
+        streak_acc += streak_update
+        
+        # Remove from current estimate for next iteration (cleaning the object)
+        correction = np.tile(streak_update, (sinogram.shape[0], 1))
+        z_clean = z_clean - correction
+        
+    return streak_acc
 
 def bm3d_ring_artifact_removal(
     sinogram: np.ndarray,
@@ -88,32 +104,34 @@ def bm3d_ring_artifact_removal(
     
     # If not provided, estimate from the single image (Data-Driven)
     if sigma_map is None:
-        # Use simple gradient-based or residual-based estimator
-        # We assume streaks are vertical.
-        # High-pass filter along X (rows) to find vertical edges, filter along Y (cols) to find long structures.
+        # Improved Data-Driven Estimation
+        # We need a robust estimate of the LOCAL streak intensity.
+        # Previous method: global residual median.
+        # Better: Local standard deviation of the "streak component".
         
-        # Re-use our robust estimator logic:
-        # Residual = Sinogram - Smooth(Sinogram)
-        # StreakProfile = Median(Residual)
-        # SigmaMap = Abs(StreakProfile) broadcasted.
+        # 1. Extract Streak Component roughly
+        streak_profile_rough = estimate_streak_profile(z_norm, sigma_smooth=5.0, iterations=1)
         
-        # We reuse the logic from `mode="streak"` loop below, or pre-calc it?
-        # Let's pre-calc it effectively.
-        sigma_smooth_est = 3.0
-        z_smooth_est = gaussian_filter(z_norm, (sigma_smooth_est, sigma_smooth_est))
-        residual_est = z_norm - z_smooth_est
-        profile_est = np.median(residual_est, axis=0) # (W,)
+        # 2. High-pass filter this profile? 
+        # Actually, the streak profile itself contains the "magnitude" info.
+        # But we want the "Noise Standard Deviation" map.
+        # Where the streak is strong, the "correlated noise" variance is high.
+        # We map |Streak| -> Sigma.
         
-        # Refine profile (remove DC offset of object)
-        profile_smooth = gaussian_filter1d(profile_est, 50.0)
-        streak_signal = profile_est - profile_smooth
+        # Remove low-freq trends from profile to get just the "spikes" (streaks)
+        profile_smooth = gaussian_filter1d(streak_profile_rough, 20.0)
+        streak_signal = streak_profile_rough - profile_smooth
         
-        # Map is the Magnitude of the Streak Signal (Assuming Noise ~ Signal strength for these artifacts)
-        # We broadcast to (H, W)
+        # Map is the Magnitude of the Streak Signal
+        # We assume the "streak noise" variance is proportional to the streak intensity squared?
+        # Or just linear? Linear is a good approximation for amplitude.
         sigma_streak_1d = np.abs(streak_signal).astype(np.float32)
-        # Amplify? User complained of "insufficient cleaning".
-        # Let's scale it slightly to be aggressive on streaks.
-        sigma_map = np.tile(sigma_streak_1d, (z_norm.shape[0], 1))
+        
+        # Amplify?
+        # User feedback suggests "slightly worse", maybe under-estimating.
+        # Let's boost the estimate slightly for robust removal.
+        scale_factor = filter_kwargs.get("streak_sigma_scale", 1.5)
+        sigma_map = np.tile(sigma_streak_1d * scale_factor, (z_norm.shape[0], 1))
         
     sigma_map = np.ascontiguousarray(sigma_map, dtype=np.float32)
     
@@ -126,25 +144,37 @@ def bm3d_ring_artifact_removal(
     if mode == "streak":
         # Additional Mean Subtraction (Shift).
         # We keep this as it works well for the DC component.
-        sigma_smooth = filter_kwargs.get("sigma_smooth", 3.0)
-        iterations = filter_kwargs.get("streak_iterations", 1)
+        sigma_smooth = filter_kwargs.get("sigma_smooth", 5.0)
+        iterations = filter_kwargs.get("streak_iterations", 2)
         
-        for i in range(iterations):
-            streak_profile = estimate_streak_profile(z_norm, sigma_smooth=sigma_smooth)
-            correction = np.tile(streak_profile, (z_norm.shape[0], 1))
-            z_norm = z_norm - correction
+        # Iterative pre-subtraction
+        # This removes the "mean" of the streak, leaving residual noise/wobbble
+        # tailored for BM3D to clean up.
+        current_streak_profile = estimate_streak_profile(z_norm, sigma_smooth=sigma_smooth, iterations=iterations)
+        correction = np.tile(current_streak_profile, (z_norm.shape[0], 1))
+        z_norm = z_norm - correction
         
         # Construct PSD for Vertical Streaks
         # Vertical streaks (constant in Y) corresponds to energy in the first row of the 2D transform (freq Y = 0)
-        # We assume 2D FFT (DFT).
         if patch_size_dim > 0:
             sigma_psd = np.zeros((patch_size_dim, patch_size_dim), dtype=np.float32)
-            # Assign weight to Row 0 (DC along Y, all freqs along X)
-            # We assume uniform distribution along X logic for the streak profile "noise"
-            # The magnitude is controlled by sigma_map.
-            sigma_psd[0, :] = 1.0
-            # Optional: Add small weight to row 1 for smoothness/leakage
-            # sigma_psd[1, :] = 0.5 
+            
+            # Gaussian Profile along Y axis (Vertical Freq)
+            # Centered at 0 (DC). Width determines how "wobbly" streaks can be.
+            # Narrow width = perfectly vertical. Wider = varying.
+            # We want to suppress low V-freqs.
+            
+            # Simple 1D Gaussian decay
+            y_coords = np.arange(patch_size_dim)
+            # Use small sigma for freq domain (concentration)
+            psd_profile = np.exp(-0.5 * (y_coords / 0.8)**2) 
+            
+            # Replicate along X (all horizontal freqs affected equally for a vertical line)
+            for x in range(patch_size_dim):
+                sigma_psd[:, x] = psd_profile
+                
+            # Normalize peak to 1.0 (relative to sigma_map)
+            sigma_psd = sigma_psd.astype(np.float32) 
 
     
     # --- BM3D Execution (Adaptive) ---
