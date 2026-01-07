@@ -91,14 +91,16 @@ def bm3d_ring_artifact_removal(
         
         # Default smooth is 3.0. Use larger (e.g. 15.0) to capture wider streaks in Low SNR.
         sigma_smooth = filter_kwargs.get("sigma_smooth", 3.0)
+        iterations = filter_kwargs.get("streak_iterations", 1)
         
-        # 1. Estimate the additive streak profile
-        streak_profile = estimate_streak_profile(z_norm, sigma_smooth=sigma_smooth)
-        
-        # 2. Subtract streaks
-        # Broadcast 1D profile to 2D
-        correction = np.tile(streak_profile, (z_norm.shape[0], 1))
-        z_norm = z_norm - correction
+        for i in range(iterations):
+            # 1. Estimate the additive streak profile
+            streak_profile = estimate_streak_profile(z_norm, sigma_smooth=sigma_smooth)
+            
+            # 2. Subtract streaks
+            # Broadcast 1D profile to 2D
+            correction = np.tile(streak_profile, (z_norm.shape[0], 1))
+            z_norm = z_norm - correction
         
         # 3. Post-Correction Clipping?
         # Subtraction might push values < 0 slightly. 
