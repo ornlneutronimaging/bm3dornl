@@ -36,7 +36,7 @@ def verify_real_data():
             noisy_sino, 
             mode="streak",
             sigma=0.005,
-            filter_kwargs={"scales": 3, "streak_strength": 1.5} # Tune strength if needed
+            filter_kwargs={"scales": 3, "streak_strength": 0.6, "use_hybrid": True, "use_spatial_mask": True} # Tuned Blending S=0.6
         ) 
         end_t = time.time()
         

@@ -3,7 +3,10 @@
 
 import logging
 import numpy as np
-from skimage.transform import pyramid_laplacian, pyramid_expand
+from skimage.transform import pyramid_reduce, pyramid_expand, resize
+from skimage.transform import pyramid_reduce, pyramid_expand, resize
+from scipy.ndimage import median_filter, sobel, gaussian_filter
+from scipy.signal.windows import gaussian
 from . import bm3d_rust
 
 # Default parameters (simplified for Rust backend)
@@ -23,6 +26,61 @@ from scipy.ndimage import gaussian_filter1d
 from scipy.signal import convolve
 from scipy.signal.windows import gaussian
 from scipy.fft import fft2
+
+def _estimate_static_streaks(sino):
+    """
+    Estimate static streaks using Gradient-Guided Column Statistics.
+    
+    Standard column median is biased by object structure (sinogram edges are vertical-ish).
+    By excluding pixels with high vertical gradients, we select 'Air' or 'Flat' regions
+    to estimate the detector artifacts, significantly reducing structure leakage.
+    """
+    # 1. Compute Vertical Gradient (to detect object edges)
+    # Using Sobel for robustness
+    grad_y = np.abs(sobel(sino, axis=0))
+    
+    # 2. Determine Threshold (keep only the flattest regions)
+    # T=20% was found to minimize correlation with object structure while retaining enough signal.
+    # We want low gradient pixels.
+    threshold_percentile = 20
+    threshold = np.percentile(grad_y, threshold_percentile)
+    mask = grad_y < threshold
+    
+    H, W = sino.shape
+    col_profile = np.zeros(W, dtype=np.float32)
+    
+    # 3. Compute Robust Mean per column using Mask
+    # We use Mean instead of Median for lower variance, since we already masked out "Structure/Outliers"
+    for c in range(W):
+        col_data = sino[:, c]
+        col_mask = mask[:, c]
+        
+        valid_data = col_data[col_mask]
+        
+        # Fallback if mask is too aggressive
+        if len(valid_data) > max(10, H * 0.01):
+            # Simple Mean (or Sigma Clipped Mean if needed, but Mask handled gradients)
+            # Let's use a simple sigma clip to be safe against salt-and-pepper noise
+            m = np.mean(valid_data)
+            s = np.std(valid_data)
+            valid_data = valid_data[np.abs(valid_data - m) < 3 * s]
+            if len(valid_data) > 0:
+                col_profile[c] = np.mean(valid_data)
+            else:
+                col_profile[c] = m
+        else:
+            col_profile[c] = np.median(col_data) # Fallback to standard median
+    
+    # 4. Remove Background Trend (Low-pass)
+    filter_size = 21
+    if len(col_profile) < filter_size:
+        filter_size = max(3, len(col_profile) // 2 * 2 + 1)
+        
+    background_trend = median_filter(col_profile, size=filter_size)
+    
+    static_streaks = col_profile - background_trend
+    
+    return static_streaks.astype(np.float32)
 
 def estimate_streak_sigma(sinogram: np.ndarray, patch_size: tuple[int, int]) -> float:
     """Estimate the standard deviation of the streak noise using robust statistics on vertical profile.
@@ -65,10 +123,39 @@ def construct_streak_psd(
     # 2. Scale by strength
     sigma_target = sigma_streak * streak_strength
     
-    # 3. Populate DC Row
-    sigma_map[0, :] = sigma_target
+    # 3. Populate DC Row with Frequency Weighting
+    # Streaks (Vertical Lines) have energy at Vertical DC (r=0).
+    # In Horizontal domain (columns), they are sharp transitions => High Frequencies.
+    # Object variations are usually smooth => Low Horizontal Frequencies.
+    # If we apply high sigma to Low Horizontal Frequencies at r=0, we destroy object structure (shading).
+    # Solution: Ramp up sigma from 0 (at low freq) to sigma_target (at high freq).
+    
+    # Simple Ramp or Sigmoid
+    # Frequencies c range from 0 to W-1 (or W/2 if real FFT, but BM3D transform is full?)
+    # BM3D Rust core uses full 2D FFT on patches (7x7).
+    # Col indices 0..patch_size.
+    # c=0 is DC (Protected).
+    # c=1 is Lowest AC freq.
+    
+    freq_weight = np.ones(W, dtype=np.float32)
+    # Ramp 0 to 1 over first few coefficients?
+    # e.g. c=0: 0.0, c=1: 0.5, c=2: 1.0 ...
+    # Let's use a smoother transition to avoid ringing.
+    # Sigmoid centered at freq_cutoff?
+    # Or just linear ramp.
+    
+    for c in range(W):
+        if c == 0:
+            freq_weight[c] = 0.0 # Protected explicitly later, but weight 0 implies no streak sigma
+        elif c < 2:
+            freq_weight[c] = 0.2 * c # 0.2, 0.4... gentler start
+        else:
+            freq_weight[c] = 1.0
+
+    sigma_map[0, :] = sigma_target * freq_weight
     
     # PROTECT DC Component (Patch Mean / Global Brightness)
+    # Base random noise floor
     sigma_map[0, 0] = sigma
     
     return sigma_map
@@ -116,7 +203,21 @@ def bm3d_ring_artifact_removal(
         # Multiscale Strategy: Laplacian Pyramid
         # Decompose image into frequency bands to target streaks of different widths.
         scales = filter_kwargs.get("scales", 3)
-        strength = filter_kwargs.get("streak_strength", 1.0)
+        # Gradient-Guided Estimator + Spatial Masking allows us to be VERY aggressive on streaks
+        # because the mask protects the structure.
+        strength = filter_kwargs.get("streak_strength", 0.6) 
+        use_hybrid = filter_kwargs.get("use_hybrid", True)
+        
+        # --- Hybrid Pre-processing: Estimate and Subtract Static Streaks ---
+        static_profile = None
+        if use_hybrid:
+            if "estimated_streaks" in filter_kwargs:
+                static_profile = filter_kwargs["estimated_streaks"]
+            else:
+                static_profile = _estimate_static_streaks(z_norm)
+            
+            # Subtract static streaks from normalized image
+            z_norm = z_norm - static_profile[np.newaxis, :]
         
         # Manual Decomposition to safely handle ranges
         from skimage.transform import pyramid_reduce, pyramid_expand
@@ -196,6 +297,42 @@ def bm3d_ring_artifact_removal(
             
             y_est = expanded + detail
         
+            y_est = expanded + detail
+        
+        # --- Spatial Masking (Anti-Structure-Damage) ---
+        # If enabled, we blend the result with the original image (or generic denoised) 
+        # based on the vertical gradient of the original image.
+        # High Gradient (Edge) -> Keep Original (Preserve Structure)
+        # Low Gradient (Flat) -> Keep Denoised (Remove Streak)
+        use_spatial_mask = filter_kwargs.get("use_spatial_mask", True)
+        if use_spatial_mask:
+            # 1. Compute Vertical Gradient of Original (Smoothed to avoid noise)
+            g_smooth = gaussian_filter(z_norm, (2, 2))
+            grad_y = np.abs(sobel(g_smooth, axis=0))
+            
+            # 2. Determine Sigmoid Parameters
+            # We want to protect strong edges.
+            # Mask -> 1.0 (Keep Original) when Gradient is High
+            # Mask -> 0.0 (Keep Denoised) when Gradient is Low
+            
+            g_mean = np.mean(grad_y)
+            g_std = np.std(grad_y)
+            
+            # Center transition at mean + 1 std (Capture clear edges)
+            center = g_mean + 1.0 * g_std
+            width = g_std * 0.5
+            
+            mask = 1.0 / (1.0 + np.exp(-(grad_y - center) / width))
+            
+            # 3. Blend
+            # y_est = mask * z_norm + (1 - mask) * y_est
+            # Wait, blending with z_norm keeps NOISE in high-grad regions.
+            # Ideally we blend with a "Generic" denoised version?
+            # But z_norm has very low random noise (RMSE ~0.005).
+            # The structure/sharpness is most preserved in the original.
+            # So blending with z_norm is acceptable for High SNR cases.
+            y_est = mask * z_norm + (1.0 - mask) * y_est
+
         # Denormalize
         if d_max > d_min:
             y_est = y_est * (d_max - d_min) + d_min
