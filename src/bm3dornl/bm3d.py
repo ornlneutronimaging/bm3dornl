@@ -4,7 +4,7 @@
 import logging
 import numpy as np
 from scipy.fft import fft2, ifft2, fftshift, ifftshift
-from scipy.ndimage import gaussian_filter, sobel
+from scipy.ndimage import gaussian_filter, sobel, binary_dilation
 from . import bm3d_rust
 
 # Default parameters (simplified for Rust backend)
@@ -120,20 +120,34 @@ def bm3d_ring_artifact_removal(
             z_clean = fft_streak_removal(z_norm, sigma_notch_clean, sigma_protect_clean)
             
             # Compute Gradient Mask on the SAFE version
-            g_smooth = gaussian_filter(z_safe, (2, 2))
+            # Goal: Detect Structure (Vertical Edges) vs Flat/Streak regions.
+            # Challenge: Noisy sinograms have high gradients everywhere.
+            # Solution: Strong pre-smoothing to isolate structural edges.
+            
+            # 1. Strong smoothing (sigma=3) to suppress noise but keep large edges
+            g_smooth = gaussian_filter(z_safe, (3, 3)) 
             grad_y = np.abs(sobel(g_smooth, axis=0))
             
-            # Thresholding for mask
+            # 2. Robust Thresholding
             g_mean = np.mean(grad_y)
             g_std = np.std(grad_y)
             
-            center = g_mean + 1.0 * g_std
-            width = g_std * 0.5
+            # Edges are outliers in the gradient map.
+            # Threshold: Mean + 0.5 * Std (Lower threshold -> More protection)
+            threshold = g_mean + 0.5 * g_std
             
-            # Sigmoid Mask (1.0 = Edge/Safe, 0.0 = Flat/Clean)
-            mask = 1.0 / (1.0 + np.exp(-(grad_y - center) / width))
+            # 3. Binary Mask + Morphological Dilation
+            # We identify "Core Edges" then expand the protection zone.
+            binary_mask = grad_y > threshold
             
-            # Blend
+            # Dilate to cover the "slope" of the edge, not just the peak gradient.
+            # Interactions 10 ~= 10 pixels expansion.
+            mask_dilated = binary_dilation(binary_mask, iterations=10)
+            
+            # Smooth the binary mask for soft blending
+            mask = gaussian_filter(mask_dilated.astype(np.float32), (2, 2))
+            
+            # Blend: Mask=1 (Edge) -> Safe, Mask=0 (Flat) -> Clean
             z_norm = mask * z_safe + (1.0 - mask) * z_clean
             
         else:

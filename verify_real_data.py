@@ -39,7 +39,7 @@ def verify_real_data():
             filter_kwargs={
                 "use_fft": True, 
                 "use_dual_fft": True
-            } # Dual-FFT Blending + Optimized BM3D Sigma
+            } # Dual-FFT Blending (Refined Mask)
         ) 
         end_t = time.time()
         
