@@ -36,7 +36,7 @@ def verify_real_data():
             noisy_sino, 
             mode="streak",
             sigma=0.005,
-            filter_kwargs={"use_fft": True, "fft_notch_sigma": 1.0, "fft_protect_width": 20.0} # FFT Mode
+            filter_kwargs={"use_fft": True, "fft_notch_sigma": 3.0, "fft_protect_width": 25.0} # Optimized: Stronger Streak (3.0) + Safer Object (25.0)
         ) 
         end_t = time.time()
         
