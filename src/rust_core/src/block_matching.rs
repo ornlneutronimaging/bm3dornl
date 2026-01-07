@@ -25,15 +25,24 @@ impl Ord for PatchMatch {
     }
 }
 
-/// Compute squared L2 distance between two patches.
+/// Compute squared L2 distance between two patches with early termination.
 /// Assumes patches have the same shape.
+/// optimized to check threshold only after each row to allow inner loop vectorization.
 #[inline]
-fn compute_squared_distance(p1: ArrayView2<f32>, p2: ArrayView2<f32>) -> f32 {
+fn compute_squared_distance(p1: ArrayView2<f32>, p2: ArrayView2<f32>, threshold: f32) -> f32 {
     let mut sum_sq = 0.0;
-    // Iterating with zip is usually efficient in ndarray
-    for (a, b) in p1.iter().zip(p2.iter()) {
-        let diff = *a - *b;
-        sum_sq += diff * diff;
+    // Iterate rows
+    for (r1, r2) in p1.outer_iter().zip(p2.outer_iter()) {
+        // Compute row squared difference
+        for (a, b) in r1.iter().zip(r2.iter()) {
+            let diff = *a - *b;
+            sum_sq += diff * diff;
+        }
+        
+        // Check threshold after entire row
+        if sum_sq >= threshold {
+            return sum_sq;
+        }
     }
     sum_sq
 }
@@ -73,8 +82,12 @@ pub fn find_similar_patches(
     heap.push(PatchMatch {
         row: ref_r,
         col: ref_c,
-        distance: 0.0, // Distance to self is 0
+        distance: 0.0, 
     });
+
+    // Current worst distance in the top-K. 
+    // If heap is not full, acceptance threshold is effectively infinite.
+    let mut threshold = if max_matches > 1 { f32::MAX } else { 0.0 };
 
     for r in (search_r_start..=search_r_end).step_by(step) {
         for c in (search_c_start..=search_c_end).step_by(step) {
@@ -83,28 +96,29 @@ pub fn find_similar_patches(
             }
 
             let candidate_patch = image.slice(s![r..r + ph, c..c + pw]);
-            let dist = compute_squared_distance(ref_patch, candidate_patch);
+            
+            // Optimization: Early termination if distance exceeds current worst in heap
+            let dist = compute_squared_distance(ref_patch, candidate_patch, threshold);
 
-            // Optimization: Maintain heap of size max_matches
-            if heap.len() < max_matches {
-                heap.push(PatchMatch { row: r, col: c, distance: dist });
-            } else {
-                // Peek at the worst match (largest distance)
-                // If new distance is smaller, replace it.
-                // BinaryHeap::peek returns reference to max element.
-                if let Some(max_match) = heap.peek() {
-                    if dist < max_match.distance {
-                        heap.pop();
-                        heap.push(PatchMatch { row: r, col: c, distance: dist });
+            if dist < threshold {
+                if heap.len() < max_matches {
+                    heap.push(PatchMatch { row: r, col: c, distance: dist });
+                     if heap.len() == max_matches {
+                        // Heap just filled up. Set threshold to the worst element.
+                        threshold = heap.peek().unwrap().distance;
                     }
+                } else {
+                    // Heap is full, replace the worst
+                    heap.pop();
+                    heap.push(PatchMatch { row: r, col: c, distance: dist });
+                    threshold = heap.peek().unwrap().distance;
                 }
             }
         }
     }
     
-    // Convert to sorted vector (BinaryHeap pops in descending order, we want ascending)
+    // Convert to sorted vector
     let mut sorted_matches = heap.into_vec();
-    // Sort by distance ascending
     sorted_matches.sort_by(|a, b| a.distance.partial_cmp(&b.distance).unwrap());
     
     sorted_matches
