@@ -133,6 +133,19 @@ def bm3d_ring_artifact_removal(
             streak_profile = estimate_streak_profile(z_norm, sigma_smooth=sigma_smooth)
             correction = np.tile(streak_profile, (z_norm.shape[0], 1))
             z_norm = z_norm - correction
+        
+        # Construct PSD for Vertical Streaks
+        # Vertical streaks (constant in Y) corresponds to energy in the first row of the 2D transform (freq Y = 0)
+        # We assume 2D FFT (DFT).
+        if patch_size_dim > 0:
+            sigma_psd = np.zeros((patch_size_dim, patch_size_dim), dtype=np.float32)
+            # Assign weight to Row 0 (DC along Y, all freqs along X)
+            # We assume uniform distribution along X logic for the streak profile "noise"
+            # The magnitude is controlled by sigma_map.
+            sigma_psd[0, :] = 1.0
+            # Optional: Add small weight to row 1 for smoothness/leakage
+            # sigma_psd[1, :] = 0.5 
+
     
     # --- BM3D Execution (Adaptive) ---
     
