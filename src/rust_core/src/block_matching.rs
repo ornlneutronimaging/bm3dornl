@@ -39,6 +39,12 @@ fn compute_squared_distance(p1: ArrayView2<f32>, p2: ArrayView2<f32>, threshold:
 }
 
 /// Compute Integral Images (Sum and Squared Sum).
+/// Integral Image I(x, y) = sum(i(x', y')) for x'<=x, y'<=y.
+/// This allows O(1) computation of sum of pixels in any rectangular region.
+/// We use this for fast pre-screening in Block Matching:
+/// 1. Compute Mean Difference Bound: (sum1 - sum2)^2 / N
+/// 2. Compute Norm Difference Bound: (norm1 - norm2)^2
+/// If either bound exceeds threshold, we skip strict distance calculation.
 /// Returns (Sum, SqSum). Indexing: [row+1, col+1].
 pub fn compute_integral_images(image: ArrayView2<f32>) -> (Array2<f32>, Array2<f32>) {
     let (h, w) = image.dim();

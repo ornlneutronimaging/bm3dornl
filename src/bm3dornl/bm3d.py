@@ -61,27 +61,47 @@ def estimate_streak_profile(sinogram, sigma_smooth=3.0, iterations=3):
 
 def bm3d_ring_artifact_removal(
     sinogram: np.ndarray,
-    mode: str = "generic",  # "generic" or "streak"
+    mode: str = "generic",
     sigma: float = 0.1,    
     block_matching_kwargs: dict = default_block_matching_kwargs,
     filter_kwargs: dict = default_filter_kwargs,
 ) -> np.ndarray:
     """Remove ring artifacts (streaks) from a sinogram or a stack of sinograms.
+
+    This function leverages a customized BM3D implementation optimized for streak removal.
+    It supports both 2D (single sinogram) and 3D (stack of sinograms) inputs.
     
     Parameters
     ----------
     sinogram : np.ndarray
         The input data. Can be 2D (H, W) or 3D (N, H, W).
-    mode : str
-        "generic": Standard BM3D (assume white noise).
-        "streak": Additive Streak Removal (Residual Median) + Standard BM3D.
-    sigma : float
-        Noise standard deviation.
+    mode : str, optional
+        Operation mode:
+        - "generic": Standard BM3D (assume white noise).
+        - "streak": Additive Streak Removal (Residual Median) + Standard BM3D.
+        By default "generic".
+    sigma : float, optional
+        Noise standard deviation, by default 0.1.
+    block_matching_kwargs : dict, optional
+        Parameters for block matching:
+        - patch_size (tuple[int, int] | int): Size of patches (e.g. (8,8) or 8).
+        - stride (int): Step size for patch extraction.
+        - cut_off_distance (tuple[int, int]): Max distance for block matching.
+        - num_patches_per_group (int): Number of similar patches to group.
+        - batch_size (int): Chunk size for stack processing (default 32).
+        By default `default_block_matching_kwargs`.
+    filter_kwargs : dict, optional
+        Parameters for filtering:
+        - sigma_map (np.ndarray): Optional pre-computed sigma map.
+        - streak_sigma_scale (float): Scale factor for streak sigma estimation.
+        - sigma_smooth (float): Sigma for smoothing in streak estimation.
+        - streak_iterations (int): Iterations for streak estimation.
+        By default `default_filter_kwargs`.
         
     Returns
     -------
     np.ndarray
-        Denoised data (same shape as input).
+        Denoised data with same shape as input.
     """
     # Unpack parameters
     patch_size = block_matching_kwargs.get("patch_size", (7, 7))
