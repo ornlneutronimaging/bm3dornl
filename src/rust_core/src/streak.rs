@@ -8,6 +8,22 @@ use ndarray::{Array1, Array2, ArrayView1, ArrayView2};
 use numpy::{PyArray1, PyReadonlyArray2};
 use pyo3::prelude::*;
 
+// =============================================================================
+// Constants for Streak Profile Estimation
+// =============================================================================
+
+/// Gaussian kernel truncation factor (matches scipy's default truncate=4.0).
+/// The kernel radius is computed as ceil(GAUSSIAN_TRUNCATE * sigma).
+const GAUSSIAN_TRUNCATE: f32 = 4.0;
+
+/// Horizontal sigma for 2D Gaussian blur in streak estimation.
+/// Controls smoothing along the column direction (sigma_x in scipy terms).
+const STREAK_HORIZONTAL_SIGMA: f32 = 3.0;
+
+/// Sigma for smoothing the streak update profile.
+/// A small value preserves streak sharpness while removing noise.
+const STREAK_UPDATE_SIGMA: f32 = 1.0;
+
 /// Compute 1D Gaussian kernel with given sigma.
 /// Kernel size is ceil(4 * sigma) * 2 + 1 to match scipy's default truncate=4.0
 fn gaussian_kernel_1d(sigma: f32) -> Vec<f32> {
@@ -15,7 +31,7 @@ fn gaussian_kernel_1d(sigma: f32) -> Vec<f32> {
         return vec![1.0];
     }
 
-    let radius = (4.0 * sigma).ceil() as usize;
+    let radius = (GAUSSIAN_TRUNCATE * sigma).ceil() as usize;
     let size = 2 * radius + 1;
     let mut kernel = vec![0.0f32; size];
 
@@ -193,8 +209,8 @@ pub fn estimate_streak_profile_impl(
     let mut streak_acc = Array1::zeros(cols);
 
     for _ in 0..iterations {
-        // 1. Smooth to estimate object: gaussian_filter(z_clean, (sigma_smooth, 3.0))
-        let z_smooth = gaussian_blur_2d(z_clean.view(), sigma_smooth, 3.0);
+        // 1. Smooth to estimate object: gaussian_filter(z_clean, (sigma_smooth, STREAK_HORIZONTAL_SIGMA))
+        let z_smooth = gaussian_blur_2d(z_clean.view(), sigma_smooth, STREAK_HORIZONTAL_SIGMA);
 
         // 2. Compute residual
         let residual = &z_clean - &z_smooth;
@@ -202,8 +218,8 @@ pub fn estimate_streak_profile_impl(
         // 3. Column-wise median for robust streak estimate
         let streak_update = median_axis0(residual.view());
 
-        // 4. Smooth the streak update: gaussian_filter1d(streak_update, 1.0)
-        let streak_update_smooth = gaussian_blur_1d(streak_update.view(), 1.0);
+        // 4. Smooth the streak update: gaussian_filter1d(streak_update, STREAK_UPDATE_SIGMA)
+        let streak_update_smooth = gaussian_blur_1d(streak_update.view(), STREAK_UPDATE_SIGMA);
 
         // 5. Accumulate
         streak_acc = streak_acc + &streak_update_smooth;

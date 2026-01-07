@@ -2,6 +2,14 @@ use rustfft::{Fft, num_complex::Complex};
 use ndarray::{Array2, ArrayView2};
 use std::sync::Arc;
 
+// =============================================================================
+// Constants for Transform Operations
+// =============================================================================
+
+/// Normalization scale factor for 8x8 Walsh-Hadamard Transform inverse.
+/// The WHT is self-inverse (up to a scale), so we divide by 64 = 8*8.
+const WHT_8X8_NORM_SCALE: f32 = 1.0 / 64.0;
+
 /// Compute 2D FFT of a square patch using pre-computed plans.
 /// Returns unnormalized FFT.
 pub fn fft2d(
@@ -196,12 +204,11 @@ pub fn wht2d_8x8_inverse(input: &Array2<Complex<f32>>) -> Array2<f32> {
             data[r*8 + c] = col_buf[r];
         }
     }
-    let scale = 1.0 / 64.0;
     let mut output = Array2::<f32>::zeros((8, 8));
     idx = 0;
     for r in 0..8 {
         for c in 0..8 {
-            output[[r, c]] = data[idx] * scale;
+            output[[r, c]] = data[idx] * WHT_8X8_NORM_SCALE;
             idx += 1;
         }
     }

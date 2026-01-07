@@ -5,6 +5,43 @@ use ndarray::{Array2, Array3, ArrayView2, ArrayView3, s, Axis};
 use std::sync::Arc;
 use rustfft::Fft;
 
+// =============================================================================
+// Constants for BM3D Pipeline
+// =============================================================================
+
+/// Small epsilon for numerical stability in Wiener filter division.
+/// Prevents division by zero when computing Wiener weights.
+const WIENER_EPSILON: f32 = 1e-8;
+
+/// Maximum allowed weight value in Wiener filtering.
+/// Clamps weights to prevent numerical instability from very small denominators.
+const MAX_WIENER_WEIGHT: f32 = 1e6;
+
+/// Small epsilon for aggregation denominator check.
+/// If the accumulated weight is below this threshold, we fall back to the noisy input.
+const AGGREGATION_EPSILON: f32 = 1e-6;
+
+/// Minimum chunk length for Rayon parallel iteration.
+/// Tuned for good load balancing on typical workloads.
+const RAYON_MIN_CHUNK_LEN: usize = 2048;
+
+/// Patch size that triggers the fast Hadamard transform path.
+/// Walsh-Hadamard Transform is only implemented for 8x8 patches.
+const HADAMARD_PATCH_SIZE: usize = 8;
+
+/// BM3D filtering mode.
+///
+/// Determines whether to use hard thresholding (first pass) or Wiener filtering (second pass).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Bm3dMode {
+    /// Hard thresholding: zeroes coefficients below threshold.
+    /// Used as the first pass to get an initial estimate.
+    HardThreshold,
+    /// Wiener filtering: applies optimal linear filter using pilot estimate.
+    /// Used as the second pass for refinement.
+    Wiener,
+}
+
 /// Helper struct to manage pre-computed FFT plans.
 /// Reusing plans avoids expensive re-initialization overhead (~45% speedup).
 /// We pre-compute:
@@ -49,7 +86,7 @@ impl Bm3dPlans {
 fn run_bm3d_kernel(
     input_noisy: ArrayView2<f32>,
     input_pilot: ArrayView2<f32>,
-    mode: usize,
+    mode: Bm3dMode,
     sigma_psd: ArrayView2<f32>,
     sigma_map: ArrayView2<f32>,
     sigma_random: f32,
@@ -66,7 +103,7 @@ fn run_bm3d_kernel(
     let scalar_sigma_sq = sigma_random * sigma_random;
     
     // Fast path for 8x8 patches using Hadamard
-    let use_hadamard = patch_size == 8;
+    let use_hadamard = patch_size == HADAMARD_PATCH_SIZE;
     
     // Pre-compute Integral Images for Block Matching acceleration
     let (integral_sum, integral_sq_sum) = crate::block_matching::compute_integral_images(input_pilot);
@@ -89,7 +126,7 @@ fn run_bm3d_kernel(
     let ifft_1d_plans_ref = &plans.ifft_1d_plans;
 
     let (final_num, final_den) = ref_coords.par_iter()
-        .with_min_len(2048)
+        .with_min_len(RAYON_MIN_CHUNK_LEN)
         .fold(
             || (Array2::<f32>::zeros((rows, cols)), Array2::<f32>::zeros((rows, cols))),
             |mut acc, &(ref_r, ref_c)| {
@@ -137,7 +174,7 @@ fn run_bm3d_kernel(
                          g_noisy_c.slice_mut(s![i, .., ..]).assign(&fft_n);
                      }
                      
-                     if mode == 1 {
+                     if mode == Bm3dMode::Wiener {
                          let slice_p = group_pilot.slice(s![i, .., ..]);
                          if use_hadamard {
                              let fft_p = crate::transforms::wht2d_8x8_forward(slice_p);
@@ -156,7 +193,7 @@ fn run_bm3d_kernel(
                         let mut vec_n: Vec<rustfft::num_complex::Complex<f32>> = (0..k).map(|i| g_noisy_c[[i, r, c]]).collect();
                         fft_k_plan.process(&mut vec_n);
                         for i in 0..k { g_noisy_c[[i, r, c]] = vec_n[i]; }
-                        if mode == 1 {
+                        if mode == Bm3dMode::Wiener {
                             let mut vec_p: Vec<rustfft::num_complex::Complex<f32>> = (0..k).map(|i| g_pilot_c[[i, r, c]]).collect();
                             fft_k_plan.process(&mut vec_p);
                             for i in 0..k { g_pilot_c[[i, r, c]] = vec_p[i]; }
@@ -169,8 +206,9 @@ fn run_bm3d_kernel(
                 let spatial_scale = patch_size as f32;
                 let spatial_scale_sq = spatial_scale * spatial_scale;
                 
-                if mode == 0 {
-                     // HT
+                match mode {
+                    Bm3dMode::HardThreshold => {
+                     // Hard Thresholding
                      let mut nz_count = 0;
                      for i in 0..k {
                          for r in 0..patch_size {
@@ -191,9 +229,10 @@ fn run_bm3d_kernel(
                              }
                          }
                      }
-                     if nz_count > 0 { weight_g = 1.0 / (nz_count as f32 + 1.0); } 
-                } else {
-                     // Wiener
+                     if nz_count > 0 { weight_g = 1.0 / (nz_count as f32 + 1.0); }
+                    }
+                    Bm3dMode::Wiener => {
+                     // Wiener Filtering
                      let mut wiener_sum = 0.0;
                      for i in 0..k {
                          for r in 0..patch_size {
@@ -207,14 +246,15 @@ fn run_bm3d_kernel(
                                        let var_s = (k*k) as f32 * effective_sigma_s * effective_sigma_s;
                                        (var_r + var_s) * spatial_scale_sq
                                  };
-                                 let w = p_val.norm_sqr() / (p_val.norm_sqr() + noise_var_coeff + 1e-8);
+                                 let w = p_val.norm_sqr() / (p_val.norm_sqr() + noise_var_coeff + WIENER_EPSILON);
                                  g_noisy_c[[i, r, c]] = n_val * w;
                                  wiener_sum += w*w; 
                              }
                          }
                      }
-                     weight_g = 1.0 / (wiener_sum * scalar_sigma_sq + 1e-8); 
-                     if weight_g > 1e6 { weight_g = 1e6; }
+                     weight_g = 1.0 / (wiener_sum * scalar_sigma_sq + WIENER_EPSILON);
+                     if weight_g > MAX_WIENER_WEIGHT { weight_g = MAX_WIENER_WEIGHT; }
+                    }
                 }
 
                 // Inverse Transforms
@@ -262,7 +302,7 @@ fn run_bm3d_kernel(
         for c in 0..cols {
             let num = final_num[[r, c]];
             let den = final_den[[r, c]];
-            if den > 1e-6 {
+            if den > AGGREGATION_EPSILON {
                 output[[r, c]] = num / den;
             } else {
                 output[[r, c]] = input_noisy[[r, c]]; 
@@ -276,10 +316,10 @@ fn run_bm3d_kernel(
 fn run_bm3d_step(
     input_noisy: ArrayView2<f32>,
     input_pilot: ArrayView2<f32>,
-    mode: usize, 
-    sigma_psd: ArrayView2<f32>, 
-    sigma_map: ArrayView2<f32>, 
-    sigma_random: f32,          
+    mode: Bm3dMode,
+    sigma_psd: ArrayView2<f32>,
+    sigma_map: ArrayView2<f32>,
+    sigma_random: f32,
     threshold: f32,
     patch_size: usize,
     step_size: usize,
@@ -296,10 +336,10 @@ fn run_bm3d_step(
 fn run_bm3d_step_stack(
     input_noisy: ArrayView3<f32>,
     input_pilot: ArrayView3<f32>,
-    mode: usize, 
-    sigma_psd: ArrayView2<f32>, 
-    sigma_map: ArrayView3<f32>, 
-    sigma_random: f32,          
+    mode: Bm3dMode,
+    sigma_psd: ArrayView2<f32>,
+    sigma_map: ArrayView3<f32>,
+    sigma_random: f32,
     threshold: f32,
     patch_size: usize,
     step_size: usize,
@@ -365,7 +405,7 @@ pub fn bm3d_hard_thresholding<'py>(
     let output = run_bm3d_step(
         input_noisy.as_array(),
         input_pilot.as_array(),
-        0, 
+        Bm3dMode::HardThreshold,
         sigma_psd.as_array(),
         sigma_map.as_array(),
         sigma_random,
@@ -385,7 +425,7 @@ pub fn bm3d_wiener_filtering<'py>(
     input_pilot: PyReadonlyArray2<f32>,
     sigma_psd: PyReadonlyArray2<f32>,
     sigma_map: PyReadonlyArray2<f32>,
-    sigma_random: f32, 
+    sigma_random: f32,
     patch_size: usize,
     step_size: usize,
     search_window: usize,
@@ -394,7 +434,7 @@ pub fn bm3d_wiener_filtering<'py>(
     let output = run_bm3d_step(
         input_noisy.as_array(),
         input_pilot.as_array(),
-        1, 
+        Bm3dMode::Wiener,
         sigma_psd.as_array(),
         sigma_map.as_array(),
         sigma_random,
@@ -424,7 +464,7 @@ pub fn bm3d_hard_thresholding_stack<'py>(
     let output = run_bm3d_step_stack(
         input_noisy.as_array(),
         input_pilot.as_array(),
-        0, 
+        Bm3dMode::HardThreshold,
         sigma_psd.as_array(),
         sigma_map.as_array(),
         sigma_random,
@@ -444,7 +484,7 @@ pub fn bm3d_wiener_filtering_stack<'py>(
     input_pilot: PyReadonlyArray3<f32>,
     sigma_psd: PyReadonlyArray2<f32>,
     sigma_map: PyReadonlyArray3<f32>,
-    sigma_random: f32, 
+    sigma_random: f32,
     patch_size: usize,
     step_size: usize,
     search_window: usize,
@@ -453,7 +493,7 @@ pub fn bm3d_wiener_filtering_stack<'py>(
     let output = run_bm3d_step_stack(
         input_noisy.as_array(),
         input_pilot.as_array(),
-        1, 
+        Bm3dMode::Wiener,
         sigma_psd.as_array(),
         sigma_map.as_array(),
         sigma_random,
@@ -602,7 +642,7 @@ mod tests {
         let output = run_bm3d_step(
             image.view(),
             image.view(),  // pilot = noisy for first pass
-            0,             // mode 0 = HT
+            Bm3dMode::HardThreshold,
             sigma_psd.view(),
             sigma_map.view(),
             TEST_SIGMA_RANDOM,
@@ -627,7 +667,7 @@ mod tests {
         let output = run_bm3d_step(
             image.view(),
             image.view(),
-            1,             // mode 1 = Wiener
+            Bm3dMode::Wiener,
             sigma_psd.view(),
             sigma_map.view(),
             TEST_SIGMA_RANDOM,
@@ -651,7 +691,7 @@ mod tests {
         let output = run_bm3d_step_stack(
             stack.view(),
             stack.view(),
-            0,
+            Bm3dMode::HardThreshold,
             sigma_psd.view(),
             sigma_map.view(),
             TEST_SIGMA_RANDOM,
@@ -675,7 +715,7 @@ mod tests {
         let output = run_bm3d_step_stack(
             stack.view(),
             stack.view(),
-            1,
+            Bm3dMode::Wiener,
             sigma_psd.view(),
             sigma_map.view(),
             TEST_SIGMA_RANDOM,
@@ -702,7 +742,7 @@ mod tests {
             let output = run_bm3d_step(
                 image.view(),
                 image.view(),
-                0,
+                Bm3dMode::HardThreshold,
                 sigma_psd.view(),
                 sigma_map.view(),
                 TEST_SIGMA_RANDOM,
@@ -729,7 +769,7 @@ mod tests {
         let output = run_bm3d_step(
             image.view(),
             image.view(),
-            1,
+            Bm3dMode::Wiener,
             sigma_psd.view(),
             sigma_map.view(),
             TEST_SIGMA_RANDOM,
@@ -752,7 +792,7 @@ mod tests {
         let output = run_bm3d_step_stack(
             stack.view(),
             stack.view(),
-            0,
+            Bm3dMode::HardThreshold,
             sigma_psd.view(),
             sigma_map.view(),
             TEST_SIGMA_RANDOM,
@@ -778,7 +818,7 @@ mod tests {
         let output = run_bm3d_step(
             noisy.view(),
             noisy.view(),
-            0,
+            Bm3dMode::HardThreshold,
             sigma_psd.view(),
             sigma_map.view(),
             0.1,  // Match noise level
@@ -813,7 +853,7 @@ mod tests {
         let output = run_bm3d_step(
             noisy.view(),
             noisy.view(),
-            0,
+            Bm3dMode::HardThreshold,
             sigma_psd.view(),
             sigma_map.view(),
             0.1,
@@ -847,7 +887,7 @@ mod tests {
         let output = run_bm3d_step(
             image.view(),
             image.view(),
-            0,
+            Bm3dMode::HardThreshold,
             sigma_psd.view(),
             sigma_map.view(),
             0.01,  // Very low noise
@@ -880,7 +920,7 @@ mod tests {
         let output = run_bm3d_step(
             image.view(),
             image.view(),
-            0,
+            Bm3dMode::HardThreshold,
             sigma_psd.view(),
             sigma_map.view(),
             TEST_SIGMA_RANDOM,
@@ -915,7 +955,7 @@ mod tests {
         let output = run_bm3d_step_stack(
             noisy.view(),
             noisy.view(),
-            0,
+            Bm3dMode::HardThreshold,
             sigma_psd.view(),
             sigma_map.view(),
             0.1,
@@ -950,7 +990,7 @@ mod tests {
             let output = run_bm3d_step(
                 image.view(),
                 image.view(),
-                0,
+                Bm3dMode::HardThreshold,
                 sigma_psd.view(),
                 sigma_map.view(),
                 TEST_SIGMA_RANDOM,
@@ -976,7 +1016,7 @@ mod tests {
             let output = run_bm3d_step(
                 image.view(),
                 image.view(),
-                0,
+                Bm3dMode::HardThreshold,
                 sigma_psd.view(),
                 sigma_map.view(),
                 TEST_SIGMA_RANDOM,
@@ -1001,7 +1041,7 @@ mod tests {
             let output = run_bm3d_step(
                 image.view(),
                 image.view(),
-                0,
+                Bm3dMode::HardThreshold,
                 sigma_psd.view(),
                 sigma_map.view(),
                 TEST_SIGMA_RANDOM,
@@ -1029,7 +1069,7 @@ mod tests {
         let output = run_bm3d_step(
             image.view(),
             image.view(),
-            0,
+            Bm3dMode::HardThreshold,
             sigma_psd.view(),
             sigma_map.view(),
             TEST_SIGMA_RANDOM,
@@ -1053,7 +1093,7 @@ mod tests {
         let output = run_bm3d_step_stack(
             stack.view(),
             stack.view(),
-            0,
+            Bm3dMode::HardThreshold,
             sigma_psd.view(),
             sigma_map.view(),
             TEST_SIGMA_RANDOM,
@@ -1078,7 +1118,7 @@ mod tests {
         let output = run_bm3d_step(
             image.view(),
             image.view(),
-            0,
+            Bm3dMode::HardThreshold,
             sigma_psd.view(),
             sigma_map.view(),
             TEST_SIGMA_RANDOM,
@@ -1107,7 +1147,7 @@ mod tests {
         let pilot = run_bm3d_step(
             noisy.view(),
             noisy.view(),
-            0,
+            Bm3dMode::HardThreshold,
             sigma_psd.view(),
             sigma_map.view(),
             0.1,
@@ -1122,7 +1162,7 @@ mod tests {
         let output = run_bm3d_step(
             noisy.view(),
             pilot.view(),  // Use HT result as pilot
-            1,
+            Bm3dMode::Wiener,
             sigma_psd.view(),
             sigma_map.view(),
             0.1,
@@ -1158,7 +1198,7 @@ mod tests {
             let output = run_bm3d_step(
                 image.view(),
                 image.view(),
-                0,
+                Bm3dMode::HardThreshold,
                 sigma_psd.view(),
                 sigma_map.view(),
                 TEST_SIGMA_RANDOM,
