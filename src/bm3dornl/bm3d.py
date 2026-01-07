@@ -3,8 +3,9 @@
 
 import logging
 import numpy as np
-from scipy.ndimage import gaussian_filter, gaussian_filter1d
+from scipy.ndimage import gaussian_filter1d
 from . import bm3d_rust
+from .bm3d_rust import estimate_streak_profile_rust
 
 # Default parameters (simplified for Rust backend)
 default_block_matching_kwargs = {
@@ -19,45 +20,26 @@ default_filter_kwargs = {}
 def estimate_streak_profile(sinogram, sigma_smooth=3.0, iterations=3):
     """
     Estimate the static vertical streak profile using an iterative robust approach.
-    
-    Iteration helps to separate object structure from the static streaks more cleanly,
-    especially when object features align vertically.
+
+    This is a wrapper that calls the Rust implementation for performance.
+
+    Parameters
+    ----------
+    sinogram : np.ndarray
+        Input 2D sinogram (H x W), dtype should be float32.
+    sigma_smooth : float
+        Sigma for vertical Gaussian smoothing (default 3.0).
+    iterations : int
+        Number of refinement iterations (default 3).
+
+    Returns
+    -------
+    np.ndarray
+        1D streak profile of length W.
     """
-    z_clean = sinogram.copy()
-    streak_acc = np.zeros(sinogram.shape[1], dtype=np.float32)
-    
-    for _ in range(iterations):
-        # 1. Smooth along columns to estimate object (Low Frequency in Y)
-        # We use a large sigma for Y to blur out the streaks, small for X to keep edges
-        # But for streaks (constant X), we mainly want to reject them.
-        # Smoothing isotropicly or anisotropicly?
-        # A strong vertical smooth will keep vertical structures (streaks).
-        # We want to REMOVE streaks to get object.
-        # Actually, Gaussian filter is not robust. Median filter is better for rejecting outliers (streaks).
-        # But median is slow.
-        
-        # Standard approach: Smooth heavily to get object "trend"
-        # Since streaks are high-freq in X (edges) and DC in Y.
-        z_smooth = gaussian_filter(z_clean, (sigma_smooth, 3.0)) # Strong smooth vertical, moderate horizontal
-        
-        # 2. Residual
-        residual = z_clean - z_smooth
-        
-        # 3. Estimate Streak update (Robust average along columns)
-        streak_update = np.median(residual, axis=0) # (W,)
-        
-        # 4. Refine update (smooth slightly to remove single-pixel noise, keep streak structures)
-        # Streaks can be sharp, so small sigma.
-        streak_update = gaussian_filter1d(streak_update, 1.0)
-        
-        # Accumulate
-        streak_acc += streak_update
-        
-        # Remove from current estimate for next iteration (cleaning the object)
-        correction = np.tile(streak_update, (sinogram.shape[0], 1))
-        z_clean = z_clean - correction
-        
-    return streak_acc
+    # Ensure float32 for Rust compatibility
+    sinogram_f32 = np.ascontiguousarray(sinogram, dtype=np.float32)
+    return estimate_streak_profile_rust(sinogram_f32, sigma_smooth, iterations)
 
 def bm3d_ring_artifact_removal(
     sinogram: np.ndarray,
