@@ -82,6 +82,201 @@ impl Bm3dPlans {
     }
 }
 
+// =============================================================================
+// Helper Functions for BM3D Kernel Decomposition
+// =============================================================================
+
+/// Build patch groups from matched locations.
+///
+/// Extracts patches from noisy and pilot images at the matched locations,
+/// stacking them into 3D arrays of shape (k, patch_size, patch_size).
+fn build_patch_groups(
+    input_noisy: ArrayView2<f32>,
+    input_pilot: ArrayView2<f32>,
+    matches: &[crate::block_matching::PatchMatch],
+    patch_size: usize,
+) -> (Array3<f32>, Array3<f32>) {
+    let k = matches.len();
+    let mut group_noisy = Array3::<f32>::zeros((k, patch_size, patch_size));
+    let mut group_pilot = Array3::<f32>::zeros((k, patch_size, patch_size));
+
+    for (idx, m) in matches.iter().enumerate() {
+        let p_n = input_noisy.slice(s![m.row..m.row + patch_size, m.col..m.col + patch_size]);
+        let p_p = input_pilot.slice(s![m.row..m.row + patch_size, m.col..m.col + patch_size]);
+        group_noisy.slice_mut(s![idx, .., ..]).assign(&p_n);
+        group_pilot.slice_mut(s![idx, .., ..]).assign(&p_p);
+    }
+
+    (group_noisy, group_pilot)
+}
+
+/// Compute the effective noise standard deviation for a coefficient.
+///
+/// Combines random noise variance and structured (streak) noise variance
+/// based on the PSD and local sigma map values.
+#[inline]
+fn compute_noise_std(
+    use_colored_noise: bool,
+    sigma_psd: ArrayView2<f32>,
+    local_sigma_streak: f32,
+    scalar_sigma_sq: f32,
+    k: usize,
+    r: usize,
+    c: usize,
+    spatial_scale: f32,
+) -> f32 {
+    let sigma_s_dist = if use_colored_noise { sigma_psd[[r, c]] } else { 0.0 };
+    let effective_sigma_s = sigma_s_dist * local_sigma_streak;
+    let var_r = k as f32 * scalar_sigma_sq;
+    let var_s = (k * k) as f32 * effective_sigma_s * effective_sigma_s;
+    (var_r + var_s).sqrt() * spatial_scale
+}
+
+/// Compute the effective noise variance for Wiener filtering.
+#[inline]
+fn compute_noise_var(
+    use_colored_noise: bool,
+    sigma_psd: ArrayView2<f32>,
+    local_sigma_streak: f32,
+    scalar_sigma_sq: f32,
+    k: usize,
+    r: usize,
+    c: usize,
+    spatial_scale_sq: f32,
+) -> f32 {
+    let sigma_s_dist = if use_colored_noise { sigma_psd[[r, c]] } else { 0.0 };
+    let effective_sigma_s = sigma_s_dist * local_sigma_streak;
+    let var_r = k as f32 * scalar_sigma_sq;
+    let var_s = (k * k) as f32 * effective_sigma_s * effective_sigma_s;
+    (var_r + var_s) * spatial_scale_sq
+}
+
+/// Apply 2D forward transform to all patches in a group.
+///
+/// Uses WHT for 8x8 patches, FFT otherwise. Returns complex coefficients.
+fn apply_forward_2d_transform(
+    group: &Array3<f32>,
+    use_hadamard: bool,
+    fft_row: &Arc<dyn Fft<f32>>,
+    fft_col: &Arc<dyn Fft<f32>>,
+) -> ndarray::Array3<rustfft::num_complex::Complex<f32>> {
+    let (k, patch_size, _) = group.dim();
+    let mut result = ndarray::Array3::<rustfft::num_complex::Complex<f32>>::zeros((k, patch_size, patch_size));
+
+    for i in 0..k {
+        let slice = group.slice(s![i, .., ..]);
+        if use_hadamard {
+            let transformed = crate::transforms::wht2d_8x8_forward(slice);
+            result.slice_mut(s![i, .., ..]).assign(&transformed);
+        } else {
+            let transformed = crate::transforms::fft2d(slice, fft_row, fft_col);
+            result.slice_mut(s![i, .., ..]).assign(&transformed);
+        }
+    }
+    result
+}
+
+/// Apply 1D forward FFT along the group dimension at each (r, c) position.
+fn apply_forward_1d_transform(
+    group: &mut ndarray::Array3<rustfft::num_complex::Complex<f32>>,
+    fft_plan: &Arc<dyn Fft<f32>>,
+) {
+    let (k, patch_size, _) = group.dim();
+    for r in 0..patch_size {
+        for c in 0..patch_size {
+            let mut vec: Vec<rustfft::num_complex::Complex<f32>> =
+                (0..k).map(|i| group[[i, r, c]]).collect();
+            fft_plan.process(&mut vec);
+            for i in 0..k {
+                group[[i, r, c]] = vec[i];
+            }
+        }
+    }
+}
+
+/// Apply 1D inverse FFT along the group dimension at each (r, c) position.
+fn apply_inverse_1d_transform(
+    group: &mut ndarray::Array3<rustfft::num_complex::Complex<f32>>,
+    ifft_plan: &Arc<dyn Fft<f32>>,
+) {
+    let (k, patch_size, _) = group.dim();
+    let norm_k = 1.0 / k as f32;
+    for r in 0..patch_size {
+        for c in 0..patch_size {
+            let mut vec: Vec<rustfft::num_complex::Complex<f32>> =
+                (0..k).map(|i| group[[i, r, c]]).collect();
+            ifft_plan.process(&mut vec);
+            for i in 0..k {
+                group[[i, r, c]] = vec[i] * norm_k;
+            }
+        }
+    }
+}
+
+/// Apply 2D inverse transform to a single patch slice.
+///
+/// Uses IWHT for 8x8 patches, IFFT otherwise.
+fn apply_inverse_2d_transform(
+    complex_slice: &ndarray::Array2<rustfft::num_complex::Complex<f32>>,
+    use_hadamard: bool,
+    ifft_row: &Arc<dyn Fft<f32>>,
+    ifft_col: &Arc<dyn Fft<f32>>,
+) -> Array2<f32> {
+    if use_hadamard {
+        crate::transforms::wht2d_8x8_inverse(complex_slice)
+    } else {
+        crate::transforms::ifft2d(complex_slice, ifft_row, ifft_col)
+    }
+}
+
+/// Aggregate a single denoised patch into the numerator and denominator accumulators.
+fn aggregate_patch(
+    spatial: &Array2<f32>,
+    m: &crate::block_matching::PatchMatch,
+    weight: f32,
+    patch_size: usize,
+    rows: usize,
+    cols: usize,
+    numerator: &mut Array2<f32>,
+    denominator: &mut Array2<f32>,
+) {
+    for pr in 0..patch_size {
+        for pc in 0..patch_size {
+            let tr = m.row + pr;
+            let tc = m.col + pc;
+            if tr < rows && tc < cols {
+                numerator[[tr, tc]] += spatial[[pr, pc]] * weight;
+                denominator[[tr, tc]] += weight;
+            }
+        }
+    }
+}
+
+/// Finalize the output by dividing numerator by denominator.
+///
+/// Falls back to original noisy input where denominator is too small.
+fn finalize_output(
+    final_num: &Array2<f32>,
+    final_den: &Array2<f32>,
+    input_noisy: ArrayView2<f32>,
+) -> Array2<f32> {
+    let (rows, cols) = input_noisy.dim();
+    let mut output = Array2::<f32>::zeros((rows, cols));
+
+    for r in 0..rows {
+        for c in 0..cols {
+            let num = final_num[[r, c]];
+            let den = final_den[[r, c]];
+            if den > AGGREGATION_EPSILON {
+                output[[r, c]] = num / den;
+            } else {
+                output[[r, c]] = input_noisy[[r, c]];
+            }
+        }
+    }
+    output
+}
+
 /// Core BM3D Single Image Kernel
 fn run_bm3d_kernel(
     input_noisy: ArrayView2<f32>,
@@ -149,56 +344,26 @@ fn run_bm3d_kernel(
                 // 1.5 Local Noise Level
                 let local_sigma_streak = if use_sigma_map { sigma_map[[ref_r, ref_c]] } else { 0.0 };
 
-                // Stack building
-                let mut group_noisy = Array3::<f32>::zeros((k, patch_size, patch_size));
-                let mut group_pilot = Array3::<f32>::zeros((k, patch_size, patch_size));
-                
-                for (idx, m) in matches.iter().enumerate() {
-                    let p_n = input_noisy.slice(s![m.row..m.row+patch_size, m.col..m.col+patch_size]);
-                    let p_p = input_pilot.slice(s![m.row..m.row+patch_size, m.col..m.col+patch_size]);
-                    group_noisy.slice_mut(s![idx, .., ..]).assign(&p_n);
-                    group_pilot.slice_mut(s![idx, .., ..]).assign(&p_p);
-                }
-                
-                // 2D Transform
-                let mut g_noisy_c = ndarray::Array3::<rustfft::num_complex::Complex<f32>>::zeros((k, patch_size, patch_size));
-                let mut g_pilot_c = ndarray::Array3::<rustfft::num_complex::Complex<f32>>::zeros((k, patch_size, patch_size));
-                
-                for i in 0..k {
-                     let slice_n = group_noisy.slice(s![i, .., ..]);
-                     if use_hadamard {
-                         let fft_n = crate::transforms::wht2d_8x8_forward(slice_n);
-                         g_noisy_c.slice_mut(s![i, .., ..]).assign(&fft_n);
-                     } else {
-                         let fft_n = crate::transforms::fft2d(slice_n, fft_2d_row_ref, fft_2d_col_ref);
-                         g_noisy_c.slice_mut(s![i, .., ..]).assign(&fft_n);
-                     }
-                     
-                     if mode == Bm3dMode::Wiener {
-                         let slice_p = group_pilot.slice(s![i, .., ..]);
-                         if use_hadamard {
-                             let fft_p = crate::transforms::wht2d_8x8_forward(slice_p);
-                             g_pilot_c.slice_mut(s![i, .., ..]).assign(&fft_p);
-                         } else {
-                             let fft_p = crate::transforms::fft2d(slice_p, fft_2d_row_ref, fft_2d_col_ref);
-                             g_pilot_c.slice_mut(s![i, .., ..]).assign(&fft_p);
-                         }
-                     }
-                }
-                
-                // 1D Transform
-                let fft_k_plan = &fft_1d_plans_ref[k]; 
-                for r in 0..patch_size {
-                    for c in 0..patch_size {
-                        let mut vec_n: Vec<rustfft::num_complex::Complex<f32>> = (0..k).map(|i| g_noisy_c[[i, r, c]]).collect();
-                        fft_k_plan.process(&mut vec_n);
-                        for i in 0..k { g_noisy_c[[i, r, c]] = vec_n[i]; }
-                        if mode == Bm3dMode::Wiener {
-                            let mut vec_p: Vec<rustfft::num_complex::Complex<f32>> = (0..k).map(|i| g_pilot_c[[i, r, c]]).collect();
-                            fft_k_plan.process(&mut vec_p);
-                            for i in 0..k { g_pilot_c[[i, r, c]] = vec_p[i]; }
-                        }
-                    }
+                // Build patch groups
+                let (group_noisy, group_pilot) = build_patch_groups(
+                    input_noisy, input_pilot, &matches, patch_size
+                );
+
+                // Forward 2D transforms
+                let mut g_noisy_c = apply_forward_2d_transform(
+                    &group_noisy, use_hadamard, fft_2d_row_ref, fft_2d_col_ref
+                );
+                let mut g_pilot_c = if mode == Bm3dMode::Wiener {
+                    apply_forward_2d_transform(&group_pilot, use_hadamard, fft_2d_row_ref, fft_2d_col_ref)
+                } else {
+                    ndarray::Array3::<rustfft::num_complex::Complex<f32>>::zeros((k, patch_size, patch_size))
+                };
+
+                // Forward 1D transforms along group dimension
+                let fft_k_plan = &fft_1d_plans_ref[k];
+                apply_forward_1d_transform(&mut g_noisy_c, fft_k_plan);
+                if mode == Bm3dMode::Wiener {
+                    apply_forward_1d_transform(&mut g_pilot_c, fft_k_plan);
                 }
 
                 // Filtering
@@ -208,86 +373,63 @@ fn run_bm3d_kernel(
                 
                 match mode {
                     Bm3dMode::HardThreshold => {
-                     // Hard Thresholding
-                     let mut nz_count = 0;
-                     for i in 0..k {
-                         for r in 0..patch_size {
-                             for c in 0..patch_size {
-                                 let coeff = g_noisy_c[[i, r, c]];
-                                 let noise_std_coeff = {
-                                     let sigma_s_dist = if use_colored_noise { sigma_psd[[r, c]] } else { 0.0 };
-                                     let effective_sigma_s = sigma_s_dist * local_sigma_streak;
-                                     let var_r = k as f32 * scalar_sigma_sq;
-                                     let var_s = (k*k) as f32 * effective_sigma_s * effective_sigma_s; 
-                                     (var_r + var_s).sqrt() * spatial_scale
-                                 };
-                                 if coeff.norm() < threshold * noise_std_coeff {
-                                     g_noisy_c[[i, r, c]] = rustfft::num_complex::Complex::new(0.0, 0.0);
-                                 } else {
-                                     nz_count += 1;
-                                 }
-                             }
-                         }
-                     }
-                     if nz_count > 0 { weight_g = 1.0 / (nz_count as f32 + 1.0); }
+                        // Hard Thresholding
+                        let mut nz_count = 0;
+                        for i in 0..k {
+                            for r in 0..patch_size {
+                                for c in 0..patch_size {
+                                    let coeff = g_noisy_c[[i, r, c]];
+                                    let noise_std_coeff = compute_noise_std(
+                                        use_colored_noise, sigma_psd, local_sigma_streak,
+                                        scalar_sigma_sq, k, r, c, spatial_scale
+                                    );
+                                    if coeff.norm() < threshold * noise_std_coeff {
+                                        g_noisy_c[[i, r, c]] = rustfft::num_complex::Complex::new(0.0, 0.0);
+                                    } else {
+                                        nz_count += 1;
+                                    }
+                                }
+                            }
+                        }
+                        if nz_count > 0 { weight_g = 1.0 / (nz_count as f32 + 1.0); }
                     }
                     Bm3dMode::Wiener => {
-                     // Wiener Filtering
-                     let mut wiener_sum = 0.0;
-                     for i in 0..k {
-                         for r in 0..patch_size {
-                             for c in 0..patch_size {
-                                 let p_val = g_pilot_c[[i, r, c]];
-                                 let n_val = g_noisy_c[[i, r, c]];
-                                 let noise_var_coeff = {
-                                       let sigma_s_dist = if use_colored_noise { sigma_psd[[r, c]] } else { 0.0 };
-                                       let effective_sigma_s = sigma_s_dist * local_sigma_streak;
-                                       let var_r = k as f32 * scalar_sigma_sq;
-                                       let var_s = (k*k) as f32 * effective_sigma_s * effective_sigma_s;
-                                       (var_r + var_s) * spatial_scale_sq
-                                 };
-                                 let w = p_val.norm_sqr() / (p_val.norm_sqr() + noise_var_coeff + WIENER_EPSILON);
-                                 g_noisy_c[[i, r, c]] = n_val * w;
-                                 wiener_sum += w*w; 
-                             }
-                         }
-                     }
-                     weight_g = 1.0 / (wiener_sum * scalar_sigma_sq + WIENER_EPSILON);
-                     if weight_g > MAX_WIENER_WEIGHT { weight_g = MAX_WIENER_WEIGHT; }
+                        // Wiener Filtering
+                        let mut wiener_sum = 0.0;
+                        for i in 0..k {
+                            for r in 0..patch_size {
+                                for c in 0..patch_size {
+                                    let p_val = g_pilot_c[[i, r, c]];
+                                    let n_val = g_noisy_c[[i, r, c]];
+                                    let noise_var_coeff = compute_noise_var(
+                                        use_colored_noise, sigma_psd, local_sigma_streak,
+                                        scalar_sigma_sq, k, r, c, spatial_scale_sq
+                                    );
+                                    let w = p_val.norm_sqr() / (p_val.norm_sqr() + noise_var_coeff + WIENER_EPSILON);
+                                    g_noisy_c[[i, r, c]] = n_val * w;
+                                    wiener_sum += w * w;
+                                }
+                            }
+                        }
+                        weight_g = 1.0 / (wiener_sum * scalar_sigma_sq + WIENER_EPSILON);
+                        if weight_g > MAX_WIENER_WEIGHT { weight_g = MAX_WIENER_WEIGHT; }
                     }
                 }
 
-                // Inverse Transforms
+                // Inverse 1D transform along group dimension
                 let ifft_k_plan = &ifft_1d_plans_ref[k];
-                let norm_k = 1.0 / k as f32;
-                 for r in 0..patch_size {
-                    for c in 0..patch_size {
-                        let mut vec: Vec<rustfft::num_complex::Complex<f32>> = (0..k).map(|i| g_noisy_c[[i, r, c]]).collect();
-                        ifft_k_plan.process(&mut vec);
-                        for i in 0..k { g_noisy_c[[i, r, c]] = vec[i] * norm_k; }
-                    }
-                }
-                
+                apply_inverse_1d_transform(&mut g_noisy_c, ifft_k_plan);
+
+                // Inverse 2D transforms and aggregation
                 for i in 0..k {
                     let complex_slice = g_noisy_c.slice(s![i, .., ..]).to_owned();
-                    let spatial = if use_hadamard {
-                        crate::transforms::wht2d_8x8_inverse(&complex_slice)
-                    } else {
-                        crate::transforms::ifft2d(&complex_slice, ifft_2d_row_ref, ifft_2d_col_ref)
-                    };
-                    
-                    let m = matches[i];
-                    let w_spatial = weight_g;
-                    for pr in 0..patch_size {
-                        for pc in 0..patch_size {
-                            let tr = m.row + pr;
-                            let tc = m.col + pc;
-                            if tr < rows && tc < cols {
-                                numerator_acc[[tr, tc]] += spatial[[pr, pc]] * w_spatial;
-                                denominator_acc[[tr, tc]] += w_spatial;
-                            }
-                        }
-                    }
+                    let spatial = apply_inverse_2d_transform(
+                        &complex_slice, use_hadamard, ifft_2d_row_ref, ifft_2d_col_ref
+                    );
+                    aggregate_patch(
+                        &spatial, &matches[i], weight_g, patch_size, rows, cols,
+                        numerator_acc, denominator_acc
+                    );
                 }
                 acc
             })
@@ -296,20 +438,8 @@ fn run_bm3d_kernel(
             |mut a, b| { a.0 += &b.0; a.1 += &b.1; a }
         );
 
-    // Finalize
-    let mut output = Array2::<f32>::zeros((rows, cols));
-    for r in 0..rows {
-        for c in 0..cols {
-            let num = final_num[[r, c]];
-            let den = final_den[[r, c]];
-            if den > AGGREGATION_EPSILON {
-                output[[r, c]] = num / den;
-            } else {
-                output[[r, c]] = input_noisy[[r, c]]; 
-            }
-        }
-    }
-    output
+    // Finalize: divide numerator by denominator
+    finalize_output(&final_num, &final_den, input_noisy)
 }
 
 
@@ -325,12 +455,22 @@ fn run_bm3d_step(
     step_size: usize,
     search_window: usize,
     max_matches: usize,
-) -> Array2<f32> {
-    if input_pilot.dim() != input_noisy.dim() { panic!("Dim mismatch"); }
-    if sigma_map.dim() != input_noisy.dim() && sigma_map.dim() != (1, 1) { panic!("Map dim mismatch"); }
-    
+) -> Result<Array2<f32>, String> {
+    if input_pilot.dim() != input_noisy.dim() {
+        return Err(format!(
+            "Dimension mismatch: input_noisy has shape {:?}, but input_pilot has shape {:?}",
+            input_noisy.dim(), input_pilot.dim()
+        ));
+    }
+    if sigma_map.dim() != input_noisy.dim() && sigma_map.dim() != (1, 1) {
+        return Err(format!(
+            "Sigma map dimension mismatch: expected {:?} or (1, 1), got {:?}",
+            input_noisy.dim(), sigma_map.dim()
+        ));
+    }
+
     let plans = Bm3dPlans::new(patch_size, max_matches);
-    run_bm3d_kernel(input_noisy, input_pilot, mode, sigma_psd, sigma_map, sigma_random, threshold, patch_size, step_size, search_window, max_matches, &plans)
+    Ok(run_bm3d_kernel(input_noisy, input_pilot, mode, sigma_psd, sigma_map, sigma_random, threshold, patch_size, step_size, search_window, max_matches, &plans))
 }
 
 fn run_bm3d_step_stack(
@@ -345,23 +485,23 @@ fn run_bm3d_step_stack(
     step_size: usize,
     search_window: usize,
     max_matches: usize,
-) -> Array3<f32> {
+) -> Result<Array3<f32>, String> {
     let (n, rows, cols) = input_noisy.dim();
-    if input_pilot.dim() != (n, rows, cols) { panic!("Stack dim mismatch pilot"); }
-    if sigma_map.dim() != (n, rows, cols) && sigma_map.dim() != (1, 1, 1) { 
-        // Support broadcasting if map is 1x1x1?
-        if sigma_map.dim() == (1,1,1) {
-            // we handle it inside loop effectively? No, slice fails.
-            // We should expect full map or broadcast carefully.
-            // To simplify, we demand full map if used, or dummy 1x1x1 is handled via logic.
-            // But strict check is safer.
-        } else {
-            panic!("Stack dim mismatch map");
-        }
+    if input_pilot.dim() != (n, rows, cols) {
+        return Err(format!(
+            "Stack dimension mismatch: input_noisy has shape {:?}, but input_pilot has shape {:?}",
+            input_noisy.dim(), input_pilot.dim()
+        ));
     }
-    
+    if sigma_map.dim() != (n, rows, cols) && sigma_map.dim() != (1, 1, 1) {
+        return Err(format!(
+            "Sigma map dimension mismatch: expected {:?} or (1, 1, 1), got {:?}",
+            (n, rows, cols), sigma_map.dim()
+        ));
+    }
+
     let plans = Bm3dPlans::new(patch_size, max_matches);
-    
+
     let results: Vec<Array2<f32>> = (0..n).into_par_iter()
         .map(|i| {
             let noisy_slice = input_noisy.index_axis(Axis(0), i);
@@ -371,20 +511,20 @@ fn run_bm3d_step_stack(
             } else {
                  sigma_map.index_axis(Axis(0), i)
             };
-            
+
             run_bm3d_kernel(
                 noisy_slice, pilot_slice, mode, sigma_psd, map_slice,
                 sigma_random, threshold, patch_size, step_size, search_window, max_matches, &plans
             )
         })
         .collect();
-        
+
     // Consolidate
     let mut output = Array3::<f32>::zeros((n, rows, cols));
     for (i, res) in results.into_iter().enumerate() {
         output.slice_mut(s![i, .., ..]).assign(&res);
     }
-    output
+    Ok(output)
 }
 
 
@@ -394,8 +534,8 @@ pub fn bm3d_hard_thresholding<'py>(
     input_noisy: PyReadonlyArray2<f32>,
     input_pilot: PyReadonlyArray2<f32>,
     sigma_psd: PyReadonlyArray2<f32>,
-    sigma_map: PyReadonlyArray2<f32>, 
-    sigma_random: f32, 
+    sigma_map: PyReadonlyArray2<f32>,
+    sigma_random: f32,
     threshold: f32,
     patch_size: usize,
     step_size: usize,
@@ -414,7 +554,7 @@ pub fn bm3d_hard_thresholding<'py>(
         step_size,
         search_window,
         max_matches
-    );
+    ).map_err(|e| pyo3::exceptions::PyValueError::new_err(e))?;
     Ok(output.to_pyarray(py))
 }
 
@@ -443,7 +583,7 @@ pub fn bm3d_wiener_filtering<'py>(
         step_size,
         search_window,
         max_matches
-    );
+    ).map_err(|e| pyo3::exceptions::PyValueError::new_err(e))?;
     Ok(output.to_pyarray(py))
 }
 
@@ -453,8 +593,8 @@ pub fn bm3d_hard_thresholding_stack<'py>(
     input_noisy: PyReadonlyArray3<f32>,
     input_pilot: PyReadonlyArray3<f32>,
     sigma_psd: PyReadonlyArray2<f32>,
-    sigma_map: PyReadonlyArray3<f32>, 
-    sigma_random: f32, 
+    sigma_map: PyReadonlyArray3<f32>,
+    sigma_random: f32,
     threshold: f32,
     patch_size: usize,
     step_size: usize,
@@ -473,7 +613,7 @@ pub fn bm3d_hard_thresholding_stack<'py>(
         step_size,
         search_window,
         max_matches
-    );
+    ).map_err(|e| pyo3::exceptions::PyValueError::new_err(e))?;
     Ok(output.to_pyarray(py))
 }
 
@@ -502,7 +642,7 @@ pub fn bm3d_wiener_filtering_stack<'py>(
         step_size,
         search_window,
         max_matches
-    );
+    ).map_err(|e| pyo3::exceptions::PyValueError::new_err(e))?;
     Ok(output.to_pyarray(py))
 }
 
@@ -651,7 +791,7 @@ mod tests {
             TEST_STEP_SIZE,
             TEST_SEARCH_WINDOW,
             TEST_MAX_MATCHES,
-        );
+        ).unwrap();
 
         // Should complete without panic and produce valid output
         assert_eq!(output.dim(), image.dim());
@@ -676,7 +816,7 @@ mod tests {
             TEST_STEP_SIZE,
             TEST_SEARCH_WINDOW,
             TEST_MAX_MATCHES,
-        );
+        ).unwrap();
 
         assert_eq!(output.dim(), image.dim());
         assert!(output.iter().all(|&x| x.is_finite()), "Output contains non-finite values");
@@ -700,7 +840,7 @@ mod tests {
             TEST_STEP_SIZE,
             TEST_SEARCH_WINDOW,
             TEST_MAX_MATCHES,
-        );
+        ).unwrap();
 
         assert_eq!(output.dim(), stack.dim());
         assert!(output.iter().all(|&x| x.is_finite()), "Output contains non-finite values");
@@ -724,7 +864,7 @@ mod tests {
             TEST_STEP_SIZE,
             TEST_SEARCH_WINDOW,
             TEST_MAX_MATCHES,
-        );
+        ).unwrap();
 
         assert_eq!(output.dim(), stack.dim());
         assert!(output.iter().all(|&x| x.is_finite()), "Output contains non-finite values");
@@ -751,7 +891,7 @@ mod tests {
                 TEST_STEP_SIZE,
                 TEST_SEARCH_WINDOW,
                 TEST_MAX_MATCHES,
-            );
+            ).unwrap();
 
             assert_eq!(
                 output.dim(), (rows, cols),
@@ -778,7 +918,7 @@ mod tests {
             TEST_STEP_SIZE,
             TEST_SEARCH_WINDOW,
             TEST_MAX_MATCHES,
-        );
+        ).unwrap();
 
         assert_eq!(output.dim(), image.dim());
     }
@@ -801,7 +941,7 @@ mod tests {
             TEST_STEP_SIZE,
             TEST_SEARCH_WINDOW,
             TEST_MAX_MATCHES,
-        );
+        ).unwrap();
 
         assert_eq!(output.dim(), stack.dim());
     }
@@ -827,7 +967,7 @@ mod tests {
             TEST_STEP_SIZE,
             TEST_SEARCH_WINDOW,
             TEST_MAX_MATCHES,
-        );
+        ).unwrap();
 
         // Output should differ from input (denoising did something)
         let diff = mse(&output, &noisy);
@@ -862,7 +1002,7 @@ mod tests {
             2,    // smaller step for better coverage
             24,   // larger search window
             16,   // more matches
-        );
+        ).unwrap();
 
         let mse_before = mse(&noisy, &clean);
         let mse_after = mse(&output, &clean);
@@ -896,7 +1036,7 @@ mod tests {
             TEST_STEP_SIZE,
             TEST_SEARCH_WINDOW,
             TEST_MAX_MATCHES,
-        );
+        ).unwrap();
 
         // Output should be very close to input for constant image
         let max_diff = output.iter()
@@ -929,7 +1069,7 @@ mod tests {
             TEST_STEP_SIZE,
             TEST_SEARCH_WINDOW,
             TEST_MAX_MATCHES,
-        );
+        ).unwrap();
 
         for &val in output.iter() {
             assert!(val.is_finite(), "Output contains non-finite value");
@@ -964,7 +1104,7 @@ mod tests {
             2,
             24,
             16,
-        );
+        ).unwrap();
 
         let mse_before = mse_stack(&noisy, &clean);
         let mse_after = mse_stack(&output, &clean);
@@ -999,7 +1139,7 @@ mod tests {
                 patch_size / 2,  // step = patch/2
                 TEST_SEARCH_WINDOW,
                 TEST_MAX_MATCHES,
-            );
+            ).unwrap();
 
             assert_eq!(output.dim(), image.dim(), "Shape mismatch for patch_size={}", patch_size);
             assert!(output.iter().all(|&x| x.is_finite()), "Non-finite values for patch_size={}", patch_size);
@@ -1025,7 +1165,7 @@ mod tests {
                 TEST_STEP_SIZE,
                 search_window,
                 TEST_MAX_MATCHES,
-            );
+            ).unwrap();
 
             assert_eq!(output.dim(), image.dim(), "Shape mismatch for search_window={}", search_window);
         }
@@ -1050,7 +1190,7 @@ mod tests {
                 TEST_STEP_SIZE,
                 TEST_SEARCH_WINDOW,
                 max_matches,
-            );
+            ).unwrap();
 
             assert_eq!(output.dim(), image.dim(), "Shape mismatch for max_matches={}", max_matches);
         }
@@ -1078,7 +1218,7 @@ mod tests {
             1,  // step=1 for small image
             TEST_PATCH_SIZE,  // small search window
             4,  // fewer matches
-        );
+        ).unwrap();
 
         assert_eq!(output.dim(), image.dim());
     }
@@ -1102,7 +1242,7 @@ mod tests {
             TEST_STEP_SIZE,
             TEST_SEARCH_WINDOW,
             TEST_MAX_MATCHES,
-        );
+        ).unwrap();
 
         assert_eq!(output.dim(), (1, 32, 32));
         assert!(output.iter().all(|&x| x.is_finite()));
@@ -1127,7 +1267,7 @@ mod tests {
             TEST_STEP_SIZE,
             TEST_SEARCH_WINDOW,
             TEST_MAX_MATCHES,
-        );
+        ).unwrap();
 
         assert_eq!(output.dim(), (32, 64));
     }
@@ -1156,7 +1296,7 @@ mod tests {
             2,
             24,
             16,
-        );
+        ).unwrap();
 
         // Second pass: Wiener with pilot
         let output = run_bm3d_step(
@@ -1171,7 +1311,7 @@ mod tests {
             2,
             24,
             16,
-        );
+        ).unwrap();
 
         // Verify both passes produce finite outputs with correct shape
         assert_eq!(output.dim(), clean.dim());
@@ -1207,7 +1347,7 @@ mod tests {
                 step_size,
                 TEST_SEARCH_WINDOW,
                 TEST_MAX_MATCHES,
-            );
+            ).unwrap();
 
             assert_eq!(output.dim(), image.dim(), "Shape mismatch for step_size={}", step_size);
         }
