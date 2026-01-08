@@ -11,6 +11,7 @@ use pyo3::prelude::*;
 use numpy::{PyReadonlyArray2, PyArray2, PyReadonlyArray3, PyArray3, ToPyArray, PyArray1};
 
 use bm3d_core::{Bm3dMode, run_bm3d_step, run_bm3d_step_stack};
+use bm3d_core::{bm3d_ring_artifact_removal, Bm3dConfig, RingRemovalMode};
 
 /// Hard thresholding step of BM3D for a single 2D image.
 #[pyfunction]
@@ -330,6 +331,187 @@ pub fn estimate_streak_profile_py_f64(
     Ok(PyArray1::from_owned_array(py, result).into())
 }
 
+// ============================================================================
+// Unified BM3D Ring Artifact Removal (complete pipeline)
+// ============================================================================
+
+/// Unified BM3D ring artifact removal for 2D sinograms (f32 precision).
+///
+/// This function performs the complete BM3D denoising pipeline:
+/// 1. Normalizes input to [0, 1] range
+/// 2. Computes spatially adaptive sigma map
+/// 3. (Streak mode) Subtracts estimated streak profile
+/// 4. Runs two-pass BM3D: Hard Threshold → Wiener
+/// 5. Denormalizes output to original range
+///
+/// Parameters
+/// ----------
+/// sinogram : numpy.ndarray
+///     Input 2D sinogram (H × W), dtype float32.
+/// mode : str
+///     Processing mode: "generic" or "streak".
+/// sigma_random : float, optional
+///     Random noise std dev. Default: 0.1
+/// patch_size : int, optional
+///     Block matching patch size. Default: 8
+/// step_size : int, optional
+///     Stride between patches. Default: 4
+/// search_window : int, optional
+///     Search window size for block matching. Default: 24
+/// max_matches : int, optional
+///     Maximum similar patches per group. Default: 16
+/// threshold : float, optional
+///     Hard thresholding coefficient. Default: 2.7
+/// streak_sigma_smooth : float, optional
+///     Sigma for streak estimation smoothing. Default: 3.0
+/// streak_iterations : int, optional
+///     Number of streak estimation iterations. Default: 2
+/// sigma_map_smoothing : float, optional
+///     Sigma for sigma map profile smoothing. Default: 20.0
+/// streak_sigma_scale : float, optional
+///     Sigma map scaling factor. Default: 1.1
+/// psd_width : float, optional
+///     PSD Gaussian width for streak mode. Default: 0.6
+///
+/// Returns
+/// -------
+/// numpy.ndarray
+///     Denoised sinogram with same shape as input.
+#[pyfunction]
+#[pyo3(signature = (
+    sinogram,
+    mode,
+    sigma_random = None,
+    patch_size = None,
+    step_size = None,
+    search_window = None,
+    max_matches = None,
+    threshold = None,
+    streak_sigma_smooth = None,
+    streak_iterations = None,
+    sigma_map_smoothing = None,
+    streak_sigma_scale = None,
+    psd_width = None
+))]
+pub fn bm3d_ring_artifact_removal_2d<'py>(
+    py: Python<'py>,
+    sinogram: PyReadonlyArray2<f32>,
+    mode: &str,
+    sigma_random: Option<f32>,
+    patch_size: Option<usize>,
+    step_size: Option<usize>,
+    search_window: Option<usize>,
+    max_matches: Option<usize>,
+    threshold: Option<f32>,
+    streak_sigma_smooth: Option<f32>,
+    streak_iterations: Option<usize>,
+    sigma_map_smoothing: Option<f32>,
+    streak_sigma_scale: Option<f32>,
+    psd_width: Option<f32>,
+) -> PyResult<&'py PyArray2<f32>> {
+    // Parse mode
+    let ring_mode = match mode.to_lowercase().as_str() {
+        "generic" => RingRemovalMode::Generic,
+        "streak" => RingRemovalMode::Streak,
+        _ => return Err(pyo3::exceptions::PyValueError::new_err(
+            format!("Invalid mode '{}'. Expected 'generic' or 'streak'.", mode)
+        )),
+    };
+
+    // Build config with defaults
+    let mut config: Bm3dConfig<f32> = Bm3dConfig::default();
+
+    if let Some(v) = sigma_random { config.sigma_random = v; }
+    if let Some(v) = patch_size { config.patch_size = v; }
+    if let Some(v) = step_size { config.step_size = v; }
+    if let Some(v) = search_window { config.search_window = v; }
+    if let Some(v) = max_matches { config.max_matches = v; }
+    if let Some(v) = threshold { config.threshold = v; }
+    if let Some(v) = streak_sigma_smooth { config.streak_sigma_smooth = v; }
+    if let Some(v) = streak_iterations { config.streak_iterations = v; }
+    if let Some(v) = sigma_map_smoothing { config.sigma_map_smoothing = v; }
+    if let Some(v) = streak_sigma_scale { config.streak_sigma_scale = v; }
+    if let Some(v) = psd_width { config.psd_width = v; }
+
+    // Call Rust implementation
+    let output = bm3d_ring_artifact_removal(
+        sinogram.as_array(),
+        ring_mode,
+        &config,
+    ).map_err(|e| pyo3::exceptions::PyValueError::new_err(e))?;
+
+    Ok(output.to_pyarray(py))
+}
+
+/// Unified BM3D ring artifact removal for 2D sinograms (f64 precision).
+///
+/// See `bm3d_ring_artifact_removal_2d` for full documentation.
+#[pyfunction]
+#[pyo3(signature = (
+    sinogram,
+    mode,
+    sigma_random = None,
+    patch_size = None,
+    step_size = None,
+    search_window = None,
+    max_matches = None,
+    threshold = None,
+    streak_sigma_smooth = None,
+    streak_iterations = None,
+    sigma_map_smoothing = None,
+    streak_sigma_scale = None,
+    psd_width = None
+))]
+pub fn bm3d_ring_artifact_removal_2d_f64<'py>(
+    py: Python<'py>,
+    sinogram: PyReadonlyArray2<f64>,
+    mode: &str,
+    sigma_random: Option<f64>,
+    patch_size: Option<usize>,
+    step_size: Option<usize>,
+    search_window: Option<usize>,
+    max_matches: Option<usize>,
+    threshold: Option<f64>,
+    streak_sigma_smooth: Option<f64>,
+    streak_iterations: Option<usize>,
+    sigma_map_smoothing: Option<f64>,
+    streak_sigma_scale: Option<f64>,
+    psd_width: Option<f64>,
+) -> PyResult<&'py PyArray2<f64>> {
+    // Parse mode
+    let ring_mode = match mode.to_lowercase().as_str() {
+        "generic" => RingRemovalMode::Generic,
+        "streak" => RingRemovalMode::Streak,
+        _ => return Err(pyo3::exceptions::PyValueError::new_err(
+            format!("Invalid mode '{}'. Expected 'generic' or 'streak'.", mode)
+        )),
+    };
+
+    // Build config with defaults
+    let mut config: Bm3dConfig<f64> = Bm3dConfig::default();
+
+    if let Some(v) = sigma_random { config.sigma_random = v; }
+    if let Some(v) = patch_size { config.patch_size = v; }
+    if let Some(v) = step_size { config.step_size = v; }
+    if let Some(v) = search_window { config.search_window = v; }
+    if let Some(v) = max_matches { config.max_matches = v; }
+    if let Some(v) = threshold { config.threshold = v; }
+    if let Some(v) = streak_sigma_smooth { config.streak_sigma_smooth = v; }
+    if let Some(v) = streak_iterations { config.streak_iterations = v; }
+    if let Some(v) = sigma_map_smoothing { config.sigma_map_smoothing = v; }
+    if let Some(v) = streak_sigma_scale { config.streak_sigma_scale = v; }
+    if let Some(v) = psd_width { config.psd_width = v; }
+
+    // Call Rust implementation
+    let output = bm3d_ring_artifact_removal(
+        sinogram.as_array(),
+        ring_mode,
+        &config,
+    ).map_err(|e| pyo3::exceptions::PyValueError::new_err(e))?;
+
+    Ok(output.to_pyarray(py))
+}
+
 /// BM3D Rust accelerator module
 #[pymodule]
 fn bm3d_rust(_py: Python, m: &PyModule) -> PyResult<()> {
@@ -340,6 +522,7 @@ fn bm3d_rust(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(bm3d_wiener_filtering_stack, m)?)?;
     m.add_function(wrap_pyfunction!(test_block_matching_rust, m)?)?;
     m.add_function(wrap_pyfunction!(estimate_streak_profile_py, m)?)?;
+    m.add_function(wrap_pyfunction!(bm3d_ring_artifact_removal_2d, m)?)?;
 
     // f64 (double precision) functions
     m.add_function(wrap_pyfunction!(bm3d_hard_thresholding_f64, m)?)?;
@@ -348,5 +531,6 @@ fn bm3d_rust(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(bm3d_wiener_filtering_stack_f64, m)?)?;
     m.add_function(wrap_pyfunction!(test_block_matching_rust_f64, m)?)?;
     m.add_function(wrap_pyfunction!(estimate_streak_profile_py_f64, m)?)?;
+    m.add_function(wrap_pyfunction!(bm3d_ring_artifact_removal_2d_f64, m)?)?;
     Ok(())
 }
