@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Denoising functions using Rust backend."""
 
+import warnings
+
 import numpy as np
 from scipy.ndimage import gaussian_filter1d
 from . import bm3d_rust
@@ -89,8 +91,13 @@ def bm3d_ring_artifact_removal(
         - threshold (float): Hard thresholding coefficient (default 2.7).
         By default `default_filter_kwargs`.
     multiscale : bool, optional
-        If True, use multi-scale BM3D for handling wide streaks.
+        **[EXPERIMENTAL]** If True, use multi-scale BM3D for handling wide streaks.
         Only supported with mode="streak". By default False.
+
+        .. warning::
+            This feature is experimental. It works well for wide ring artifacts
+            (>39 pixels) but may over-process regular sinograms. For most use
+            cases, the default single-scale mode (multiscale=False) is recommended.
     num_scales : int | None, optional
         Override automatic scale calculation for multi-scale mode.
         If None, uses floor(log2(width/40)). By default None.
@@ -114,6 +121,18 @@ def bm3d_ring_artifact_removal(
         raise ValueError(
             f"multiscale=True only supports mode='streak', got mode='{mode}'"
         )
+
+    # Emit experimental warning for multiscale mode
+    if multiscale:
+        warnings.warn(
+            "multiscale=True is experimental. It works well for wide ring "
+            "artifacts (>39 pixels) but may over-process regular sinograms. "
+            "For most use cases, the default single-scale mode "
+            "(multiscale=False) is recommended.",
+            UserWarning,
+            stacklevel=2,
+        )
+
     # Unpack parameters
     patch_size = block_matching_kwargs.get("patch_size", 8)
     if isinstance(patch_size, tuple):
