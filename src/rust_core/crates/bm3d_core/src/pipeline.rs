@@ -4,9 +4,11 @@ use rayon::prelude::*;
 use ndarray::{Array2, Array3, ArrayView2, ArrayView3, s, Axis};
 use std::sync::Arc;
 use rustfft::Fft;
+use rustfft::num_complex::Complex;
 
-use crate::block_matching;
+use crate::block_matching::{self, PatchMatch};
 use crate::transforms;
+use crate::float_trait::Bm3dFloat;
 
 // =============================================================================
 // Constants for BM3D Pipeline
@@ -14,15 +16,15 @@ use crate::transforms;
 
 /// Small epsilon for numerical stability in Wiener filter division.
 /// Prevents division by zero when computing Wiener weights.
-const WIENER_EPSILON: f32 = 1e-8;
+const WIENER_EPSILON: f64 = 1e-8;
 
 /// Maximum allowed weight value in Wiener filtering.
 /// Clamps weights to prevent numerical instability from very small denominators.
-const MAX_WIENER_WEIGHT: f32 = 1e6;
+const MAX_WIENER_WEIGHT: f64 = 1e6;
 
 /// Small epsilon for aggregation denominator check.
 /// If the accumulated weight is below this threshold, we fall back to the noisy input.
-const AGGREGATION_EPSILON: f32 = 1e-6;
+const AGGREGATION_EPSILON: f64 = 1e-6;
 
 /// Minimum chunk length for Rayon parallel iteration.
 /// Tuned for good load balancing on typical workloads.
@@ -50,16 +52,16 @@ pub enum Bm3dMode {
 /// We pre-compute:
 /// - 2D plans for patches (Row/Col)
 /// - 1D plans for group dimension (variable K up to max_matches)
-pub struct Bm3dPlans {
-    fft_2d_row: Arc<dyn Fft<f32>>,
-    fft_2d_col: Arc<dyn Fft<f32>>,
-    ifft_2d_row: Arc<dyn Fft<f32>>,
-    ifft_2d_col: Arc<dyn Fft<f32>>,
-    fft_1d_plans: Vec<Arc<dyn Fft<f32>>>,
-    ifft_1d_plans: Vec<Arc<dyn Fft<f32>>>,
+pub struct Bm3dPlans<F: Bm3dFloat> {
+    fft_2d_row: Arc<dyn Fft<F>>,
+    fft_2d_col: Arc<dyn Fft<F>>,
+    ifft_2d_row: Arc<dyn Fft<F>>,
+    ifft_2d_col: Arc<dyn Fft<F>>,
+    fft_1d_plans: Vec<Arc<dyn Fft<F>>>,
+    ifft_1d_plans: Vec<Arc<dyn Fft<F>>>,
 }
 
-impl Bm3dPlans {
+impl<F: Bm3dFloat> Bm3dPlans<F> {
     /// Create new BM3D plans for the given patch size and maximum matches.
     pub fn new(patch_size: usize, max_matches: usize) -> Self {
         let mut planner = rustfft::FftPlanner::new();
@@ -94,15 +96,15 @@ impl Bm3dPlans {
 ///
 /// Extracts patches from noisy and pilot images at the matched locations,
 /// stacking them into 3D arrays of shape (k, patch_size, patch_size).
-fn build_patch_groups(
-    input_noisy: ArrayView2<f32>,
-    input_pilot: ArrayView2<f32>,
-    matches: &[block_matching::PatchMatch],
+fn build_patch_groups<F: Bm3dFloat>(
+    input_noisy: ArrayView2<F>,
+    input_pilot: ArrayView2<F>,
+    matches: &[PatchMatch<F>],
     patch_size: usize,
-) -> (Array3<f32>, Array3<f32>) {
+) -> (Array3<F>, Array3<F>) {
     let k = matches.len();
-    let mut group_noisy = Array3::<f32>::zeros((k, patch_size, patch_size));
-    let mut group_pilot = Array3::<f32>::zeros((k, patch_size, patch_size));
+    let mut group_noisy = Array3::<F>::zeros((k, patch_size, patch_size));
+    let mut group_pilot = Array3::<F>::zeros((k, patch_size, patch_size));
 
     for (idx, m) in matches.iter().enumerate() {
         let p_n = input_noisy.slice(s![m.row..m.row + patch_size, m.col..m.col + patch_size]);
@@ -119,53 +121,55 @@ fn build_patch_groups(
 /// Combines random noise variance and structured (streak) noise variance
 /// based on the PSD and local sigma map values.
 #[inline]
-fn compute_noise_std(
+fn compute_noise_std<F: Bm3dFloat>(
     use_colored_noise: bool,
-    sigma_psd: ArrayView2<f32>,
-    local_sigma_streak: f32,
-    scalar_sigma_sq: f32,
+    sigma_psd: ArrayView2<F>,
+    local_sigma_streak: F,
+    scalar_sigma_sq: F,
     k: usize,
     r: usize,
     c: usize,
-    spatial_scale: f32,
-) -> f32 {
-    let sigma_s_dist = if use_colored_noise { sigma_psd[[r, c]] } else { 0.0 };
+    spatial_scale: F,
+) -> F {
+    let sigma_s_dist = if use_colored_noise { sigma_psd[[r, c]] } else { F::zero() };
     let effective_sigma_s = sigma_s_dist * local_sigma_streak;
-    let var_r = k as f32 * scalar_sigma_sq;
-    let var_s = (k * k) as f32 * effective_sigma_s * effective_sigma_s;
+    let k_f = F::usize_as(k);
+    let var_r = k_f * scalar_sigma_sq;
+    let var_s = (k_f * k_f) * effective_sigma_s * effective_sigma_s;
     (var_r + var_s).sqrt() * spatial_scale
 }
 
 /// Compute the effective noise variance for Wiener filtering.
 #[inline]
-fn compute_noise_var(
+fn compute_noise_var<F: Bm3dFloat>(
     use_colored_noise: bool,
-    sigma_psd: ArrayView2<f32>,
-    local_sigma_streak: f32,
-    scalar_sigma_sq: f32,
+    sigma_psd: ArrayView2<F>,
+    local_sigma_streak: F,
+    scalar_sigma_sq: F,
     k: usize,
     r: usize,
     c: usize,
-    spatial_scale_sq: f32,
-) -> f32 {
-    let sigma_s_dist = if use_colored_noise { sigma_psd[[r, c]] } else { 0.0 };
+    spatial_scale_sq: F,
+) -> F {
+    let sigma_s_dist = if use_colored_noise { sigma_psd[[r, c]] } else { F::zero() };
     let effective_sigma_s = sigma_s_dist * local_sigma_streak;
-    let var_r = k as f32 * scalar_sigma_sq;
-    let var_s = (k * k) as f32 * effective_sigma_s * effective_sigma_s;
+    let k_f = F::usize_as(k);
+    let var_r = k_f * scalar_sigma_sq;
+    let var_s = (k_f * k_f) * effective_sigma_s * effective_sigma_s;
     (var_r + var_s) * spatial_scale_sq
 }
 
 /// Apply 2D forward transform to all patches in a group.
 ///
 /// Uses WHT for 8x8 patches, FFT otherwise. Returns complex coefficients.
-fn apply_forward_2d_transform(
-    group: &Array3<f32>,
+fn apply_forward_2d_transform<F: Bm3dFloat>(
+    group: &Array3<F>,
     use_hadamard: bool,
-    fft_row: &Arc<dyn Fft<f32>>,
-    fft_col: &Arc<dyn Fft<f32>>,
-) -> ndarray::Array3<rustfft::num_complex::Complex<f32>> {
+    fft_row: &Arc<dyn Fft<F>>,
+    fft_col: &Arc<dyn Fft<F>>,
+) -> ndarray::Array3<Complex<F>> {
     let (k, patch_size, _) = group.dim();
-    let mut result = ndarray::Array3::<rustfft::num_complex::Complex<f32>>::zeros((k, patch_size, patch_size));
+    let mut result = ndarray::Array3::<Complex<F>>::zeros((k, patch_size, patch_size));
 
     for i in 0..k {
         let slice = group.slice(s![i, .., ..]);
@@ -181,14 +185,14 @@ fn apply_forward_2d_transform(
 }
 
 /// Apply 1D forward FFT along the group dimension at each (r, c) position.
-fn apply_forward_1d_transform(
-    group: &mut ndarray::Array3<rustfft::num_complex::Complex<f32>>,
-    fft_plan: &Arc<dyn Fft<f32>>,
+fn apply_forward_1d_transform<F: Bm3dFloat>(
+    group: &mut ndarray::Array3<Complex<F>>,
+    fft_plan: &Arc<dyn Fft<F>>,
 ) {
     let (k, patch_size, _) = group.dim();
     for r in 0..patch_size {
         for c in 0..patch_size {
-            let mut vec: Vec<rustfft::num_complex::Complex<f32>> =
+            let mut vec: Vec<Complex<F>> =
                 (0..k).map(|i| group[[i, r, c]]).collect();
             fft_plan.process(&mut vec);
             for i in 0..k {
@@ -199,15 +203,15 @@ fn apply_forward_1d_transform(
 }
 
 /// Apply 1D inverse FFT along the group dimension at each (r, c) position.
-fn apply_inverse_1d_transform(
-    group: &mut ndarray::Array3<rustfft::num_complex::Complex<f32>>,
-    ifft_plan: &Arc<dyn Fft<f32>>,
+fn apply_inverse_1d_transform<F: Bm3dFloat>(
+    group: &mut ndarray::Array3<Complex<F>>,
+    ifft_plan: &Arc<dyn Fft<F>>,
 ) {
     let (k, patch_size, _) = group.dim();
-    let norm_k = 1.0 / k as f32;
+    let norm_k = F::one() / F::usize_as(k);
     for r in 0..patch_size {
         for c in 0..patch_size {
-            let mut vec: Vec<rustfft::num_complex::Complex<f32>> =
+            let mut vec: Vec<Complex<F>> =
                 (0..k).map(|i| group[[i, r, c]]).collect();
             ifft_plan.process(&mut vec);
             for i in 0..k {
@@ -220,12 +224,12 @@ fn apply_inverse_1d_transform(
 /// Apply 2D inverse transform to a single patch slice.
 ///
 /// Uses IWHT for 8x8 patches, IFFT otherwise.
-fn apply_inverse_2d_transform(
-    complex_slice: &ndarray::Array2<rustfft::num_complex::Complex<f32>>,
+fn apply_inverse_2d_transform<F: Bm3dFloat>(
+    complex_slice: &ndarray::Array2<Complex<F>>,
     use_hadamard: bool,
-    ifft_row: &Arc<dyn Fft<f32>>,
-    ifft_col: &Arc<dyn Fft<f32>>,
-) -> Array2<f32> {
+    ifft_row: &Arc<dyn Fft<F>>,
+    ifft_col: &Arc<dyn Fft<F>>,
+) -> Array2<F> {
     if use_hadamard {
         transforms::wht2d_8x8_inverse(complex_slice)
     } else {
@@ -234,23 +238,23 @@ fn apply_inverse_2d_transform(
 }
 
 /// Aggregate a single denoised patch into the numerator and denominator accumulators.
-fn aggregate_patch(
-    spatial: &Array2<f32>,
-    m: &block_matching::PatchMatch,
-    weight: f32,
+fn aggregate_patch<F: Bm3dFloat>(
+    spatial: &Array2<F>,
+    m: &PatchMatch<F>,
+    weight: F,
     patch_size: usize,
     rows: usize,
     cols: usize,
-    numerator: &mut Array2<f32>,
-    denominator: &mut Array2<f32>,
+    numerator: &mut Array2<F>,
+    denominator: &mut Array2<F>,
 ) {
     for pr in 0..patch_size {
         for pc in 0..patch_size {
             let tr = m.row + pr;
             let tc = m.col + pc;
             if tr < rows && tc < cols {
-                numerator[[tr, tc]] += spatial[[pr, pc]] * weight;
-                denominator[[tr, tc]] += weight;
+                numerator[[tr, tc]] = numerator[[tr, tc]] + spatial[[pr, pc]] * weight;
+                denominator[[tr, tc]] = denominator[[tr, tc]] + weight;
             }
         }
     }
@@ -259,19 +263,20 @@ fn aggregate_patch(
 /// Finalize the output by dividing numerator by denominator.
 ///
 /// Falls back to original noisy input where denominator is too small.
-fn finalize_output(
-    final_num: &Array2<f32>,
-    final_den: &Array2<f32>,
-    input_noisy: ArrayView2<f32>,
-) -> Array2<f32> {
+fn finalize_output<F: Bm3dFloat>(
+    final_num: &Array2<F>,
+    final_den: &Array2<F>,
+    input_noisy: ArrayView2<F>,
+) -> Array2<F> {
     let (rows, cols) = input_noisy.dim();
-    let mut output = Array2::<f32>::zeros((rows, cols));
+    let mut output = Array2::<F>::zeros((rows, cols));
+    let agg_eps = F::from_f64_c(AGGREGATION_EPSILON);
 
     for r in 0..rows {
         for c in 0..cols {
             let num = final_num[[r, c]];
             let den = final_den[[r, c]];
-            if den > AGGREGATION_EPSILON {
+            if den > agg_eps {
                 output[[r, c]] = num / den;
             } else {
                 output[[r, c]] = input_noisy[[r, c]];
@@ -282,20 +287,20 @@ fn finalize_output(
 }
 
 /// Core BM3D Single Image Kernel
-pub fn run_bm3d_kernel(
-    input_noisy: ArrayView2<f32>,
-    input_pilot: ArrayView2<f32>,
+pub fn run_bm3d_kernel<F: Bm3dFloat>(
+    input_noisy: ArrayView2<F>,
+    input_pilot: ArrayView2<F>,
     mode: Bm3dMode,
-    sigma_psd: ArrayView2<f32>,
-    sigma_map: ArrayView2<f32>,
-    sigma_random: f32,
-    threshold: f32,
+    sigma_psd: ArrayView2<F>,
+    sigma_map: ArrayView2<F>,
+    sigma_random: F,
+    threshold: F,
     patch_size: usize,
     step_size: usize,
     search_window: usize,
     max_matches: usize,
-    plans: &Bm3dPlans,
-) -> Array2<f32> {
+    plans: &Bm3dPlans<F>,
+) -> Array2<F> {
     let (rows, cols) = input_noisy.dim();
     let use_sigma_map = sigma_map.dim() == (rows, cols);
     let use_colored_noise = sigma_psd.dim() == (patch_size, patch_size);
@@ -324,10 +329,13 @@ pub fn run_bm3d_kernel(
     let fft_1d_plans_ref = &plans.fft_1d_plans;
     let ifft_1d_plans_ref = &plans.ifft_1d_plans;
 
+    let wiener_eps = F::from_f64_c(WIENER_EPSILON);
+    let max_wiener_weight = F::from_f64_c(MAX_WIENER_WEIGHT);
+
     let (final_num, final_den) = ref_coords.par_iter()
         .with_min_len(RAYON_MIN_CHUNK_LEN)
         .fold(
-            || (Array2::<f32>::zeros((rows, cols)), Array2::<f32>::zeros((rows, cols))),
+            || (Array2::<F>::zeros((rows, cols)), Array2::<F>::zeros((rows, cols))),
             |mut acc, &(ref_r, ref_c)| {
                 let (numerator_acc, denominator_acc) = &mut acc;
 
@@ -346,7 +354,7 @@ pub fn run_bm3d_kernel(
                 if k == 0 { return acc; }
 
                 // 1.5 Local Noise Level
-                let local_sigma_streak = if use_sigma_map { sigma_map[[ref_r, ref_c]] } else { 0.0 };
+                let local_sigma_streak = if use_sigma_map { sigma_map[[ref_r, ref_c]] } else { F::zero() };
 
                 // Build patch groups
                 let (group_noisy, group_pilot) = build_patch_groups(
@@ -360,7 +368,7 @@ pub fn run_bm3d_kernel(
                 let mut g_pilot_c = if mode == Bm3dMode::Wiener {
                     apply_forward_2d_transform(&group_pilot, use_hadamard, fft_2d_row_ref, fft_2d_col_ref)
                 } else {
-                    ndarray::Array3::<rustfft::num_complex::Complex<f32>>::zeros((k, patch_size, patch_size))
+                    ndarray::Array3::<Complex<F>>::zeros((k, patch_size, patch_size))
                 };
 
                 // Forward 1D transforms along group dimension
@@ -371,14 +379,14 @@ pub fn run_bm3d_kernel(
                 }
 
                 // Filtering
-                let mut weight_g = 1.0;
-                let spatial_scale = patch_size as f32;
+                let mut weight_g = F::one();
+                let spatial_scale = F::usize_as(patch_size);
                 let spatial_scale_sq = spatial_scale * spatial_scale;
 
                 match mode {
                     Bm3dMode::HardThreshold => {
                         // Hard Thresholding
-                        let mut nz_count = 0;
+                        let mut nz_count = 0usize;
                         for i in 0..k {
                             for r in 0..patch_size {
                                 for c in 0..patch_size {
@@ -388,18 +396,18 @@ pub fn run_bm3d_kernel(
                                         scalar_sigma_sq, k, r, c, spatial_scale
                                     );
                                     if coeff.norm() < threshold * noise_std_coeff {
-                                        g_noisy_c[[i, r, c]] = rustfft::num_complex::Complex::new(0.0, 0.0);
+                                        g_noisy_c[[i, r, c]] = Complex::new(F::zero(), F::zero());
                                     } else {
                                         nz_count += 1;
                                     }
                                 }
                             }
                         }
-                        if nz_count > 0 { weight_g = 1.0 / (nz_count as f32 + 1.0); }
+                        if nz_count > 0 { weight_g = F::one() / (F::usize_as(nz_count) + F::one()); }
                     }
                     Bm3dMode::Wiener => {
                         // Wiener Filtering
-                        let mut wiener_sum = 0.0;
+                        let mut wiener_sum = F::zero();
                         for i in 0..k {
                             for r in 0..patch_size {
                                 for c in 0..patch_size {
@@ -409,14 +417,14 @@ pub fn run_bm3d_kernel(
                                         use_colored_noise, sigma_psd, local_sigma_streak,
                                         scalar_sigma_sq, k, r, c, spatial_scale_sq
                                     );
-                                    let w = p_val.norm_sqr() / (p_val.norm_sqr() + noise_var_coeff + WIENER_EPSILON);
+                                    let w = p_val.norm_sqr() / (p_val.norm_sqr() + noise_var_coeff + wiener_eps);
                                     g_noisy_c[[i, r, c]] = n_val * w;
-                                    wiener_sum += w * w;
+                                    wiener_sum = wiener_sum + w * w;
                                 }
                             }
                         }
-                        weight_g = 1.0 / (wiener_sum * scalar_sigma_sq + WIENER_EPSILON);
-                        if weight_g > MAX_WIENER_WEIGHT { weight_g = MAX_WIENER_WEIGHT; }
+                        weight_g = F::one() / (wiener_sum * scalar_sigma_sq + wiener_eps);
+                        if weight_g > max_wiener_weight { weight_g = max_wiener_weight; }
                     }
                 }
 
@@ -438,8 +446,8 @@ pub fn run_bm3d_kernel(
                 acc
             })
         .reduce(
-            || (Array2::<f32>::zeros((rows, cols)), Array2::<f32>::zeros((rows, cols))),
-            |mut a, b| { a.0 += &b.0; a.1 += &b.1; a }
+            || (Array2::<F>::zeros((rows, cols)), Array2::<F>::zeros((rows, cols))),
+            |mut a, b| { a.0 = &a.0 + &b.0; a.1 = &a.1 + &b.1; a }
         );
 
     // Finalize: divide numerator by denominator
@@ -448,19 +456,19 @@ pub fn run_bm3d_kernel(
 
 
 /// Run BM3D step on a single 2D image.
-pub fn run_bm3d_step(
-    input_noisy: ArrayView2<f32>,
-    input_pilot: ArrayView2<f32>,
+pub fn run_bm3d_step<F: Bm3dFloat>(
+    input_noisy: ArrayView2<F>,
+    input_pilot: ArrayView2<F>,
     mode: Bm3dMode,
-    sigma_psd: ArrayView2<f32>,
-    sigma_map: ArrayView2<f32>,
-    sigma_random: f32,
-    threshold: f32,
+    sigma_psd: ArrayView2<F>,
+    sigma_map: ArrayView2<F>,
+    sigma_random: F,
+    threshold: F,
     patch_size: usize,
     step_size: usize,
     search_window: usize,
     max_matches: usize,
-) -> Result<Array2<f32>, String> {
+) -> Result<Array2<F>, String> {
     if input_pilot.dim() != input_noisy.dim() {
         return Err(format!(
             "Dimension mismatch: input_noisy has shape {:?}, but input_pilot has shape {:?}",
@@ -479,19 +487,19 @@ pub fn run_bm3d_step(
 }
 
 /// Run BM3D step on a 3D stack of images.
-pub fn run_bm3d_step_stack(
-    input_noisy: ArrayView3<f32>,
-    input_pilot: ArrayView3<f32>,
+pub fn run_bm3d_step_stack<F: Bm3dFloat>(
+    input_noisy: ArrayView3<F>,
+    input_pilot: ArrayView3<F>,
     mode: Bm3dMode,
-    sigma_psd: ArrayView2<f32>,
-    sigma_map: ArrayView3<f32>,
-    sigma_random: f32,
-    threshold: f32,
+    sigma_psd: ArrayView2<F>,
+    sigma_map: ArrayView3<F>,
+    sigma_random: F,
+    threshold: F,
     patch_size: usize,
     step_size: usize,
     search_window: usize,
     max_matches: usize,
-) -> Result<Array3<f32>, String> {
+) -> Result<Array3<F>, String> {
     let (n, rows, cols) = input_noisy.dim();
     if input_pilot.dim() != (n, rows, cols) {
         return Err(format!(
@@ -508,7 +516,7 @@ pub fn run_bm3d_step_stack(
 
     let plans = Bm3dPlans::new(patch_size, max_matches);
 
-    let results: Vec<Array2<f32>> = (0..n).into_par_iter()
+    let results: Vec<Array2<F>> = (0..n).into_par_iter()
         .map(|i| {
             let noisy_slice = input_noisy.index_axis(Axis(0), i);
             let pilot_slice = input_pilot.index_axis(Axis(0), i);
@@ -526,7 +534,7 @@ pub fn run_bm3d_step_stack(
         .collect();
 
     // Consolidate
-    let mut output = Array3::<f32>::zeros((n, rows, cols));
+    let mut output = Array3::<F>::zeros((n, rows, cols));
     for (i, res) in results.into_iter().enumerate() {
         output.slice_mut(s![i, .., ..]).assign(&res);
     }
@@ -534,14 +542,14 @@ pub fn run_bm3d_step_stack(
 }
 
 /// Test function for block matching (used for debugging/validation).
-pub fn test_block_matching(
-    input: ArrayView2<f32>,
+pub fn test_block_matching<F: Bm3dFloat>(
+    input: ArrayView2<F>,
     ref_r: usize,
     ref_c: usize,
     patch_size: usize,
     search_win: usize,
     max_matches: usize,
-) -> Vec<(usize, usize, f32)> {
+) -> Vec<(usize, usize, F)> {
     let (sum_img, sq_sum_img) = block_matching::compute_integral_images(input);
     let matches = block_matching::find_similar_patches(
         input,
@@ -903,7 +911,7 @@ mod tests {
     #[test]
     fn test_constant_image_approximately_unchanged() {
         // Uniform image with no noise - output should be similar to input
-        let constant_val = 0.5;
+        let constant_val = 0.5f32;
         let image = Array2::<f32>::from_elem((32, 32), constant_val);
         let sigma_psd = dummy_sigma_psd();
         let sigma_map = dummy_sigma_map_2d();

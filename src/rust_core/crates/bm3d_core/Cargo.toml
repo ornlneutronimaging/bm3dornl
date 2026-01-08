@@ -10,6 +10,7 @@ crate-type = ["rlib"]
 
 [dependencies]
 ndarray = { workspace = true }
+num-traits = "0.2"
 rayon = { workspace = true }
 rustfft = { workspace = true }
 

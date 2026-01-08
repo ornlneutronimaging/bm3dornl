@@ -41,6 +41,7 @@ version = "0.1.0"
 dependencies = [
  "criterion",
  "ndarray",
+ "num-traits",
  "rand",
  "rayon",
  "rustfft",

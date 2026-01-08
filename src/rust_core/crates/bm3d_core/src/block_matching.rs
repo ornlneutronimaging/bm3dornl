@@ -1,22 +1,30 @@
 use ndarray::{Array2, ArrayView2, s};
 use std::cmp::Ordering;
 
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct PatchMatch {
+use crate::float_trait::Bm3dFloat;
+
+#[derive(Debug, Clone, Copy)]
+pub struct PatchMatch<F: Bm3dFloat> {
     pub row: usize,
     pub col: usize,
-    pub distance: f32,
+    pub distance: F,
 }
 
-impl Eq for PatchMatch {}
+impl<F: Bm3dFloat> PartialEq for PatchMatch<F> {
+    fn eq(&self, other: &Self) -> bool {
+        self.row == other.row && self.col == other.col && self.distance == other.distance
+    }
+}
 
-impl PartialOrd for PatchMatch {
+impl<F: Bm3dFloat> Eq for PatchMatch<F> {}
+
+impl<F: Bm3dFloat> PartialOrd for PatchMatch<F> {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         self.distance.partial_cmp(&other.distance)
     }
 }
 
-impl Ord for PatchMatch {
+impl<F: Bm3dFloat> Ord for PatchMatch<F> {
     fn cmp(&self, other: &Self) -> Ordering {
         self.partial_cmp(other).unwrap_or(Ordering::Equal)
     }
@@ -24,12 +32,12 @@ impl Ord for PatchMatch {
 
 /// Compute squared L2 distance between two patches with early termination.
 #[inline]
-fn compute_squared_distance(p1: ArrayView2<f32>, p2: ArrayView2<f32>, threshold: f32) -> f32 {
-    let mut sum_sq = 0.0;
+fn compute_squared_distance<F: Bm3dFloat>(p1: ArrayView2<F>, p2: ArrayView2<F>, threshold: F) -> F {
+    let mut sum_sq = F::zero();
     for (r1, r2) in p1.outer_iter().zip(p2.outer_iter()) {
         for (a, b) in r1.iter().zip(r2.iter()) {
             let diff = *a - *b;
-            sum_sq += diff * diff;
+            sum_sq = sum_sq + diff * diff;
         }
         if sum_sq >= threshold {
             return sum_sq;
@@ -46,19 +54,19 @@ fn compute_squared_distance(p1: ArrayView2<f32>, p2: ArrayView2<f32>, threshold:
 /// 2. Compute Norm Difference Bound: (norm1 - norm2)^2
 /// If either bound exceeds threshold, we skip strict distance calculation.
 /// Returns (Sum, SqSum). Indexing: [row+1, col+1].
-pub fn compute_integral_images(image: ArrayView2<f32>) -> (Array2<f32>, Array2<f32>) {
+pub fn compute_integral_images<F: Bm3dFloat>(image: ArrayView2<F>) -> (Array2<F>, Array2<F>) {
     let (h, w) = image.dim();
-    let mut sum_img = Array2::<f32>::zeros((h + 1, w + 1));
-    let mut sq_sum_img = Array2::<f32>::zeros((h + 1, w + 1));
-    
+    let mut sum_img = Array2::<F>::zeros((h + 1, w + 1));
+    let mut sq_sum_img = Array2::<F>::zeros((h + 1, w + 1));
+
     for r in 0..h {
-        let mut row_sum = 0.0;
-        let mut row_sq_sum = 0.0;
+        let mut row_sum = F::zero();
+        let mut row_sq_sum = F::zero();
         for c in 0..w {
             let val = image[[r, c]];
-            row_sum += val;
-            row_sq_sum += val * val;
-            
+            row_sum = row_sum + val;
+            row_sq_sum = row_sq_sum + val * val;
+
             sum_img[[r + 1, c + 1]] = sum_img[[r, c + 1]] + row_sum;
             sq_sum_img[[r + 1, c + 1]] = sq_sum_img[[r, c + 1]] + row_sq_sum;
         }
@@ -67,39 +75,39 @@ pub fn compute_integral_images(image: ArrayView2<f32>) -> (Array2<f32>, Array2<f
 }
 
 #[inline(always)]
-fn get_patch_sums(
-    sum_img: &Array2<f32>,
-    sq_sum_img: &Array2<f32>,
+fn get_patch_sums<F: Bm3dFloat>(
+    sum_img: &Array2<F>,
+    sq_sum_img: &Array2<F>,
     r: usize, c: usize, h: usize, w: usize
-) -> (f32, f32) {
+) -> (F, F) {
     let r1 = r;
     let c1 = c;
     let r2 = r + h;
     let c2 = c + w;
-    
+
     let sum = sum_img[[r2, c2]] - sum_img[[r1, c2]] - sum_img[[r2, c1]] + sum_img[[r1, c1]];
     let sq_sum = sq_sum_img[[r2, c2]] - sq_sum_img[[r1, c2]] - sq_sum_img[[r2, c1]] + sq_sum_img[[r1, c1]];
-    
+
     (sum, sq_sum)
 }
 
 /// Find similar patches within a search window using Integral Image Pre-Screening.
-pub fn find_similar_patches(
-    image: ArrayView2<f32>,
-    integral_sum: &Array2<f32>,
-    integral_sq_sum: &Array2<f32>,
+pub fn find_similar_patches<F: Bm3dFloat>(
+    image: ArrayView2<F>,
+    integral_sum: &Array2<F>,
+    integral_sq_sum: &Array2<F>,
     ref_pos: (usize, usize),
     patch_size: (usize, usize),
     search_window: (usize, usize),
     max_matches: usize,
     step: usize,
-) -> Vec<PatchMatch> {
+) -> Vec<PatchMatch<F>> {
     let (ref_r, ref_c) = ref_pos;
     let (ph, pw) = patch_size;
     let (h, w) = image.dim();
 
     let ref_patch = image.slice(s![ref_r..ref_r + ph, ref_c..ref_c + pw]);
-    
+
     let search_r_start = ref_r.saturating_sub(search_window.0 / 2);
     let search_r_end = (ref_r + search_window.0 / 2).min(h - ph);
     let search_c_start = ref_c.saturating_sub(search_window.1 / 2);
@@ -107,14 +115,14 @@ pub fn find_similar_patches(
 
     let mut heap = std::collections::BinaryHeap::with_capacity(max_matches + 1);
 
-    heap.push(PatchMatch { row: ref_r, col: ref_c, distance: 0.0 });
+    heap.push(PatchMatch { row: ref_r, col: ref_c, distance: F::zero() });
 
-    let mut threshold = if max_matches > 1 { f32::MAX } else { 0.0 };
-    
+    let mut threshold = if max_matches > 1 { F::max_value() } else { F::zero() };
+
     // Pre-calculate Reference stats
     let (ref_sum, ref_sq_sum) = get_patch_sums(integral_sum, integral_sq_sum, ref_r, ref_c, ph, pw);
-    let ref_norm = ref_sq_sum.max(0.0).sqrt(); 
-    let inv_n = 1.0 / ((ph * pw) as f32);
+    let ref_norm = ref_sq_sum.max(F::zero()).sqrt();
+    let inv_n = F::one() / F::usize_as(ph * pw);
 
     for r in (search_r_start..=search_r_end).step_by(step) {
         for c in (search_c_start..=search_c_end).step_by(step) {
@@ -124,21 +132,21 @@ pub fn find_similar_patches(
             // Bound 1: Mean Difference: (sum1 - sum2)^2 / N
             // Bound 2: Norm Difference: (norm1 - norm2)^2
             // If Max(Bound) > threshold, skip.
-            
+
             let (cand_sum, cand_sq_sum) = get_patch_sums(integral_sum, integral_sq_sum, r, c, ph, pw);
             let check_threshold = threshold;
-            
+
             // Mean Bound
             let diff_sum = cand_sum - ref_sum;
             let lb_mean = (diff_sum * diff_sum) * inv_n;
             if lb_mean >= check_threshold { continue; }
-            
+
             // Norm Bound
-            let cand_norm = cand_sq_sum.max(0.0).sqrt();
+            let cand_norm = cand_sq_sum.max(F::zero()).sqrt();
             let diff_norm = (cand_norm - ref_norm).abs();
             let lb_norm = diff_norm * diff_norm;
             if lb_norm >= check_threshold { continue; }
-            
+
             // 2. Full Distance Calculation
             let candidate_patch = image.slice(s![r..r + ph, c..c + pw]);
             let dist = compute_squared_distance(ref_patch, candidate_patch, threshold);
@@ -157,10 +165,10 @@ pub fn find_similar_patches(
             }
         }
     }
-    
+
     let mut sorted_matches = heap.into_vec();
-    sorted_matches.sort_by(|a, b| a.distance.partial_cmp(&b.distance).unwrap());
-    
+    sorted_matches.sort_by(|a, b| a.distance.partial_cmp(&b.distance).unwrap_or(Ordering::Equal));
+
     sorted_matches
 }
 
@@ -192,12 +200,23 @@ mod tests {
             let u = self.next_u64();
             (u >> 40) as f32 / (1u64 << 24) as f32
         }
+
+        fn next_f64(&mut self) -> f64 {
+            // Generate f64 in range [0.0, 1.0)
+            let u = self.next_u64();
+            (u >> 11) as f64 / (1u64 << 53) as f64
+        }
     }
 
     // Helper: Generate deterministic "random" matrix
-    fn random_matrix(rows: usize, cols: usize, seed: u64) -> Array2<f32> {
+    fn random_matrix_f32(rows: usize, cols: usize, seed: u64) -> Array2<f32> {
         let mut rng = SimpleLcg::new(seed);
         Array2::from_shape_fn((rows, cols), |_| rng.next_f32())
+    }
+
+    fn random_matrix_f64(rows: usize, cols: usize, seed: u64) -> Array2<f64> {
+        let mut rng = SimpleLcg::new(seed);
+        Array2::from_shape_fn((rows, cols), |_| rng.next_f64())
     }
 
     // ==================== PatchMatch Struct Tests ====================
@@ -205,9 +224,9 @@ mod tests {
     #[test]
     fn test_patch_match_ordering_by_distance() {
         // Verify Ord impl sorts by distance ascending (for min-heap behavior with BinaryHeap)
-        let p1 = PatchMatch { row: 0, col: 0, distance: 1.0 };
-        let p2 = PatchMatch { row: 1, col: 1, distance: 2.0 };
-        let p3 = PatchMatch { row: 2, col: 2, distance: 0.5 };
+        let p1: PatchMatch<f32> = PatchMatch { row: 0, col: 0, distance: 1.0 };
+        let p2: PatchMatch<f32> = PatchMatch { row: 1, col: 1, distance: 2.0 };
+        let p3: PatchMatch<f32> = PatchMatch { row: 2, col: 2, distance: 0.5 };
 
         // Ord comparison: smaller distance should be Less
         assert!(p3 < p1, "0.5 should be less than 1.0");
@@ -218,7 +237,7 @@ mod tests {
     #[test]
     fn test_patch_match_heap_behavior() {
         // BinaryHeap is a max-heap, so largest distance pops first
-        let mut heap = BinaryHeap::new();
+        let mut heap: BinaryHeap<PatchMatch<f32>> = BinaryHeap::new();
         heap.push(PatchMatch { row: 0, col: 0, distance: 1.0 });
         heap.push(PatchMatch { row: 1, col: 1, distance: 3.0 });
         heap.push(PatchMatch { row: 2, col: 2, distance: 2.0 });
@@ -241,8 +260,8 @@ mod tests {
     #[test]
     fn test_patch_match_equal_distance() {
         // When distances are equal, Ord should return Equal
-        let p1 = PatchMatch { row: 0, col: 0, distance: 1.0 };
-        let p2 = PatchMatch { row: 5, col: 5, distance: 1.0 };
+        let p1: PatchMatch<f32> = PatchMatch { row: 0, col: 0, distance: 1.0 };
+        let p2: PatchMatch<f32> = PatchMatch { row: 5, col: 5, distance: 1.0 };
 
         assert_eq!(p1.cmp(&p2), Ordering::Equal, "Equal distances should compare as Equal");
         assert_eq!(p1.partial_cmp(&p2), Some(Ordering::Equal));
@@ -251,7 +270,7 @@ mod tests {
     #[test]
     fn test_patch_match_heap_with_equal_distances() {
         // Verify heap handles equal distances without panic
-        let mut heap = BinaryHeap::new();
+        let mut heap: BinaryHeap<PatchMatch<f32>> = BinaryHeap::new();
         heap.push(PatchMatch { row: 0, col: 0, distance: 1.0 });
         heap.push(PatchMatch { row: 1, col: 1, distance: 1.0 });
         heap.push(PatchMatch { row: 2, col: 2, distance: 1.0 });
@@ -303,6 +322,20 @@ mod tests {
         assert_eq!(sq_sum_img[[1, 2]], 5.0);   // 1 + 4
         assert_eq!(sq_sum_img[[2, 1]], 10.0);  // 1 + 9
         assert_eq!(sq_sum_img[[2, 2]], 30.0);  // 1 + 4 + 9 + 16
+    }
+
+    #[test]
+    fn test_integral_image_simple_f64() {
+        let mut input = Array2::<f64>::zeros((2, 2));
+        input[[0, 0]] = 1.0;
+        input[[0, 1]] = 2.0;
+        input[[1, 0]] = 3.0;
+        input[[1, 1]] = 4.0;
+
+        let (sum_img, sq_sum_img) = compute_integral_images(input.view());
+
+        assert_eq!(sum_img[[2, 2]], 10.0);
+        assert_eq!(sq_sum_img[[2, 2]], 30.0);
     }
 
     #[test]
@@ -437,7 +470,7 @@ mod tests {
     #[test]
     fn test_find_similar_self_match() {
         // Reference patch should always be included with distance ≈ 0
-        let image = random_matrix(16, 16, 12345);
+        let image = random_matrix_f32(16, 16, 12345);
         let (sum_img, sq_sum_img) = compute_integral_images(image.view());
 
         let matches = find_similar_patches(
@@ -457,6 +490,29 @@ mod tests {
         assert_eq!(self_match.unwrap().distance, 0.0, "Self-match distance should be 0");
 
         // Self-match should be first (smallest distance)
+        assert_eq!(matches[0].row, 4);
+        assert_eq!(matches[0].col, 4);
+        assert_eq!(matches[0].distance, 0.0);
+    }
+
+    #[test]
+    fn test_find_similar_f64() {
+        // Test with f64 precision
+        let image = random_matrix_f64(16, 16, 12345);
+        let (sum_img, sq_sum_img) = compute_integral_images(image.view());
+
+        let matches = find_similar_patches(
+            image.view(),
+            &sum_img,
+            &sq_sum_img,
+            (4, 4),
+            (4, 4),
+            (8, 8),
+            10,
+            1,
+        );
+
+        // Self-match should be at distance 0
         assert_eq!(matches[0].row, 4);
         assert_eq!(matches[0].col, 4);
         assert_eq!(matches[0].distance, 0.0);
@@ -498,7 +554,7 @@ mod tests {
 
     #[test]
     fn test_find_similar_respects_max_matches() {
-        let image = random_matrix(32, 32, 54321);
+        let image = random_matrix_f32(32, 32, 54321);
         let (sum_img, sq_sum_img) = compute_integral_images(image.view());
 
         for max_matches in [1, 5, 10, 20] {
@@ -524,7 +580,7 @@ mod tests {
     #[test]
     fn test_find_similar_search_window() {
         // Large image, small search window - only finds patches within window
-        let image = random_matrix(32, 32, 99999);
+        let image = random_matrix_f32(32, 32, 99999);
         let (sum_img, sq_sum_img) = compute_integral_images(image.view());
 
         let ref_pos = (16, 16);
@@ -562,7 +618,7 @@ mod tests {
     #[test]
     fn test_find_similar_boundary_patch() {
         // Reference patch at image edge - should not panic
-        let image = random_matrix(16, 16, 11111);
+        let image = random_matrix_f32(16, 16, 11111);
         let (sum_img, sq_sum_img) = compute_integral_images(image.view());
 
         // Top-left corner
@@ -595,7 +651,7 @@ mod tests {
     #[test]
     fn test_find_similar_results_sorted() {
         // Verify results are sorted by distance (ascending)
-        let image = random_matrix(24, 24, 77777);
+        let image = random_matrix_f32(24, 24, 77777);
         let (sum_img, sq_sum_img) = compute_integral_images(image.view());
 
         let matches = find_similar_patches(
@@ -621,7 +677,7 @@ mod tests {
     #[test]
     fn test_find_similar_with_step() {
         // Verify step parameter affects search
-        let image = random_matrix(32, 32, 88888);
+        let image = random_matrix_f32(32, 32, 88888);
         let (sum_img, sq_sum_img) = compute_integral_images(image.view());
 
         let matches_step1 = find_similar_patches(
@@ -660,7 +716,7 @@ mod tests {
     #[test]
     fn test_find_similar_minimum_image() {
         // Smallest valid image for a 4x4 patch
-        let image = random_matrix(4, 4, 22222);
+        let image = random_matrix_f32(4, 4, 22222);
         let (sum_img, sq_sum_img) = compute_integral_images(image.view());
 
         let matches = find_similar_patches(
@@ -684,7 +740,7 @@ mod tests {
     #[test]
     fn test_find_similar_patch_equals_image() {
         // Patch size equals image size - only one possible patch (self)
-        let image = random_matrix(8, 8, 33333);
+        let image = random_matrix_f32(8, 8, 33333);
         let (sum_img, sq_sum_img) = compute_integral_images(image.view());
 
         let matches = find_similar_patches(
