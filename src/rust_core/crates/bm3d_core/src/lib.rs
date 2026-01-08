@@ -12,6 +12,7 @@
 pub mod block_matching;
 pub mod filtering;
 pub mod float_trait;
+pub mod multiscale;
 pub mod orchestration;
 pub mod pipeline;
 pub mod streak;
@@ -20,6 +21,7 @@ pub mod transforms;
 // Re-export commonly used types at the crate root
 pub use block_matching::PatchMatch;
 pub use float_trait::Bm3dFloat;
+pub use multiscale::{multiscale_bm3d_streak_removal, MultiscaleConfig};
 pub use orchestration::{bm3d_ring_artifact_removal, Bm3dConfig, RingRemovalMode};
 pub use pipeline::{Bm3dMode, Bm3dPlans, run_bm3d_kernel, run_bm3d_step, run_bm3d_step_stack};
 pub use streak::estimate_streak_profile_impl;

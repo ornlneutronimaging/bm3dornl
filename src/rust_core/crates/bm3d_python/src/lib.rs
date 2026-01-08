@@ -12,6 +12,7 @@ use numpy::{PyReadonlyArray2, PyArray2, PyReadonlyArray3, PyArray3, ToPyArray, P
 
 use bm3d_core::{Bm3dMode, run_bm3d_step, run_bm3d_step_stack};
 use bm3d_core::{bm3d_ring_artifact_removal, Bm3dConfig, RingRemovalMode};
+use bm3d_core::{multiscale_bm3d_streak_removal, MultiscaleConfig};
 
 /// Hard thresholding step of BM3D for a single 2D image.
 #[pyfunction]
@@ -512,6 +513,141 @@ pub fn bm3d_ring_artifact_removal_2d_f64<'py>(
     Ok(output.to_pyarray(py))
 }
 
+// ============================================================================
+// Multi-Scale BM3D Streak Removal
+// ============================================================================
+
+/// Multi-scale BM3D streak removal for 2D sinograms (f32 precision).
+///
+/// This function wraps single-scale BM3D in a coarse-to-fine pyramid
+/// for handling wide streaks that single-scale cannot capture.
+///
+/// Parameters
+/// ----------
+/// sinogram : numpy.ndarray
+///     Input 2D sinogram (H × W), dtype float32. Assumes log-transformed data.
+/// num_scales : int, optional
+///     Override automatic scale calculation. If None, uses floor(log2(width/40)).
+/// filter_strength : float, optional
+///     Multiplier for BM3D filtering intensity. Default: 1.0
+/// threshold : float, optional
+///     Hard threshold coefficient. Default: 3.5 (note: different from single-scale 2.7)
+/// debin_iterations : int, optional
+///     Iterations for cubic spline debinning. Default: 30
+/// patch_size : int, optional
+///     Block matching patch size. Default: 8
+/// step_size : int, optional
+///     Stride between patches. Default: 4
+/// search_window : int, optional
+///     Search window size for block matching. Default: 24
+/// max_matches : int, optional
+///     Maximum similar patches per group. Default: 16
+///
+/// Returns
+/// -------
+/// numpy.ndarray
+///     Denoised sinogram with same shape as input.
+#[pyfunction]
+#[pyo3(signature = (
+    sinogram,
+    num_scales = None,
+    filter_strength = None,
+    threshold = None,
+    debin_iterations = None,
+    patch_size = None,
+    step_size = None,
+    search_window = None,
+    max_matches = None
+))]
+pub fn multiscale_bm3d_streak_removal_2d<'py>(
+    py: Python<'py>,
+    sinogram: PyReadonlyArray2<f32>,
+    num_scales: Option<usize>,
+    filter_strength: Option<f32>,
+    threshold: Option<f32>,
+    debin_iterations: Option<usize>,
+    patch_size: Option<usize>,
+    step_size: Option<usize>,
+    search_window: Option<usize>,
+    max_matches: Option<usize>,
+) -> PyResult<&'py PyArray2<f32>> {
+    // Build config with defaults
+    let mut config: MultiscaleConfig<f32> = MultiscaleConfig::default();
+
+    config.num_scales = num_scales;
+    if let Some(v) = filter_strength { config.filter_strength = v; }
+    if let Some(v) = threshold {
+        config.threshold = v;
+        // Also set inner BM3D threshold for num_scales=0 case
+        config.bm3d_config.threshold = v;
+    }
+    if let Some(v) = debin_iterations { config.debin_iterations = v; }
+    if let Some(v) = patch_size { config.bm3d_config.patch_size = v; }
+    if let Some(v) = step_size { config.bm3d_config.step_size = v; }
+    if let Some(v) = search_window { config.bm3d_config.search_window = v; }
+    if let Some(v) = max_matches { config.bm3d_config.max_matches = v; }
+
+    // Call Rust implementation
+    let output = multiscale_bm3d_streak_removal(
+        sinogram.as_array(),
+        &config,
+    ).map_err(|e| pyo3::exceptions::PyValueError::new_err(e))?;
+
+    Ok(output.to_pyarray(py))
+}
+
+/// Multi-scale BM3D streak removal for 2D sinograms (f64 precision).
+///
+/// See `multiscale_bm3d_streak_removal_2d` for full documentation.
+#[pyfunction]
+#[pyo3(signature = (
+    sinogram,
+    num_scales = None,
+    filter_strength = None,
+    threshold = None,
+    debin_iterations = None,
+    patch_size = None,
+    step_size = None,
+    search_window = None,
+    max_matches = None
+))]
+pub fn multiscale_bm3d_streak_removal_2d_f64<'py>(
+    py: Python<'py>,
+    sinogram: PyReadonlyArray2<f64>,
+    num_scales: Option<usize>,
+    filter_strength: Option<f64>,
+    threshold: Option<f64>,
+    debin_iterations: Option<usize>,
+    patch_size: Option<usize>,
+    step_size: Option<usize>,
+    search_window: Option<usize>,
+    max_matches: Option<usize>,
+) -> PyResult<&'py PyArray2<f64>> {
+    // Build config with defaults
+    let mut config: MultiscaleConfig<f64> = MultiscaleConfig::default();
+
+    config.num_scales = num_scales;
+    if let Some(v) = filter_strength { config.filter_strength = v; }
+    if let Some(v) = threshold {
+        config.threshold = v;
+        // Also set inner BM3D threshold for num_scales=0 case
+        config.bm3d_config.threshold = v;
+    }
+    if let Some(v) = debin_iterations { config.debin_iterations = v; }
+    if let Some(v) = patch_size { config.bm3d_config.patch_size = v; }
+    if let Some(v) = step_size { config.bm3d_config.step_size = v; }
+    if let Some(v) = search_window { config.bm3d_config.search_window = v; }
+    if let Some(v) = max_matches { config.bm3d_config.max_matches = v; }
+
+    // Call Rust implementation
+    let output = multiscale_bm3d_streak_removal(
+        sinogram.as_array(),
+        &config,
+    ).map_err(|e| pyo3::exceptions::PyValueError::new_err(e))?;
+
+    Ok(output.to_pyarray(py))
+}
+
 /// BM3D Rust accelerator module
 #[pymodule]
 fn bm3d_rust(_py: Python, m: &PyModule) -> PyResult<()> {
@@ -523,6 +659,7 @@ fn bm3d_rust(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(test_block_matching_rust, m)?)?;
     m.add_function(wrap_pyfunction!(estimate_streak_profile_py, m)?)?;
     m.add_function(wrap_pyfunction!(bm3d_ring_artifact_removal_2d, m)?)?;
+    m.add_function(wrap_pyfunction!(multiscale_bm3d_streak_removal_2d, m)?)?;
 
     // f64 (double precision) functions
     m.add_function(wrap_pyfunction!(bm3d_hard_thresholding_f64, m)?)?;
@@ -532,5 +669,6 @@ fn bm3d_rust(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(test_block_matching_rust_f64, m)?)?;
     m.add_function(wrap_pyfunction!(estimate_streak_profile_py_f64, m)?)?;
     m.add_function(wrap_pyfunction!(bm3d_ring_artifact_removal_2d_f64, m)?)?;
+    m.add_function(wrap_pyfunction!(multiscale_bm3d_streak_removal_2d_f64, m)?)?;
     Ok(())
 }

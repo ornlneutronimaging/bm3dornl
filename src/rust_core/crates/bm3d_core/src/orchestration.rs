@@ -55,6 +55,9 @@ const DEFAULT_STREAK_SIGMA_SCALE: f64 = 1.1;
 /// Default PSD Gaussian width for streak mode
 const DEFAULT_PSD_WIDTH: f64 = 0.6;
 
+/// Default filter strength multiplier
+const DEFAULT_FILTER_STRENGTH: f64 = 1.0;
+
 /// Fixed sigma for streak profile estimation when computing sigma map
 const SIGMA_MAP_STREAK_SIGMA: f64 = 5.0;
 
@@ -107,6 +110,8 @@ pub struct Bm3dConfig<F: Bm3dFloat> {
     pub streak_sigma_scale: F,
     /// PSD Gaussian width for streak mode. Default: 0.6
     pub psd_width: F,
+    /// Filter strength multiplier (affects BM3D thresholding). Default: 1.0
+    pub filter_strength: F,
 }
 
 impl<F: Bm3dFloat> Default for Bm3dConfig<F> {
@@ -123,6 +128,7 @@ impl<F: Bm3dFloat> Default for Bm3dConfig<F> {
             sigma_map_smoothing: F::from_f64_c(DEFAULT_SIGMA_MAP_SMOOTHING),
             streak_sigma_scale: F::from_f64_c(DEFAULT_STREAK_SIGMA_SCALE),
             psd_width: F::from_f64_c(DEFAULT_PSD_WIDTH),
+            filter_strength: F::from_f64_c(DEFAULT_FILTER_STRENGTH),
         }
     }
 }
@@ -152,6 +158,9 @@ impl<F: Bm3dFloat> Bm3dConfig<F> {
         }
         if self.threshold < F::zero() {
             return Err("threshold must be >= 0".to_string());
+        }
+        if self.filter_strength <= F::zero() {
+            return Err("filter_strength must be > 0".to_string());
         }
         Ok(())
     }
@@ -444,6 +453,7 @@ mod tests {
         assert!(approx_eq(config.sigma_map_smoothing, 20.0, 1e-6));
         assert!(approx_eq(config.streak_sigma_scale, 1.1, 1e-6));
         assert!(approx_eq(config.psd_width, 0.6, 1e-6));
+        assert!(approx_eq(config.filter_strength, 1.0, 1e-6));
     }
 
     #[test]

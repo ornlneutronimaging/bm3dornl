@@ -46,6 +46,10 @@ def bm3d_ring_artifact_removal(
     sigma: float = 0.1,
     block_matching_kwargs: dict = default_block_matching_kwargs,
     filter_kwargs: dict = default_filter_kwargs,
+    multiscale: bool = False,
+    num_scales: int | None = None,
+    filter_strength: float = 1.0,
+    debin_iterations: int = 30,
 ) -> np.ndarray:
     """Remove ring artifacts (streaks) from a sinogram or a stack of sinograms.
 
@@ -84,12 +88,32 @@ def bm3d_ring_artifact_removal(
         - psd_width (float): PSD Gaussian width for streak mode (default 0.6).
         - threshold (float): Hard thresholding coefficient (default 2.7).
         By default `default_filter_kwargs`.
+    multiscale : bool, optional
+        If True, use multi-scale BM3D for handling wide streaks.
+        Only supported with mode="streak". By default False.
+    num_scales : int | None, optional
+        Override automatic scale calculation for multi-scale mode.
+        If None, uses floor(log2(width/40)). By default None.
+    filter_strength : float, optional
+        Multiplier for BM3D filtering intensity (multi-scale only). By default 1.0.
+    debin_iterations : int, optional
+        Iterations for cubic spline debinning (multi-scale only). By default 30.
 
     Returns
     -------
     np.ndarray
         Denoised data with same shape as input.
+
+    Raises
+    ------
+    ValueError
+        If multiscale=True with mode other than "streak".
     """
+    # Validate multiscale + mode combination
+    if multiscale and mode != "streak":
+        raise ValueError(
+            f"multiscale=True only supports mode='streak', got mode='{mode}'"
+        )
     # Unpack parameters
     patch_size = block_matching_kwargs.get("patch_size", 8)
     if isinstance(patch_size, tuple):
@@ -124,25 +148,59 @@ def bm3d_ring_artifact_removal(
         # =====================================================================
         sinogram_f32 = np.ascontiguousarray(sinogram, dtype=np.float32)
 
-        return bm3d_rust.bm3d_ring_artifact_removal_2d(
-            sinogram_f32,
-            mode,
-            sigma_random=float(sigma),
-            patch_size=patch_size_dim,
-            step_size=step_size,
-            search_window=search_window,
-            max_matches=num_patches,
-            threshold=threshold_hard,
-            streak_sigma_smooth=sigma_smooth,
-            streak_iterations=streak_iterations,
-            sigma_map_smoothing=sigma_map_smoothing,
-            streak_sigma_scale=scale_factor,
-            psd_width=psd_width,
-        )
+        if multiscale:
+            # Multi-scale BM3D (streak mode only, validated above)
+            return bm3d_rust.multiscale_bm3d_streak_removal_2d(
+                sinogram_f32,
+                num_scales=num_scales,
+                filter_strength=filter_strength,
+                threshold=threshold_hard,
+                debin_iterations=debin_iterations,
+                patch_size=patch_size_dim,
+                step_size=step_size,
+                search_window=search_window,
+                max_matches=num_patches,
+            )
+        else:
+            # Single-scale BM3D
+            return bm3d_rust.bm3d_ring_artifact_removal_2d(
+                sinogram_f32,
+                mode,
+                sigma_random=float(sigma),
+                patch_size=patch_size_dim,
+                step_size=step_size,
+                search_window=search_window,
+                max_matches=num_patches,
+                threshold=threshold_hard,
+                streak_sigma_smooth=sigma_smooth,
+                streak_iterations=streak_iterations,
+                sigma_map_smoothing=sigma_map_smoothing,
+                streak_sigma_scale=scale_factor,
+                psd_width=psd_width,
+            )
 
     # =========================================================================
     # 3D Case: Python-orchestrated batch processing
     # =========================================================================
+
+    # Handle 3D + multiscale: process slice-by-slice
+    if multiscale:
+        n_slices = sinogram.shape[0]
+        output_result = np.empty_like(sinogram, dtype=np.float32)
+        for i in range(n_slices):
+            slice_f32 = np.ascontiguousarray(sinogram[i], dtype=np.float32)
+            output_result[i] = bm3d_rust.multiscale_bm3d_streak_removal_2d(
+                slice_f32,
+                num_scales=num_scales,
+                filter_strength=filter_strength,
+                threshold=threshold_hard,
+                debin_iterations=debin_iterations,
+                patch_size=patch_size_dim,
+                step_size=step_size,
+                search_window=search_window,
+                max_matches=num_patches,
+            )
+        return output_result
 
     # 1. Global Stats (Min/Max)
     d_min = float(sinogram.min())
