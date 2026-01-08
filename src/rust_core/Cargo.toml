@@ -13,3 +13,14 @@ numpy = "0.20"
 ndarray = "0.15"
 rayon = "1.8"
 rustfft = "6.2"
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+rand = "0.8"
+
+[[bench]]
+name = "bm3d_benchmarks"
+harness = false
+# Benchmark builds against rlib, but we only have cdylib.
+# This benchmark file imports its own implementations.
+required-features = []
