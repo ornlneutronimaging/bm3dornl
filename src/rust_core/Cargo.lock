@@ -36,16 +36,24 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "812e12b5285cc515a9c72a5c1d3b6d46a19dac5acfef5265968c166106e31dd3"
 
 [[package]]
-name = "bm3d_rust"
+name = "bm3d_core"
 version = "0.1.0"
 dependencies = [
  "criterion",
  "ndarray",
- "numpy",
- "pyo3",
  "rand",
  "rayon",
  "rustfft",
+]
+
+[[package]]
+name = "bm3d_python"
+version = "0.1.0"
+dependencies = [
+ "bm3d_core",
+ "ndarray",
+ "numpy",
+ "pyo3",
 ]
 
 [[package]]

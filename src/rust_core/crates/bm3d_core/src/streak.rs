@@ -5,8 +5,6 @@
 //! and median filtering.
 
 use ndarray::{Array1, Array2, ArrayView1, ArrayView2};
-use numpy::{PyArray1, PyReadonlyArray2};
-use pyo3::prelude::*;
 
 // =============================================================================
 // Constants for Streak Profile Estimation
@@ -233,20 +231,6 @@ pub fn estimate_streak_profile_impl(
     }
 
     streak_acc
-}
-
-/// PyO3 wrapper for estimate_streak_profile_impl.
-#[pyfunction]
-#[pyo3(name = "estimate_streak_profile_rust")]
-pub fn estimate_streak_profile_py(
-    py: Python<'_>,
-    sinogram: PyReadonlyArray2<f32>,
-    sigma_smooth: f32,
-    iterations: usize,
-) -> PyResult<Py<PyArray1<f32>>> {
-    let sinogram_view = sinogram.as_array();
-    let result = estimate_streak_profile_impl(sinogram_view, sigma_smooth, iterations);
-    Ok(PyArray1::from_owned_array(py, result).into())
 }
 
 #[cfg(test)]

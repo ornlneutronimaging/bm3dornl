@@ -1,0 +1,15 @@
+[package]
+name = "bm3d_python"
+version = "0.1.0"
+edition = "2021"
+description = "PyO3 Python bindings for BM3D denoising"
+
+[lib]
+name = "bm3d_rust"
+crate-type = ["cdylib"]
+
+[dependencies]
+bm3d_core = { path = "../bm3d_core" }
+pyo3 = { version = "0.20", features = ["extension-module"] }
+numpy = "0.20"
+ndarray = { workspace = true }

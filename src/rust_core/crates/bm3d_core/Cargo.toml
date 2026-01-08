@@ -1,0 +1,22 @@
+[package]
+name = "bm3d_core"
+version = "0.1.0"
+edition = "2021"
+description = "Pure Rust BM3D denoising algorithm core"
+
+[lib]
+name = "bm3d_core"
+crate-type = ["rlib"]
+
+[dependencies]
+ndarray = { workspace = true }
+rayon = { workspace = true }
+rustfft = { workspace = true }
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+rand = "0.8"
+
+[[bench]]
+name = "bm3d_benchmarks"
+harness = false

@@ -1,9 +1,12 @@
-use pyo3::prelude::*;
-use numpy::{PyReadonlyArray2, PyArray2, PyReadonlyArray3, PyArray3, ToPyArray};
+//! BM3D Pipeline - Core denoising kernel and multi-image processing.
+
 use rayon::prelude::*;
 use ndarray::{Array2, Array3, ArrayView2, ArrayView3, s, Axis};
 use std::sync::Arc;
 use rustfft::Fft;
+
+use crate::block_matching;
+use crate::transforms;
 
 // =============================================================================
 // Constants for BM3D Pipeline
@@ -57,19 +60,20 @@ pub struct Bm3dPlans {
 }
 
 impl Bm3dPlans {
-    fn new(patch_size: usize, max_matches: usize) -> Self {
+    /// Create new BM3D plans for the given patch size and maximum matches.
+    pub fn new(patch_size: usize, max_matches: usize) -> Self {
         let mut planner = rustfft::FftPlanner::new();
         let fft_2d_row = planner.plan_fft_forward(patch_size);
         let fft_2d_col = planner.plan_fft_forward(patch_size);
         let ifft_2d_row = planner.plan_fft_inverse(patch_size);
         let ifft_2d_col = planner.plan_fft_inverse(patch_size);
-        
+
         let mut fft_1d_plans = Vec::with_capacity(max_matches + 1);
         let mut ifft_1d_plans = Vec::with_capacity(max_matches + 1);
-        
-        fft_1d_plans.push(planner.plan_fft_forward(1)); 
+
+        fft_1d_plans.push(planner.plan_fft_forward(1));
         ifft_1d_plans.push(planner.plan_fft_inverse(1));
-    
+
         for k in 1..=max_matches {
             fft_1d_plans.push(planner.plan_fft_forward(k));
             ifft_1d_plans.push(planner.plan_fft_inverse(k));
@@ -93,7 +97,7 @@ impl Bm3dPlans {
 fn build_patch_groups(
     input_noisy: ArrayView2<f32>,
     input_pilot: ArrayView2<f32>,
-    matches: &[crate::block_matching::PatchMatch],
+    matches: &[block_matching::PatchMatch],
     patch_size: usize,
 ) -> (Array3<f32>, Array3<f32>) {
     let k = matches.len();
@@ -166,10 +170,10 @@ fn apply_forward_2d_transform(
     for i in 0..k {
         let slice = group.slice(s![i, .., ..]);
         if use_hadamard {
-            let transformed = crate::transforms::wht2d_8x8_forward(slice);
+            let transformed = transforms::wht2d_8x8_forward(slice);
             result.slice_mut(s![i, .., ..]).assign(&transformed);
         } else {
-            let transformed = crate::transforms::fft2d(slice, fft_row, fft_col);
+            let transformed = transforms::fft2d(slice, fft_row, fft_col);
             result.slice_mut(s![i, .., ..]).assign(&transformed);
         }
     }
@@ -223,16 +227,16 @@ fn apply_inverse_2d_transform(
     ifft_col: &Arc<dyn Fft<f32>>,
 ) -> Array2<f32> {
     if use_hadamard {
-        crate::transforms::wht2d_8x8_inverse(complex_slice)
+        transforms::wht2d_8x8_inverse(complex_slice)
     } else {
-        crate::transforms::ifft2d(complex_slice, ifft_row, ifft_col)
+        transforms::ifft2d(complex_slice, ifft_row, ifft_col)
     }
 }
 
 /// Aggregate a single denoised patch into the numerator and denominator accumulators.
 fn aggregate_patch(
     spatial: &Array2<f32>,
-    m: &crate::block_matching::PatchMatch,
+    m: &block_matching::PatchMatch,
     weight: f32,
     patch_size: usize,
     rows: usize,
@@ -278,7 +282,7 @@ fn finalize_output(
 }
 
 /// Core BM3D Single Image Kernel
-fn run_bm3d_kernel(
+pub fn run_bm3d_kernel(
     input_noisy: ArrayView2<f32>,
     input_pilot: ArrayView2<f32>,
     mode: Bm3dMode,
@@ -296,17 +300,17 @@ fn run_bm3d_kernel(
     let use_sigma_map = sigma_map.dim() == (rows, cols);
     let use_colored_noise = sigma_psd.dim() == (patch_size, patch_size);
     let scalar_sigma_sq = sigma_random * sigma_random;
-    
+
     // Fast path for 8x8 patches using Hadamard
     let use_hadamard = patch_size == HADAMARD_PATCH_SIZE;
-    
+
     // Pre-compute Integral Images for Block Matching acceleration
-    let (integral_sum, integral_sq_sum) = crate::block_matching::compute_integral_images(input_pilot);
+    let (integral_sum, integral_sq_sum) = block_matching::compute_integral_images(input_pilot);
 
     let mut ref_coords = Vec::new();
     let r_end = rows.saturating_sub(patch_size) + 1;
     let c_end = cols.saturating_sub(patch_size) + 1;
-    
+
     for r in (0..r_end).step_by(step_size) {
         for c in (0..c_end).step_by(step_size) {
             ref_coords.push((r, c));
@@ -328,19 +332,19 @@ fn run_bm3d_kernel(
                 let (numerator_acc, denominator_acc) = &mut acc;
 
                 // 1. Block Matching
-                let matches = crate::block_matching::find_similar_patches(
-                    input_pilot, 
+                let matches = block_matching::find_similar_patches(
+                    input_pilot,
                     &integral_sum,
                     &integral_sq_sum,
-                    (ref_r, ref_c), 
-                    (patch_size, patch_size), 
-                    (search_window, search_window), 
+                    (ref_r, ref_c),
+                    (patch_size, patch_size),
+                    (search_window, search_window),
                     max_matches,
-                    step_size 
+                    step_size
                 );
                 let k = matches.len();
                 if k == 0 { return acc; }
-                
+
                 // 1.5 Local Noise Level
                 let local_sigma_streak = if use_sigma_map { sigma_map[[ref_r, ref_c]] } else { 0.0 };
 
@@ -367,10 +371,10 @@ fn run_bm3d_kernel(
                 }
 
                 // Filtering
-                let mut weight_g = 1.0; 
+                let mut weight_g = 1.0;
                 let spatial_scale = patch_size as f32;
                 let spatial_scale_sq = spatial_scale * spatial_scale;
-                
+
                 match mode {
                     Bm3dMode::HardThreshold => {
                         // Hard Thresholding
@@ -443,7 +447,8 @@ fn run_bm3d_kernel(
 }
 
 
-fn run_bm3d_step(
+/// Run BM3D step on a single 2D image.
+pub fn run_bm3d_step(
     input_noisy: ArrayView2<f32>,
     input_pilot: ArrayView2<f32>,
     mode: Bm3dMode,
@@ -473,7 +478,8 @@ fn run_bm3d_step(
     Ok(run_bm3d_kernel(input_noisy, input_pilot, mode, sigma_psd, sigma_map, sigma_random, threshold, patch_size, step_size, search_window, max_matches, &plans))
 }
 
-fn run_bm3d_step_stack(
+/// Run BM3D step on a 3D stack of images.
+pub fn run_bm3d_step_stack(
     input_noisy: ArrayView3<f32>,
     input_pilot: ArrayView3<f32>,
     mode: Bm3dMode,
@@ -527,139 +533,18 @@ fn run_bm3d_step_stack(
     Ok(output)
 }
 
-
-#[pyfunction]
-pub fn bm3d_hard_thresholding<'py>(
-    py: Python<'py>,
-    input_noisy: PyReadonlyArray2<f32>,
-    input_pilot: PyReadonlyArray2<f32>,
-    sigma_psd: PyReadonlyArray2<f32>,
-    sigma_map: PyReadonlyArray2<f32>,
-    sigma_random: f32,
-    threshold: f32,
-    patch_size: usize,
-    step_size: usize,
-    search_window: usize,
-    max_matches: usize,
-) -> PyResult<&'py PyArray2<f32>> {
-    let output = run_bm3d_step(
-        input_noisy.as_array(),
-        input_pilot.as_array(),
-        Bm3dMode::HardThreshold,
-        sigma_psd.as_array(),
-        sigma_map.as_array(),
-        sigma_random,
-        threshold,
-        patch_size,
-        step_size,
-        search_window,
-        max_matches
-    ).map_err(|e| pyo3::exceptions::PyValueError::new_err(e))?;
-    Ok(output.to_pyarray(py))
-}
-
-#[pyfunction]
-pub fn bm3d_wiener_filtering<'py>(
-    py: Python<'py>,
-    input_noisy: PyReadonlyArray2<f32>,
-    input_pilot: PyReadonlyArray2<f32>,
-    sigma_psd: PyReadonlyArray2<f32>,
-    sigma_map: PyReadonlyArray2<f32>,
-    sigma_random: f32,
-    patch_size: usize,
-    step_size: usize,
-    search_window: usize,
-    max_matches: usize,
-) -> PyResult<&'py PyArray2<f32>> {
-    let output = run_bm3d_step(
-        input_noisy.as_array(),
-        input_pilot.as_array(),
-        Bm3dMode::Wiener,
-        sigma_psd.as_array(),
-        sigma_map.as_array(),
-        sigma_random,
-        0.0,
-        patch_size,
-        step_size,
-        search_window,
-        max_matches
-    ).map_err(|e| pyo3::exceptions::PyValueError::new_err(e))?;
-    Ok(output.to_pyarray(py))
-}
-
-#[pyfunction]
-pub fn bm3d_hard_thresholding_stack<'py>(
-    py: Python<'py>,
-    input_noisy: PyReadonlyArray3<f32>,
-    input_pilot: PyReadonlyArray3<f32>,
-    sigma_psd: PyReadonlyArray2<f32>,
-    sigma_map: PyReadonlyArray3<f32>,
-    sigma_random: f32,
-    threshold: f32,
-    patch_size: usize,
-    step_size: usize,
-    search_window: usize,
-    max_matches: usize,
-) -> PyResult<&'py PyArray3<f32>> {
-    let output = run_bm3d_step_stack(
-        input_noisy.as_array(),
-        input_pilot.as_array(),
-        Bm3dMode::HardThreshold,
-        sigma_psd.as_array(),
-        sigma_map.as_array(),
-        sigma_random,
-        threshold,
-        patch_size,
-        step_size,
-        search_window,
-        max_matches
-    ).map_err(|e| pyo3::exceptions::PyValueError::new_err(e))?;
-    Ok(output.to_pyarray(py))
-}
-
-#[pyfunction]
-pub fn bm3d_wiener_filtering_stack<'py>(
-    py: Python<'py>,
-    input_noisy: PyReadonlyArray3<f32>,
-    input_pilot: PyReadonlyArray3<f32>,
-    sigma_psd: PyReadonlyArray2<f32>,
-    sigma_map: PyReadonlyArray3<f32>,
-    sigma_random: f32,
-    patch_size: usize,
-    step_size: usize,
-    search_window: usize,
-    max_matches: usize,
-) -> PyResult<&'py PyArray3<f32>> {
-    let output = run_bm3d_step_stack(
-        input_noisy.as_array(),
-        input_pilot.as_array(),
-        Bm3dMode::Wiener,
-        sigma_psd.as_array(),
-        sigma_map.as_array(),
-        sigma_random,
-        0.0,
-        patch_size,
-        step_size,
-        search_window,
-        max_matches
-    ).map_err(|e| pyo3::exceptions::PyValueError::new_err(e))?;
-    Ok(output.to_pyarray(py))
-}
-
-
-#[pyfunction]
-pub fn test_block_matching_rust(
-    input: PyReadonlyArray2<f32>,
+/// Test function for block matching (used for debugging/validation).
+pub fn test_block_matching(
+    input: ArrayView2<f32>,
     ref_r: usize,
     ref_c: usize,
     patch_size: usize,
     search_win: usize,
     max_matches: usize,
-) -> PyResult<Vec<(usize, usize, f32)>> {
-    let input_arr = input.as_array();
-    let (sum_img, sq_sum_img) = crate::block_matching::compute_integral_images(input_arr);
-    let matches = crate::block_matching::find_similar_patches(
-        input_arr,
+) -> Vec<(usize, usize, f32)> {
+    let (sum_img, sq_sum_img) = block_matching::compute_integral_images(input);
+    let matches = block_matching::find_similar_patches(
+        input,
         &sum_img,
         &sq_sum_img,
         (ref_r, ref_c),
@@ -668,8 +553,7 @@ pub fn test_block_matching_rust(
         max_matches,
         1
     );
-    let result = matches.into_iter().map(|m| (m.row, m.col, m.distance)).collect();
-    Ok(result)
+    matches.into_iter().map(|m| (m.row, m.col, m.distance)).collect()
 }
 
 #[cfg(test)]

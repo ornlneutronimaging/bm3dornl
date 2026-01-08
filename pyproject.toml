@@ -26,7 +26,7 @@ build-backend = "maturin"
 [tool.maturin]
 features = ["pyo3/extension-module"]
 module-name = "bm3dornl.bm3d_rust"
-manifest-path = "src/rust_core/Cargo.toml"
+manifest-path = "src/rust_core/crates/bm3d_python/Cargo.toml"
 python-source = "src"
 
 [tool.black]
@@ -83,10 +83,11 @@ bm3dornl = { path = ".", editable = true }
 
 [tool.pixi.tasks]
 build = "maturin develop --release"
-test-rust = { cmd = "PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 cargo test", cwd = "src/rust_core" }
+test-rust = { cmd = "PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 cargo test --workspace", cwd = "src/rust_core" }
 test-python = "pytest"
 test = { depends-on = ["test-rust", "test-python"] }
 bench = "python benchmarks/measure_stack_speed.py"
+bench-rust = { cmd = "cargo bench -p bm3d_core", cwd = "src/rust_core" }
 clean = "cargo clean --manifest-path src/rust_core/Cargo.toml"
 
 [tool.pixi.dependencies]
