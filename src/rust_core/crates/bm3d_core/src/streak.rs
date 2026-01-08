@@ -3,8 +3,16 @@
 //! This module provides functions to estimate static vertical streak artifacts
 //! in sinograms using an iterative robust approach with Gaussian smoothing
 //! and median filtering.
+//!
+//! ## SIMD Optimization Notes
+//!
+//! The Gaussian blur operations are optimized for auto-vectorization:
+//! - Pre-padded arrays avoid branching in the hot loop
+//! - Contiguous memory access enables SIMD
+//! - Row-major layout for cache efficiency
 
-use ndarray::{Array1, Array2, ArrayView1, ArrayView2};
+use ndarray::{Array1, Array2, ArrayView1, ArrayView2, Axis};
+use rayon::prelude::*;
 
 // =============================================================================
 // Constants for Streak Profile Estimation
@@ -21,6 +29,10 @@ const STREAK_HORIZONTAL_SIGMA: f32 = 3.0;
 /// Sigma for smoothing the streak update profile.
 /// A small value preserves streak sharpness while removing noise.
 const STREAK_UPDATE_SIGMA: f32 = 1.0;
+
+/// Minimum row count for parallel processing in blur operations.
+/// Set high to avoid rayon overhead for smaller arrays.
+const PARALLEL_ROW_THRESHOLD: usize = 512;
 
 /// Compute 1D Gaussian kernel with given sigma.
 /// Kernel size is ceil(4 * sigma) * 2 + 1 to match scipy's default truncate=4.0
@@ -44,8 +56,9 @@ fn gaussian_kernel_1d(sigma: f32) -> Vec<f32> {
     }
 
     // Normalize
+    let inv_sum = 1.0 / sum;
     for val in kernel.iter_mut() {
-        *val /= sum;
+        *val *= inv_sum;
     }
 
     kernel
@@ -54,7 +67,7 @@ fn gaussian_kernel_1d(sigma: f32) -> Vec<f32> {
 /// Reflect index for boundary handling (scipy 'reflect' mode).
 /// For an array of length n, reflects indices outside [0, n-1].
 /// reflect(-1) = 0, reflect(-2) = 1, reflect(n) = n-1, reflect(n+1) = n-2
-#[inline]
+#[inline(always)]
 fn reflect_index(idx: isize, len: usize) -> usize {
     let n = len as isize;
     if idx < 0 {
@@ -64,6 +77,51 @@ fn reflect_index(idx: isize, len: usize) -> usize {
         (n - 2 - excess).max(0) as usize
     } else {
         idx as usize
+    }
+}
+
+/// Create a 1D padded buffer with reflected boundaries.
+/// This enables branchless convolution in the hot path.
+#[inline]
+fn create_padded_row(input: &[f32], radius: usize) -> Vec<f32> {
+    let n = input.len();
+    let padded_len = n + 2 * radius;
+    let mut padded = vec![0.0f32; padded_len];
+
+    // Copy original data
+    padded[radius..radius + n].copy_from_slice(input);
+
+    // Left reflection
+    for i in 0..radius {
+        let src_idx = reflect_index(-(i as isize) - 1, n);
+        padded[radius - 1 - i] = input[src_idx];
+    }
+
+    // Right reflection
+    for i in 0..radius {
+        let src_idx = reflect_index((n + i) as isize, n);
+        padded[radius + n + i] = input[src_idx];
+    }
+
+    padded
+}
+
+/// Apply 1D convolution to a padded buffer (no bounds checking needed).
+/// This is the SIMD-friendly hot path.
+#[inline]
+fn convolve_1d_padded(padded: &[f32], kernel: &[f32], output: &mut [f32]) {
+    let n = output.len();
+    let klen = kernel.len();
+
+    // Process in chunks for better cache utilization
+    // The compiler can auto-vectorize this inner loop
+    for i in 0..n {
+        let mut sum = 0.0f32;
+        // Unroll hint: kernel is typically small (e.g., 25 elements for sigma=3)
+        for k in 0..klen {
+            sum += padded[i + k] * kernel[k];
+        }
+        output[i] = sum;
     }
 }
 
@@ -78,38 +136,65 @@ pub fn gaussian_blur_1d(input: ArrayView1<f32>, sigma: f32) -> Array1<f32> {
         return Array1::zeros(0);
     }
 
-    let mut output = Array1::zeros(n);
-
-    for i in 0..n {
-        let mut sum = 0.0f32;
-        for (k, &w) in kernel.iter().enumerate() {
-            let src_idx = i as isize + k as isize - radius as isize;
-            let reflected = reflect_index(src_idx, n);
-            sum += w * input[reflected];
+    // Fast path for very small arrays
+    if n <= radius * 2 {
+        let mut output = Array1::zeros(n);
+        for i in 0..n {
+            let mut sum = 0.0f32;
+            for (k, &w) in kernel.iter().enumerate() {
+                let src_idx = i as isize + k as isize - radius as isize;
+                let reflected = reflect_index(src_idx, n);
+                sum += w * input[reflected];
+            }
+            output[i] = sum;
         }
-        output[i] = sum;
+        return output;
     }
+
+    // Create padded buffer for branchless convolution
+    // Convert to contiguous Vec for padding
+    let input_vec: Vec<f32> = input.iter().copied().collect();
+    let padded = create_padded_row(&input_vec, radius);
+    let mut output = Array1::zeros(n);
+    convolve_1d_padded(&padded, &kernel, output.as_slice_mut().unwrap());
 
     output
 }
 
 /// Apply 1D Gaussian blur along rows of a 2D array.
+/// Optimized with pre-padding and parallelization for large arrays.
 fn blur_rows(input: ArrayView2<f32>, sigma: f32) -> Array2<f32> {
     let (rows, cols) = input.dim();
     let kernel = gaussian_kernel_1d(sigma);
     let radius = kernel.len() / 2;
 
+    if cols == 0 || rows == 0 {
+        return Array2::zeros((rows, cols));
+    }
+
     let mut output = Array2::zeros((rows, cols));
 
-    for r in 0..rows {
-        for c in 0..cols {
-            let mut sum = 0.0f32;
-            for (k, &w) in kernel.iter().enumerate() {
-                let src_c = c as isize + k as isize - radius as isize;
-                let reflected = reflect_index(src_c, cols);
-                sum += w * input[[r, reflected]];
-            }
-            output[[r, c]] = sum;
+    // For large arrays, use parallel processing
+    if rows >= PARALLEL_ROW_THRESHOLD && cols > radius * 4 {
+        // Get mutable rows as lanes
+        let output_rows: Vec<_> = output.axis_iter_mut(Axis(0)).collect();
+        let input_rows: Vec<_> = input.axis_iter(Axis(0)).collect();
+
+        output_rows.into_par_iter()
+            .zip(input_rows.into_par_iter())
+            .for_each(|(mut out_row, in_row)| {
+                let in_slice: Vec<f32> = in_row.iter().copied().collect();
+                let padded = create_padded_row(&in_slice, radius);
+                let out_slice = out_row.as_slice_mut().unwrap();
+                convolve_1d_padded(&padded, &kernel, out_slice);
+            });
+    } else {
+        // Sequential processing for smaller arrays
+        for r in 0..rows {
+            let row_slice: Vec<f32> = input.row(r).iter().copied().collect();
+            let padded = create_padded_row(&row_slice, radius);
+            let out_slice = output.row_mut(r).into_slice().unwrap();
+            convolve_1d_padded(&padded, &kernel, out_slice);
         }
     }
 
@@ -117,22 +202,53 @@ fn blur_rows(input: ArrayView2<f32>, sigma: f32) -> Array2<f32> {
 }
 
 /// Apply 1D Gaussian blur along columns of a 2D array.
+/// Optimized with transposed processing for cache efficiency.
 fn blur_cols(input: ArrayView2<f32>, sigma: f32) -> Array2<f32> {
     let (rows, cols) = input.dim();
     let kernel = gaussian_kernel_1d(sigma);
     let radius = kernel.len() / 2;
 
+    if cols == 0 || rows == 0 {
+        return Array2::zeros((rows, cols));
+    }
+
     let mut output = Array2::zeros((rows, cols));
 
-    for r in 0..rows {
-        for c in 0..cols {
-            let mut sum = 0.0f32;
-            for (k, &w) in kernel.iter().enumerate() {
-                let src_r = r as isize + k as isize - radius as isize;
-                let reflected = reflect_index(src_r, rows);
-                sum += w * input[[reflected, c]];
+    // For column blur, we process column-by-column
+    // This is less cache-friendly but necessary for the separable filter
+
+    if cols >= PARALLEL_ROW_THRESHOLD && rows > radius * 4 {
+        // Parallel column processing
+        let col_indices: Vec<usize> = (0..cols).collect();
+
+        // Collect column data, process, and write back
+        let results: Vec<Vec<f32>> = col_indices.par_iter()
+            .map(|&c| {
+                let col_data: Vec<f32> = (0..rows).map(|r| input[[r, c]]).collect();
+                let padded = create_padded_row(&col_data, radius);
+                let mut col_out = vec![0.0f32; rows];
+                convolve_1d_padded(&padded, &kernel, &mut col_out);
+                col_out
+            })
+            .collect();
+
+        // Write results back
+        for (c, col_out) in results.into_iter().enumerate() {
+            for (r, &val) in col_out.iter().enumerate() {
+                output[[r, c]] = val;
             }
-            output[[r, c]] = sum;
+        }
+    } else {
+        // Sequential column processing
+        for c in 0..cols {
+            let col_data: Vec<f32> = (0..rows).map(|r| input[[r, c]]).collect();
+            let padded = create_padded_row(&col_data, radius);
+            let mut col_out = vec![0.0f32; rows];
+            convolve_1d_padded(&padded, &kernel, &mut col_out);
+
+            for (r, &val) in col_out.iter().enumerate() {
+                output[[r, c]] = val;
+            }
         }
     }
 
@@ -148,20 +264,37 @@ pub fn gaussian_blur_2d(input: ArrayView2<f32>, sigma_y: f32, sigma_x: f32) -> A
     blur_cols(blurred_x.view(), sigma_y)
 }
 
-/// Compute median of a slice.
+/// Compute median of a slice using partial sorting.
+/// Uses Rust's select_nth_unstable for O(n) average case.
 fn median_slice(data: &mut [f32]) -> f32 {
     let n = data.len();
     if n == 0 {
         return 0.0;
     }
+    if n == 1 {
+        return data[0];
+    }
+    if n == 2 {
+        return (data[0] + data[1]) / 2.0;
+    }
 
-    // Sort the slice
-    data.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let mid = n / 2;
 
     if n % 2 == 1 {
-        data[n / 2]
+        // For odd length, find the middle element using partial sort
+        let (_, median, _) = data.select_nth_unstable_by(mid, |a, b| {
+            a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)
+        });
+        *median
     } else {
-        (data[n / 2 - 1] + data[n / 2]) / 2.0
+        // For even length, find the two middle elements
+        // First find the upper middle
+        let (left, upper, _) = data.select_nth_unstable_by(mid, |a, b| {
+            a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)
+        });
+        // The lower middle is the max of the left partition
+        let lower = left.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+        (lower + *upper) / 2.0
     }
 }
 
@@ -169,6 +302,11 @@ fn median_slice(data: &mut [f32]) -> f32 {
 /// For each column j, computes median of all values in that column.
 pub fn median_axis0(input: ArrayView2<f32>) -> Array1<f32> {
     let (rows, cols) = input.dim();
+
+    if rows == 0 || cols == 0 {
+        return Array1::zeros(cols);
+    }
+
     let mut output = Array1::zeros(cols);
 
     for c in 0..cols {
