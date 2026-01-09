@@ -4,6 +4,35 @@ use crate::ui::window_level::WindowLevel;
 use eframe::egui;
 use ndarray::Array2;
 
+/// Cursor information for comparison view display.
+#[derive(Clone, Default)]
+pub struct CompareCursorInfo {
+    /// Image X coordinate (column)
+    pub x: Option<usize>,
+    /// Image Y coordinate (row)
+    pub y: Option<usize>,
+    /// Intensity value from original image
+    pub orig_intensity: Option<f32>,
+    /// Intensity value from processed image
+    pub proc_intensity: Option<f32>,
+    /// Difference value (original - processed)
+    pub diff_intensity: Option<f32>,
+}
+
+impl CompareCursorInfo {
+    pub fn clear(&mut self) {
+        self.x = None;
+        self.y = None;
+        self.orig_intensity = None;
+        self.proc_intensity = None;
+        self.diff_intensity = None;
+    }
+
+    pub fn is_valid(&self) -> bool {
+        self.x.is_some() && self.y.is_some()
+    }
+}
+
 /// Comparison view showing Original | Processed | Difference side by side
 /// with horizontal colorbars below
 pub struct CompareView {
@@ -22,6 +51,9 @@ pub struct CompareView {
 
     // Difference range (symmetric around zero)
     diff_max: f32,
+
+    // Cursor tracking
+    cursor_info: CompareCursorInfo,
 }
 
 impl Default for CompareView {
@@ -41,6 +73,7 @@ impl CompareView {
             cached_colormap: None,
             cached_window_level: None,
             diff_max: 1.0,
+            cursor_info: CompareCursorInfo::default(),
         }
     }
 
@@ -57,6 +90,7 @@ impl CompareView {
         self.cached_colormap = None;
         self.cached_window_level = None;
         self.diff_max = 1.0;
+        self.cursor_info.clear();
     }
 
     /// Show comparison view. Returns true if slice changed.
@@ -65,6 +99,22 @@ impl CompareView {
         ui: &mut egui::Ui,
         original: &Volume3D,
         processed: &Volume3D,
+        colormap: Colormap,
+        window_level: &WindowLevel,
+        keep_aspect_ratio: bool,
+    ) -> bool {
+        self.show_with_slice_data(ui, original, processed, None, None, colormap, window_level, keep_aspect_ratio)
+    }
+
+    /// Show comparison view with optional slice data for cursor tracking.
+    /// Returns true if slice changed.
+    pub fn show_with_slice_data(
+        &mut self,
+        ui: &mut egui::Ui,
+        original: &Volume3D,
+        processed: &Volume3D,
+        orig_slice: Option<&Array2<f32>>,
+        proc_slice: Option<&Array2<f32>>,
         colormap: Colormap,
         window_level: &WindowLevel,
         keep_aspect_ratio: bool,
@@ -130,11 +180,12 @@ impl CompareView {
         let available_size = ui.available_size();
         let colorbar_height = 30.0;
         let label_height = 20.0;
+        let status_bar_height = 20.0;
         let spacing = 5.0;
 
         // Calculate panel dimensions
         let panel_width = (available_size.x - 2.0 * spacing) / 3.0;
-        let image_height = available_size.y - colorbar_height - label_height - 2.0 * spacing;
+        let image_height = available_size.y - colorbar_height - label_height - status_bar_height - 3.0 * spacing;
 
         // Row 1: Labels
         ui.horizontal(|ui| {
@@ -151,21 +202,58 @@ impl CompareView {
             });
         });
 
-        // Row 2: Images
+        // Row 2: Images with cursor tracking
+        // Clear cursor info before checking panels
+        self.cursor_info.clear();
+
         ui.horizontal(|ui| {
             // Original image
-            self.draw_image_panel(ui, &self.original_texture, panel_width, image_height, img_aspect, keep_aspect_ratio);
+            let orig_response = self.draw_image_panel_with_response(
+                ui, &self.original_texture, panel_width, image_height, img_aspect, keep_aspect_ratio
+            );
             ui.add_space(spacing);
 
             // Processed image
-            self.draw_image_panel(ui, &self.processed_texture, panel_width, image_height, img_aspect, keep_aspect_ratio);
+            let proc_response = self.draw_image_panel_with_response(
+                ui, &self.processed_texture, panel_width, image_height, img_aspect, keep_aspect_ratio
+            );
             ui.add_space(spacing);
 
             // Difference image
-            self.draw_image_panel(ui, &self.difference_texture, panel_width, image_height, img_aspect, keep_aspect_ratio);
+            let diff_response = self.draw_image_panel_with_response(
+                ui, &self.difference_texture, panel_width, image_height, img_aspect, keep_aspect_ratio
+            );
+
+            // Track cursor on any panel (they all have the same image dimensions)
+            for (response, image_rect) in [orig_response, proc_response, diff_response] {
+                if let Some((x, y)) = self.get_image_coords(&response, &image_rect, img_width, img_height) {
+                    self.cursor_info.x = Some(x);
+                    self.cursor_info.y = Some(y);
+
+                    // Look up intensities
+                    if let Some(orig_data) = orig_slice {
+                        if y < orig_data.nrows() && x < orig_data.ncols() {
+                            self.cursor_info.orig_intensity = Some(orig_data[[y, x]]);
+                        }
+                    }
+                    if let Some(proc_data) = proc_slice {
+                        if y < proc_data.nrows() && x < proc_data.ncols() {
+                            self.cursor_info.proc_intensity = Some(proc_data[[y, x]]);
+                        }
+                    }
+                    // Compute difference
+                    if let (Some(orig_val), Some(proc_val)) = (self.cursor_info.orig_intensity, self.cursor_info.proc_intensity) {
+                        self.cursor_info.diff_intensity = Some(orig_val - proc_val);
+                    }
+                    break; // Only process the first hovered panel
+                }
+            }
         });
 
-        // Row 3: Colorbars
+        // Row 3: Cursor status bar
+        self.draw_cursor_status_bar(ui, available_size.x, status_bar_height);
+
+        // Row 4: Colorbars
         ui.horizontal(|ui| {
             // Shared colorbar for Original and Processed (spans 2 panels + spacing)
             let shared_colorbar_width = panel_width * 2.0 + spacing;
@@ -179,7 +267,121 @@ impl CompareView {
         slice_changed
     }
 
-    fn draw_image_panel(
+    /// Get image coordinates from hover position.
+    fn get_image_coords(
+        &self,
+        response: &egui::Response,
+        image_rect: &Option<egui::Rect>,
+        img_width: usize,
+        img_height: usize,
+    ) -> Option<(usize, usize)> {
+        let hover_pos = response.hover_pos()?;
+        let rect = (*image_rect)?;
+
+        if !rect.contains(hover_pos) {
+            return None;
+        }
+
+        // Convert screen position to normalized image coordinates [0, 1]
+        let norm_x = (hover_pos.x - rect.left()) / rect.width();
+        let norm_y = (hover_pos.y - rect.top()) / rect.height();
+
+        // Convert to pixel coordinates
+        let pixel_x = (norm_x * img_width as f32).floor() as i32;
+        let pixel_y = (norm_y * img_height as f32).floor() as i32;
+
+        // Bounds check
+        if pixel_x >= 0 && pixel_x < img_width as i32 && pixel_y >= 0 && pixel_y < img_height as i32 {
+            Some((pixel_x as usize, pixel_y as usize))
+        } else {
+            None
+        }
+    }
+
+    /// Draw cursor status bar showing coordinates and intensities.
+    fn draw_cursor_status_bar(&self, ui: &mut egui::Ui, width: f32, height: f32) {
+        ui.allocate_ui(egui::vec2(width, height), |ui| {
+            ui.horizontal(|ui| {
+                if self.cursor_info.is_valid() {
+                    let x = self.cursor_info.x.unwrap();
+                    let y = self.cursor_info.y.unwrap();
+
+                    ui.label(
+                        egui::RichText::new(format!("(x: {}, y: {})", x, y))
+                            .monospace()
+                            .small(),
+                    );
+
+                    ui.separator();
+
+                    // Original intensity (blue to match histogram)
+                    if let Some(val) = self.cursor_info.orig_intensity {
+                        ui.label(
+                            egui::RichText::new(format!("Orig: {:.4}", val))
+                                .monospace()
+                                .small()
+                                .color(egui::Color32::from_rgb(65, 105, 225)),
+                        );
+                    } else {
+                        ui.label(
+                            egui::RichText::new("Orig: ---")
+                                .monospace()
+                                .small()
+                                .weak(),
+                        );
+                    }
+
+                    ui.separator();
+
+                    // Processed intensity (orange to match histogram)
+                    if let Some(val) = self.cursor_info.proc_intensity {
+                        ui.label(
+                            egui::RichText::new(format!("Proc: {:.4}", val))
+                                .monospace()
+                                .small()
+                                .color(egui::Color32::from_rgb(255, 140, 0)),
+                        );
+                    } else {
+                        ui.label(
+                            egui::RichText::new("Proc: ---")
+                                .monospace()
+                                .small()
+                                .weak(),
+                        );
+                    }
+
+                    ui.separator();
+
+                    // Difference (red to match histogram)
+                    if let Some(val) = self.cursor_info.diff_intensity {
+                        ui.label(
+                            egui::RichText::new(format!("Diff: {:.4}", val))
+                                .monospace()
+                                .small()
+                                .color(egui::Color32::from_rgb(220, 20, 60)),
+                        );
+                    } else {
+                        ui.label(
+                            egui::RichText::new("Diff: ---")
+                                .monospace()
+                                .small()
+                                .weak(),
+                        );
+                    }
+                } else {
+                    ui.label(
+                        egui::RichText::new("(x: ---, y: ---)  Orig: ---  Proc: ---  Diff: ---")
+                            .monospace()
+                            .small()
+                            .weak(),
+                    );
+                }
+            });
+        });
+    }
+
+    /// Draw image panel and return response + computed image rect for cursor tracking.
+    fn draw_image_panel_with_response(
         &self,
         ui: &mut egui::Ui,
         texture: &Option<egui::TextureHandle>,
@@ -187,11 +389,13 @@ impl CompareView {
         height: f32,
         img_aspect: f32,
         keep_aspect_ratio: bool,
-    ) {
+    ) -> (egui::Response, Option<egui::Rect>) {
         let (response, painter) = ui.allocate_painter(
             egui::vec2(width, height),
             egui::Sense::hover(),
         );
+
+        let mut computed_image_rect = None;
 
         if let Some(tex) = texture {
             let panel_rect = response.rect;
@@ -209,6 +413,8 @@ impl CompareView {
                 panel_rect
             };
 
+            computed_image_rect = Some(image_rect);
+
             painter.image(
                 tex.id(),
                 image_rect,
@@ -223,6 +429,8 @@ impl CompareView {
             0.0,
             egui::Stroke::new(1.0, egui::Color32::GRAY),
         );
+
+        (response, computed_image_rect)
     }
 
     fn draw_horizontal_colorbar(

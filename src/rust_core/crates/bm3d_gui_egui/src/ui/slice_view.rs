@@ -2,6 +2,30 @@ use crate::data::{AxisMapping, Volume3D};
 use crate::ui::colormap::Colormap;
 use crate::ui::window_level::WindowLevel;
 use eframe::egui;
+use ndarray::Array2;
+
+/// Cursor information for display.
+#[derive(Clone, Default)]
+pub struct CursorInfo {
+    /// Image X coordinate (column)
+    pub x: Option<usize>,
+    /// Image Y coordinate (row)
+    pub y: Option<usize>,
+    /// Intensity value at cursor position
+    pub intensity: Option<f32>,
+}
+
+impl CursorInfo {
+    pub fn clear(&mut self) {
+        self.x = None;
+        self.y = None;
+        self.intensity = None;
+    }
+
+    pub fn is_valid(&self) -> bool {
+        self.x.is_some() && self.y.is_some()
+    }
+}
 
 /// Pan/zoom state for image display.
 #[derive(Clone, Copy)]
@@ -46,6 +70,12 @@ pub struct SliceViewer {
     // For drag detection
     is_dragging: bool,
     last_drag_pos: Option<egui::Pos2>,
+
+    // Cursor tracking
+    cursor_info: CursorInfo,
+    // Cached image rect for cursor coordinate conversion
+    cached_image_rect: Option<egui::Rect>,
+    cached_image_dims: Option<(usize, usize)>,
 }
 
 impl Default for SliceViewer {
@@ -66,6 +96,9 @@ impl SliceViewer {
             view_transform: ViewTransform::default(),
             is_dragging: false,
             last_drag_pos: None,
+            cursor_info: CursorInfo::default(),
+            cached_image_rect: None,
+            cached_image_dims: None,
         }
     }
 
@@ -84,6 +117,9 @@ impl SliceViewer {
         self.view_transform.reset();
         self.is_dragging = false;
         self.last_drag_pos = None;
+        self.cursor_info.clear();
+        self.cached_image_rect = None;
+        self.cached_image_dims = None;
     }
 
     pub fn view_transform(&self) -> &ViewTransform {
@@ -99,6 +135,20 @@ impl SliceViewer {
         &mut self,
         ui: &mut egui::Ui,
         volume: &Volume3D,
+        colormap: Colormap,
+        window_level: &WindowLevel,
+        keep_aspect_ratio: bool,
+    ) -> bool {
+        self.show_with_slice_data(ui, volume, None, colormap, window_level, keep_aspect_ratio)
+    }
+
+    /// Show slice viewer with navigation and optional slice data for cursor tracking.
+    /// Returns true if slice changed.
+    pub fn show_with_slice_data(
+        &mut self,
+        ui: &mut egui::Ui,
+        volume: &Volume3D,
+        slice_data: Option<&Array2<f32>>,
         colormap: Colormap,
         window_level: &WindowLevel,
         keep_aspect_ratio: bool,
@@ -174,8 +224,9 @@ impl SliceViewer {
 
         // Layout constants
         let colorbar_height = 30.0;
+        let status_bar_height = 20.0;
         let available_size = ui.available_size();
-        let image_area_height = available_size.y - colorbar_height - 5.0;
+        let image_area_height = available_size.y - colorbar_height - status_bar_height - 10.0;
 
         // Display image with pan/zoom
         if self.texture_handle.is_some() {
@@ -207,8 +258,15 @@ impl SliceViewer {
             let center = clip_rect.center() + self.view_transform.pan;
             let image_rect = egui::Rect::from_center_size(center, display_size);
 
+            // Cache image rect and dimensions for cursor tracking
+            self.cached_image_rect = Some(image_rect);
+            self.cached_image_dims = Some((img_width, img_height));
+
             // Handle mouse interactions
             self.handle_mouse_input(&response, clip_rect.center());
+
+            // Track cursor position and compute image coordinates
+            self.update_cursor_info(&response, image_rect, img_width, img_height, slice_data);
 
             // Draw image (clipped to available area)
             if let Some(texture) = &self.texture_handle {
@@ -228,10 +286,104 @@ impl SliceViewer {
             );
         }
 
+        // Cursor status bar
+        self.draw_cursor_status_bar(ui, available_size.x, status_bar_height);
+
         // Horizontal colorbar below image
         self.draw_horizontal_colorbar(ui, available_size.x, colorbar_height, colormap, window_level);
 
         slice_changed
+    }
+
+    /// Update cursor info based on hover position.
+    fn update_cursor_info(
+        &mut self,
+        response: &egui::Response,
+        image_rect: egui::Rect,
+        img_width: usize,
+        img_height: usize,
+        slice_data: Option<&Array2<f32>>,
+    ) {
+        if let Some(hover_pos) = response.hover_pos() {
+            // Check if cursor is within the image bounds
+            if image_rect.contains(hover_pos) {
+                // Convert screen position to normalized image coordinates [0, 1]
+                let norm_x = (hover_pos.x - image_rect.left()) / image_rect.width();
+                let norm_y = (hover_pos.y - image_rect.top()) / image_rect.height();
+
+                // Convert to pixel coordinates
+                let pixel_x = (norm_x * img_width as f32).floor() as i32;
+                let pixel_y = (norm_y * img_height as f32).floor() as i32;
+
+                // Bounds check
+                if pixel_x >= 0 && pixel_x < img_width as i32 && pixel_y >= 0 && pixel_y < img_height as i32 {
+                    let x = pixel_x as usize;
+                    let y = pixel_y as usize;
+
+                    self.cursor_info.x = Some(x);
+                    self.cursor_info.y = Some(y);
+
+                    // Look up intensity if slice data is available
+                    if let Some(data) = slice_data {
+                        if y < data.nrows() && x < data.ncols() {
+                            self.cursor_info.intensity = Some(data[[y, x]]);
+                        } else {
+                            self.cursor_info.intensity = None;
+                        }
+                    } else {
+                        self.cursor_info.intensity = None;
+                    }
+                } else {
+                    self.cursor_info.clear();
+                }
+            } else {
+                self.cursor_info.clear();
+            }
+        } else {
+            self.cursor_info.clear();
+        }
+    }
+
+    /// Draw cursor status bar showing coordinates and intensity.
+    fn draw_cursor_status_bar(&self, ui: &mut egui::Ui, width: f32, height: f32) {
+        ui.allocate_ui(egui::vec2(width, height), |ui| {
+            ui.horizontal(|ui| {
+                if self.cursor_info.is_valid() {
+                    let x = self.cursor_info.x.unwrap();
+                    let y = self.cursor_info.y.unwrap();
+
+                    ui.label(
+                        egui::RichText::new(format!("(x: {}, y: {})", x, y))
+                            .monospace()
+                            .small(),
+                    );
+
+                    ui.separator();
+
+                    if let Some(intensity) = self.cursor_info.intensity {
+                        ui.label(
+                            egui::RichText::new(format!("I: {:.4}", intensity))
+                                .monospace()
+                                .small(),
+                        );
+                    } else {
+                        ui.label(
+                            egui::RichText::new("I: ---")
+                                .monospace()
+                                .small()
+                                .weak(),
+                        );
+                    }
+                } else {
+                    ui.label(
+                        egui::RichText::new("(x: ---, y: ---)  I: ---")
+                            .monospace()
+                            .small()
+                            .weak(),
+                    );
+                }
+            });
+        });
     }
 
     /// Draw horizontal colorbar with gradient and labels.

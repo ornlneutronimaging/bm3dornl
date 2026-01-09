@@ -629,14 +629,17 @@ impl eframe::App for App {
                             let colormap = self.colormap_selector.current();
                             let slice_index = self.slice_viewer.current_slice();
 
-                            // Get slice data for histogram
+                            // Get slice data for histogram and cursor tracking
                             let slice_data = vol.get_slice(slice_index);
 
                             // Show histogram panel
                             self.single_histogram.show(ui, slice_data.as_ref(), slice_index);
 
+                            // Show slice viewer with cursor tracking
                             let slice_changed =
-                                self.slice_viewer.show(ui, vol, colormap, &self.window_level, self.keep_aspect_ratio);
+                                self.slice_viewer.show_with_slice_data(
+                                    ui, vol, slice_data.as_ref(), colormap, &self.window_level, self.keep_aspect_ratio
+                                );
 
                             if slice_changed {
                                 self.update_window_level_for_slice();
@@ -649,7 +652,7 @@ impl eframe::App for App {
                             let colormap = self.colormap_selector.current();
                             let slice_index = self.compare_view.current_slice();
 
-                            // Get slice data for histograms
+                            // Get slice data for histograms and cursor tracking
                             let orig_slice = orig.get_slice(slice_index);
                             let proc_slice = proc.get_slice(slice_index);
 
@@ -661,8 +664,13 @@ impl eframe::App for App {
                                 slice_index,
                             );
 
+                            // Show compare view with cursor tracking
                             let slice_changed =
-                                self.compare_view.show(ui, orig, proc, colormap, &self.window_level, self.keep_aspect_ratio);
+                                self.compare_view.show_with_slice_data(
+                                    ui, orig, proc,
+                                    orig_slice.as_ref(), proc_slice.as_ref(),
+                                    colormap, &self.window_level, self.keep_aspect_ratio
+                                );
 
                             if slice_changed {
                                 self.update_window_level_for_slice();
