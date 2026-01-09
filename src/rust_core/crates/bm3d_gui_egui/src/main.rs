@@ -632,8 +632,26 @@ impl eframe::App for App {
                             // Get slice data for histogram and cursor tracking
                             let slice_data = vol.get_slice(slice_index);
 
-                            // Show histogram panel
-                            self.single_histogram.show(ui, slice_data.as_ref(), slice_index);
+                            // Get ROI from slice viewer
+                            let roi = self.slice_viewer.roi().copied();
+
+                            // Show histogram panel with ROI support
+                            let mut clear_roi_clicked = false;
+                            let cursor_in_roi = self.slice_viewer.is_cursor_in_roi();
+                            self.single_histogram.show_with_roi(
+                                ui,
+                                slice_data.as_ref(),
+                                slice_index,
+                                roi.as_ref(),
+                                &mut clear_roi_clicked,
+                                &mut self.slice_viewer.roi_mode,
+                                cursor_in_roi,
+                            );
+
+                            // Handle Clear ROI button click
+                            if clear_roi_clicked {
+                                self.slice_viewer.clear_roi();
+                            }
 
                             // Show slice viewer with cursor tracking
                             let slice_changed =
@@ -656,13 +674,27 @@ impl eframe::App for App {
                             let orig_slice = orig.get_slice(slice_index);
                             let proc_slice = proc.get_slice(slice_index);
 
-                            // Show histogram panel
-                            self.compare_histogram.show(
+                            // Get ROI from compare view
+                            let roi = self.compare_view.roi().copied();
+
+                            // Show histogram panel with ROI support
+                            let mut clear_roi_clicked = false;
+                            let cursor_in_roi = self.compare_view.is_cursor_in_roi();
+                            self.compare_histogram.show_with_roi(
                                 ui,
                                 orig_slice.as_ref(),
                                 proc_slice.as_ref(),
                                 slice_index,
+                                roi.as_ref(),
+                                &mut clear_roi_clicked,
+                                &mut self.compare_view.roi_mode,
+                                cursor_in_roi,
                             );
+
+                            // Handle Clear ROI button click
+                            if clear_roi_clicked {
+                                self.compare_view.clear_roi();
+                            }
 
                             // Show compare view with cursor tracking
                             let slice_changed =

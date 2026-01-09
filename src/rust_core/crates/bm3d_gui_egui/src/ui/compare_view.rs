@@ -1,5 +1,7 @@
 use crate::data::Volume3D;
 use crate::ui::colormap::{Colormap, DivergingColormap};
+use crate::ui::histogram::colors;
+use crate::ui::slice_view::{ImageRoi, RoiState};
 use crate::ui::window_level::WindowLevel;
 use eframe::egui;
 use ndarray::Array2;
@@ -54,6 +56,21 @@ pub struct CompareView {
 
     // Cursor tracking
     cursor_info: CompareCursorInfo,
+
+    // ROI selection (shared across all three panels)
+    roi_state: RoiState,
+    /// ROI drawing mode active (drag draws ROI without Shift).
+    pub roi_mode: bool,
+    /// Is cursor currently inside the ROI? (for visual feedback)
+    cursor_in_roi: bool,
+
+    // For drag detection (pan vs ROI)
+    is_dragging: bool,
+    last_drag_pos: Option<egui::Pos2>,
+
+    // Cached image rect for coordinate conversion
+    cached_image_rect: Option<egui::Rect>,
+    cached_image_dims: Option<(usize, usize)>,
 }
 
 impl Default for CompareView {
@@ -74,6 +91,13 @@ impl CompareView {
             cached_window_level: None,
             diff_max: 1.0,
             cursor_info: CompareCursorInfo::default(),
+            roi_state: RoiState::new(),
+            roi_mode: false,
+            cursor_in_roi: false,
+            is_dragging: false,
+            last_drag_pos: None,
+            cached_image_rect: None,
+            cached_image_dims: None,
         }
     }
 
@@ -91,6 +115,28 @@ impl CompareView {
         self.cached_window_level = None;
         self.diff_max = 1.0;
         self.cursor_info.clear();
+        self.roi_state.clear();
+        self.roi_mode = false;
+        self.cursor_in_roi = false;
+        self.is_dragging = false;
+        self.last_drag_pos = None;
+        self.cached_image_rect = None;
+        self.cached_image_dims = None;
+    }
+
+    /// Check if cursor is currently inside the ROI (for UI feedback).
+    pub fn is_cursor_in_roi(&self) -> bool {
+        self.cursor_in_roi
+    }
+
+    /// Get the current ROI, if any.
+    pub fn roi(&self) -> Option<&ImageRoi> {
+        self.roi_state.roi.as_ref()
+    }
+
+    /// Clear the current ROI.
+    pub fn clear_roi(&mut self) {
+        self.roi_state.clear();
     }
 
     /// Show comparison view. Returns true if slice changed.
@@ -202,53 +248,103 @@ impl CompareView {
             });
         });
 
-        // Row 2: Images with cursor tracking
+        // Row 2: Images with cursor tracking and ROI interaction
         // Clear cursor info before checking panels
         self.cursor_info.clear();
 
+        // We need to collect panel info first, then handle interactions outside the closure
+        // because handle_mouse_input needs &mut self
+        let mut panel_data: Vec<(egui::Response, Option<egui::Rect>, egui::Painter)> = Vec::new();
+
         ui.horizontal(|ui| {
             // Original image
-            let orig_response = self.draw_image_panel_with_response(
+            let orig_result = self.draw_image_panel_with_response(
                 ui, &self.original_texture, panel_width, image_height, img_aspect, keep_aspect_ratio
             );
+            panel_data.push(orig_result);
             ui.add_space(spacing);
 
             // Processed image
-            let proc_response = self.draw_image_panel_with_response(
+            let proc_result = self.draw_image_panel_with_response(
                 ui, &self.processed_texture, panel_width, image_height, img_aspect, keep_aspect_ratio
             );
+            panel_data.push(proc_result);
             ui.add_space(spacing);
 
             // Difference image
-            let diff_response = self.draw_image_panel_with_response(
+            let diff_result = self.draw_image_panel_with_response(
                 ui, &self.difference_texture, panel_width, image_height, img_aspect, keep_aspect_ratio
             );
+            panel_data.push(diff_result);
+        });
 
-            // Track cursor on any panel (they all have the same image dimensions)
-            for (response, image_rect) in [orig_response, proc_response, diff_response] {
-                if let Some((x, y)) = self.get_image_coords(&response, &image_rect, img_width, img_height) {
-                    self.cursor_info.x = Some(x);
-                    self.cursor_info.y = Some(y);
+        // Cache image dimensions for ROI coordinate conversion
+        self.cached_image_dims = Some((img_width, img_height));
 
-                    // Look up intensities
-                    if let Some(orig_data) = orig_slice {
-                        if y < orig_data.nrows() && x < orig_data.ncols() {
-                            self.cursor_info.orig_intensity = Some(orig_data[[y, x]]);
-                        }
-                    }
-                    if let Some(proc_data) = proc_slice {
-                        if y < proc_data.nrows() && x < proc_data.ncols() {
-                            self.cursor_info.proc_intensity = Some(proc_data[[y, x]]);
-                        }
-                    }
-                    // Compute difference
-                    if let (Some(orig_val), Some(proc_val)) = (self.cursor_info.orig_intensity, self.cursor_info.proc_intensity) {
-                        self.cursor_info.diff_intensity = Some(orig_val - proc_val);
-                    }
-                    break; // Only process the first hovered panel
+        // Find which panel is being interacted with (if any)
+        // Use the first panel that has valid image rect for ROI interactions
+        let mut active_response: Option<&egui::Response> = None;
+        let mut active_image_rect: Option<egui::Rect> = None;
+
+        for (response, image_rect, _) in &panel_data {
+            if let Some(rect) = image_rect {
+                // Check if this panel is being hovered or dragged
+                if response.hovered() || response.dragged() {
+                    active_response = Some(response);
+                    active_image_rect = Some(*rect);
+                    self.cached_image_rect = Some(*rect);
+                    break;
                 }
             }
-        });
+        }
+
+        // Handle ROI mouse interactions on the active panel
+        if let (Some(response), Some(image_rect)) = (active_response, active_image_rect) {
+            // Clone the response to avoid borrow issues
+            let response_clone = response.clone();
+            self.handle_mouse_input(&response_clone, image_rect, img_width, img_height);
+        } else {
+            // Not hovering any panel - reset cursor_in_roi and handle drag end
+            self.cursor_in_roi = false;
+            if self.roi_state.drawing {
+                self.roi_state.finish_draw();
+            }
+            if self.roi_state.moving {
+                self.roi_state.finish_move();
+            }
+        }
+
+        // Track cursor position and look up intensities
+        for (response, image_rect, _) in &panel_data {
+            if let Some((x, y)) = self.get_image_coords(response, image_rect, img_width, img_height) {
+                self.cursor_info.x = Some(x);
+                self.cursor_info.y = Some(y);
+
+                // Look up intensities
+                if let Some(orig_data) = orig_slice {
+                    if y < orig_data.nrows() && x < orig_data.ncols() {
+                        self.cursor_info.orig_intensity = Some(orig_data[[y, x]]);
+                    }
+                }
+                if let Some(proc_data) = proc_slice {
+                    if y < proc_data.nrows() && x < proc_data.ncols() {
+                        self.cursor_info.proc_intensity = Some(proc_data[[y, x]]);
+                    }
+                }
+                // Compute difference
+                if let (Some(orig_val), Some(proc_val)) = (self.cursor_info.orig_intensity, self.cursor_info.proc_intensity) {
+                    self.cursor_info.diff_intensity = Some(orig_val - proc_val);
+                }
+                break; // Only process the first hovered panel
+            }
+        }
+
+        // Draw ROI overlay on all three panels
+        for (_, image_rect, painter) in &panel_data {
+            if let Some(rect) = image_rect {
+                self.draw_roi_overlay(painter, *rect, img_width, img_height);
+            }
+        }
 
         // Row 3: Cursor status bar
         self.draw_cursor_status_bar(ui, available_size.x, status_bar_height);
@@ -300,6 +396,11 @@ impl CompareView {
 
     /// Draw cursor status bar showing coordinates and intensities.
     fn draw_cursor_status_bar(&self, ui: &mut egui::Ui, width: f32, height: f32) {
+        // Get theme-aware colors
+        let original_color = colors::original(ui);
+        let processed_color = colors::processed(ui);
+        let diff_color = colors::difference(ui);
+
         ui.allocate_ui(egui::vec2(width, height), |ui| {
             ui.horizontal(|ui| {
                 if self.cursor_info.is_valid() {
@@ -320,7 +421,7 @@ impl CompareView {
                             egui::RichText::new(format!("Orig: {:.4}", val))
                                 .monospace()
                                 .small()
-                                .color(egui::Color32::from_rgb(65, 105, 225)),
+                                .color(original_color),
                         );
                     } else {
                         ui.label(
@@ -339,7 +440,7 @@ impl CompareView {
                             egui::RichText::new(format!("Proc: {:.4}", val))
                                 .monospace()
                                 .small()
-                                .color(egui::Color32::from_rgb(255, 140, 0)),
+                                .color(processed_color),
                         );
                     } else {
                         ui.label(
@@ -358,7 +459,7 @@ impl CompareView {
                             egui::RichText::new(format!("Diff: {:.4}", val))
                                 .monospace()
                                 .small()
-                                .color(egui::Color32::from_rgb(220, 20, 60)),
+                                .color(diff_color),
                         );
                     } else {
                         ui.label(
@@ -380,7 +481,7 @@ impl CompareView {
         });
     }
 
-    /// Draw image panel and return response + computed image rect for cursor tracking.
+    /// Draw image panel and return response + computed image rect + painter for ROI drawing.
     fn draw_image_panel_with_response(
         &self,
         ui: &mut egui::Ui,
@@ -389,10 +490,10 @@ impl CompareView {
         height: f32,
         img_aspect: f32,
         keep_aspect_ratio: bool,
-    ) -> (egui::Response, Option<egui::Rect>) {
+    ) -> (egui::Response, Option<egui::Rect>, egui::Painter) {
         let (response, painter) = ui.allocate_painter(
             egui::vec2(width, height),
-            egui::Sense::hover(),
+            egui::Sense::click_and_drag(),
         );
 
         let mut computed_image_rect = None;
@@ -430,7 +531,7 @@ impl CompareView {
             egui::Stroke::new(1.0, egui::Color32::GRAY),
         );
 
-        (response, computed_image_rect)
+        (response, computed_image_rect, painter)
     }
 
     fn draw_horizontal_colorbar(
@@ -609,6 +710,172 @@ impl CompareView {
             self.cached_slice_index = Some(self.current_slice);
             self.cached_colormap = Some(colormap);
             self.cached_window_level = Some((window_level.min, window_level.max));
+        }
+    }
+
+    /// Convert screen position to image pixel coordinates.
+    fn screen_to_image(
+        &self,
+        screen_pos: egui::Pos2,
+        image_rect: egui::Rect,
+        img_width: usize,
+        img_height: usize,
+    ) -> Option<(usize, usize)> {
+        if !image_rect.contains(screen_pos) {
+            return None;
+        }
+
+        // Convert screen position to normalized image coordinates [0, 1]
+        let norm_x = (screen_pos.x - image_rect.left()) / image_rect.width();
+        let norm_y = (screen_pos.y - image_rect.top()) / image_rect.height();
+
+        // Convert to pixel coordinates
+        let pixel_x = (norm_x * img_width as f32).floor() as i32;
+        let pixel_y = (norm_y * img_height as f32).floor() as i32;
+
+        // Bounds check
+        if pixel_x >= 0 && pixel_x < img_width as i32 && pixel_y >= 0 && pixel_y < img_height as i32 {
+            Some((pixel_x as usize, pixel_y as usize))
+        } else {
+            None
+        }
+    }
+
+    /// Convert image pixel coordinates to screen position.
+    fn image_to_screen(
+        &self,
+        img_x: usize,
+        img_y: usize,
+        image_rect: egui::Rect,
+        img_width: usize,
+        img_height: usize,
+    ) -> egui::Pos2 {
+        let norm_x = img_x as f32 / img_width as f32;
+        let norm_y = img_y as f32 / img_height as f32;
+
+        egui::pos2(
+            image_rect.left() + norm_x * image_rect.width(),
+            image_rect.top() + norm_y * image_rect.height(),
+        )
+    }
+
+    /// Handle mouse input for ROI drawing/moving across all panels.
+    fn handle_mouse_input(
+        &mut self,
+        response: &egui::Response,
+        image_rect: egui::Rect,
+        img_width: usize,
+        img_height: usize,
+    ) {
+        // Check if Shift is held for ROI drawing mode
+        let shift_held = response.ctx.input(|i| i.modifiers.shift);
+
+        // Determine if we should draw ROI: either roi_mode is ON or Shift is held
+        let should_draw_roi = self.roi_mode || shift_held;
+
+        // Update cursor_in_roi for visual feedback
+        if response.hovered() {
+            if let Some(pointer_pos) = response.hover_pos() {
+                if let Some((img_x, img_y)) = self.screen_to_image(pointer_pos, image_rect, img_width, img_height) {
+                    self.cursor_in_roi = self.roi_state.cursor_inside_roi(img_x, img_y);
+                } else {
+                    self.cursor_in_roi = false;
+                }
+            } else {
+                self.cursor_in_roi = false;
+            }
+        } else {
+            self.cursor_in_roi = false;
+        }
+
+        // Handle drag
+        if response.dragged() {
+            if let Some(pointer_pos) = response.interact_pointer_pos() {
+                if let Some((img_x, img_y)) = self.screen_to_image(pointer_pos, image_rect, img_width, img_height) {
+                    // Check if we're already in a dragging operation
+                    if self.roi_state.drawing {
+                        // Continue drawing ROI
+                        self.roi_state.update_draw(img_x, img_y);
+                        self.is_dragging = false;
+                        self.last_drag_pos = None;
+                    } else if self.roi_state.moving {
+                        // Continue moving ROI
+                        self.roi_state.update_move(img_x, img_y, img_width, img_height);
+                        self.is_dragging = false;
+                        self.last_drag_pos = None;
+                    } else {
+                        // Starting a new drag - determine what to do
+                        let inside_roi = self.roi_state.cursor_inside_roi(img_x, img_y);
+
+                        if inside_roi {
+                            // Drag inside existing ROI → always move ROI (even in ROI mode)
+                            self.roi_state.start_move(img_x, img_y);
+                            self.is_dragging = false;
+                            self.last_drag_pos = None;
+                        } else if should_draw_roi {
+                            // ROI drawing mode (roi_mode ON or Shift held) outside ROI → draw new ROI
+                            self.roi_state.start_draw(img_x, img_y);
+                            self.is_dragging = false;
+                            self.last_drag_pos = None;
+                        }
+                        // Note: No panning in compare view, just ignore non-ROI drags
+                    }
+                }
+            }
+        } else {
+            // Drag ended
+            if self.roi_state.drawing {
+                self.roi_state.finish_draw();
+            }
+            if self.roi_state.moving {
+                self.roi_state.finish_move();
+            }
+            self.is_dragging = false;
+            self.last_drag_pos = None;
+        }
+    }
+
+    /// Draw ROI overlay on a single image panel.
+    fn draw_roi_overlay(
+        &self,
+        painter: &egui::Painter,
+        image_rect: egui::Rect,
+        img_width: usize,
+        img_height: usize,
+    ) {
+        // Get ROI to draw (either finalized or currently drawing)
+        let roi_to_draw = self.roi_state.drawing_rect().or(self.roi_state.roi);
+
+        if let Some(roi) = roi_to_draw {
+            // Convert image coordinates to screen coordinates
+            let top_left = self.image_to_screen(roi.min_x, roi.min_y, image_rect, img_width, img_height);
+            let bottom_right = self.image_to_screen(
+                roi.max_x + 1, // +1 because max is inclusive
+                roi.max_y + 1,
+                image_rect,
+                img_width,
+                img_height,
+            );
+
+            let screen_rect = egui::Rect::from_min_max(top_left, bottom_right);
+
+            // Draw semi-transparent fill - brighter when cursor is inside (hover feedback)
+            let fill_alpha = if self.cursor_in_roi && !self.roi_state.drawing { 60 } else { 30 };
+            let fill_color = egui::Color32::from_rgba_unmultiplied(255, 255, 0, fill_alpha);
+            painter.rect_filled(screen_rect, 0.0, fill_color);
+
+            // Draw border - different colors for different states
+            let stroke_color = if self.roi_state.drawing {
+                egui::Color32::from_rgb(0, 255, 255) // Cyan while drawing
+            } else if self.roi_state.moving {
+                egui::Color32::from_rgb(0, 255, 0) // Green while moving
+            } else if self.cursor_in_roi {
+                egui::Color32::from_rgb(255, 165, 0) // Orange when hovering inside (movable)
+            } else {
+                egui::Color32::from_rgb(255, 255, 0) // Yellow when finalized
+            };
+            let stroke_width = if self.cursor_in_roi || self.roi_state.moving { 3.0 } else { 2.0 };
+            painter.rect_stroke(screen_rect, 0.0, egui::Stroke::new(stroke_width, stroke_color));
         }
     }
 }
