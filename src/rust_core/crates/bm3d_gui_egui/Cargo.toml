@@ -1,0 +1,12 @@
+[package]
+name = "bm3d_gui_egui"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+eframe = "0.29"
+hdf5-metno = "0.11"
+rfd = "0.15"
+tiff = "0.9"
+ndarray = "0.15"
+bm3d_core = { path = "../bm3d_core" }
