@@ -1,11 +1,11 @@
 <!-- Badges -->
 
-[![Build Status](https://github.com/ornlneutronimaging/bm3dornl/actions/workflows/unittest.yml/badge.svg?branch=next)](https://github.com/ornlneutronimaging/bm3dornl/actions/workflows/unittest.yml?query=branch?next)
+[![Build Status](https://github.com/ornlneutronimaging/bm3dornl/actions/workflows/test.yml/badge.svg?branch=next)](https://github.com/ornlneutronimaging/bm3dornl/actions/workflows/test.yml?query=branch?next)
 [![codecov](https://codecov.io/gh/ornlneutronimaging/bm3dornl/branch/next/graph/badge.svg)](https://codecov.io/gh/ornlneutronimaging/bm3dornl/tree/next)
 [![CII Best Practices](https://bestpractices.coreinfrastructure.org/projects/6650/badge)](https://bestpractices.coreinfrastructure.org/projects/6650)
 [![pre-commit.ci status](https://results.pre-commit.ci/badge/github/ornlneutronimaging/bm3dornl/next.svg)](https://results.pre-commit.ci/latest/github/ornlneutronimaging/bm3dornl/next)
 [![Documentation Status](https://readthedocs.org/projects/bm3dornl/badge/?version=latest)](https://bm3dornl.readthedocs.io/en/latest/?badge=latest)
-[![Anaconda-Server Badge](https://anaconda.org/neutronimaging/bm3dornl/badges/version.svg)](https://anaconda.org/neutronimaging/bm3dornl)
+[![PyPI](https://img.shields.io/pypi/v/bm3dornl)](https://pypi.org/project/bm3dornl/)
 
 <!-- End Badges -->
 BM3D ORNL
@@ -24,17 +24,28 @@ The BM3D algorithm was originally proposed by K. Dabov, A. Foi, V. Katkovnik, an
 How to install
 --------------
 
-**Using Pixi (Recommended)**
-
-```bash
-pixi install
-pixi run install
-```
-
 **Using Pip**
 
 ```bash
+# Core library only
 pip install bm3dornl
+
+# With GUI application
+pip install bm3dornl[gui]
+```
+
+**Supported Platforms**
+
+| Platform | Architecture | Library | GUI |
+|----------|--------------|---------|-----|
+| Linux | x86_64 | ✅ | ✅ |
+| macOS | ARM64 (Apple Silicon) | ✅ | ✅ |
+
+**Using Pixi (Development)**
+
+```bash
+pixi install
+pixi run build
 ```
 
 Usage
@@ -99,4 +110,58 @@ cd bm3dornl
 pixi run build
 pixi run test
 ```
+
+GUI Application
+---------------
+
+BM3DORNL includes a standalone GUI application for interactive ring artifact removal.
+
+### Installation
+
+```bash
+pip install bm3dornl[gui]
+```
+
+Or install the GUI separately:
+
+```bash
+pip install bm3dornl-gui
+```
+
+### Launching
+
+```bash
+bm3dornl-gui
+```
+
+### Features
+
+- Load HDF5 files with tree browser for dataset selection
+- Interactive slice viewer with histogram
+- Side-by-side comparison of original and processed images
+- Real-time parameter adjustment
+- ROI selection for histogram (Shift+drag to select region)
+- Export processed data to TIFF or HDF5
+
+### Keyboard Shortcuts
+
+| Shortcut | Action |
+|----------|--------|
+| Shift+Drag | Select ROI for histogram |
+| Scroll | Zoom in/out on image |
+| Drag | Pan image |
+
+Parameter Reference
+-------------------
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `mode` | `"streak"` | `"generic"` for white noise, `"streak"` for ring artifacts |
+| `sigma_random` | `0.1` | Noise standard deviation |
+| `patch_size` | `8` | Patch size (7 or 8 recommended) |
+| `step_size` | `3` | Step size for patch extraction |
+| `search_window` | `39` | Maximum search distance for similar patches |
+| `max_matches` | `16` | Maximum similar patches per 3D group |
+| `batch_size` | `32` | Batch size for stack processing |
+| `streak_sigma_smooth` | `1.0` | Smoothing for streak mode (streak mode only) |
 

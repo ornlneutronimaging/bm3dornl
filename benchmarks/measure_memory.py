@@ -54,7 +54,7 @@ def test_memory():
     print("Running BM3D...")
     start_time = time.time()
     # Use stack mode
-    denoised = bm3d_ring_artifact_removal(stack, mode="streak", sigma=0.1, block_matching_kwargs={"patch_size": 8, "num_patches_per_group": 32})
+    denoised = bm3d_ring_artifact_removal(stack, mode="streak", sigma_random=0.1, patch_size=8, max_matches=32)
     end_time = time.time()
     
     rss_peak = get_peak_rss_mb()

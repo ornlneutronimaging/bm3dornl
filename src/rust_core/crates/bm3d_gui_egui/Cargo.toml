@@ -1,12 +1,18 @@
 [package]
 name = "bm3d_gui_egui"
-version = "0.1.0"
-edition = "2021"
+version.workspace = true
+edition.workspace = true
+description = "GUI application for BM3D ring artifact removal"
+
+[[bin]]
+name = "bm3dornl-gui"
+path = "src/main.rs"
 
 [dependencies]
 eframe = "0.29"
 egui_plot = "0.29"
-hdf5-metno = "0.11"
+hdf5-metno = { version = "0.11", features = ["static", "zlib"] }
+hdf5-metno-sys = { version = "0.10", features = ["static", "zlib", "threadsafe"] }
 rfd = "0.15"
 tiff = "0.9"
 ndarray = "0.15"

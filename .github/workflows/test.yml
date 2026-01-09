@@ -1,0 +1,72 @@
+name: Test
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main, next, qa]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  rust-test:
+    name: Rust Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src/rust_core
+
+      - name: Run Rust tests (excluding GUI)
+        working-directory: src/rust_core
+        run: |
+          # Test bm3d_core only (GUI requires HDF5, Python bindings require Python)
+          cargo test -p bm3d_core --release
+
+  rust-lint:
+    name: Rust Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src/rust_core
+
+      - name: Check formatting
+        working-directory: src/rust_core
+        run: cargo fmt --all -- --check
+
+      - name: Run clippy (bm3d_core only)
+        working-directory: src/rust_core
+        run: cargo clippy -p bm3d_core -- -D warnings
+
+  python-test:
+    name: Python Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pixi
+        uses: prefix-dev/setup-pixi@v0.8.1
+        with:
+          pixi-version: v0.39.5
+
+      - name: Build and test
+        run: |
+          pixi run build
+          pixi run test-python

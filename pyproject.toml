@@ -1,7 +1,7 @@
 [project]
 name = "bm3dornl"
+version = "0.4.1"
 description = "BM3D for streak artifact removal in neutron imaging"
-dynamic = ["version"]
 requires-python = ">=3.12"
 dependencies = [
   "numpy",
@@ -18,6 +18,8 @@ repository = "https://github.com/ornlneutronimaging/bm3dornl"
 documentation = "https://bm3dornl.readthedocs.io/en/latest/"
 issues = "https://github.com/ornlneutronimaging/bm3dornl/issues"
 
+[project.optional-dependencies]
+gui = ["bm3dornl-gui>=0.4.0"]
 
 [build-system]
 requires = ["maturin>=1.0,<2.0"]
@@ -31,21 +33,6 @@ python-source = "src"
 
 [tool.black]
 line-length = 119
-
-[tool.versioningit.vcs]
-method = "git"
-default-tag = "0.0.1"
-
-[tool.versioningit.next-version]
-method = "minor"
-
-[tool.versioningit.format]
-distance = "{next_version}.dev{distance}"
-dirty = "{version}+d{build_date:%Y%m%d}"
-distance-dirty = "{next_version}.dev{distance}+d{build_date:%Y%m%d%H%M}"
-
-[tool.versioningit.write]
-file = "src/bm3dornl/_version.py"
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -61,9 +48,6 @@ pythonpath = [
 testpaths = ["tests"]
 python_files = ["test*.py"]
 norecursedirs = [".git", "tmp*", "_tmp*", "__pycache__", "*dataset*", "*data_set*"]
-markers = [
-    "cuda_required: legacy test requires CUDA (no longer supported, kept for reference)."
-]
 
 [tool.pylint]
 max-line-length = 120

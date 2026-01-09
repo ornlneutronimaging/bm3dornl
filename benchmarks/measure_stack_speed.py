@@ -42,74 +42,57 @@ def test_stack_speed():
         stack_noisy[i] = n
         sigma = s
         
-    print(f"Processing stack (Mode=streak, Patch=7x7 - Baseline)...")
+    print(f"Processing stack (Mode=streak, Patch=8x8)...")
     start = time.time()
-    denoised_stack = bm3d_ring_artifact_removal(stack_noisy, mode="streak", sigma=sigma) # Default 7x7
+    denoised_stack = bm3d_ring_artifact_removal(stack_noisy, mode="streak", sigma_random=sigma, patch_size=8)
     end = time.time()
-    
+
     total_time = end - start
     per_frame = total_time / N
-    print(f"Total Time 7x7: {total_time:.4f} s")
-    print(f"Per Frame 7x7: {per_frame:.4f} s")
-    
-    print(f"Processing stack (Mode=streak, Patch=8x8 - Hadamard Fast)...")
-    start = time.time()
-    denoised_stack_8 = bm3d_ring_artifact_removal(stack_noisy, mode="streak", sigma=sigma, block_matching_kwargs={"patch_size": 8})
-    end = time.time()
-    
-    total_time_8 = end - start
-    per_frame_8 = total_time_8 / N
-    print(f"Total Time 8x8: {total_time_8:.4f} s")
-    print(f"Per Frame 8x8: {per_frame_8:.4f} s")
-    
+    print(f"Total Time: {total_time:.4f} s")
+    print(f"Per Frame: {per_frame:.4f} s")
+
     # Calculate Average PSNR
     psnrs = []
     for i in range(N):
-        p = skimage.metrics.peak_signal_noise_ratio(stack_clean[i], denoised_stack_8[i])
+        p = skimage.metrics.peak_signal_noise_ratio(stack_clean[i], denoised_stack[i])
         psnrs.append(p)
     avg_psnr = np.mean(psnrs)
-    print(f"Average PSNR (8x8): {avg_psnr:.2f} dB")
+    print(f"Average PSNR: {avg_psnr:.2f} dB")
 
-
-    print(f"Processing stack (Mode=streak, Patch=8x8, M=32)...")
+    print(f"Processing stack (Mode=streak, Patch=8x8, max_matches=32)...")
     start = time.time()
-    denoised_stack_m32 = bm3d_ring_artifact_removal(stack_noisy, mode="streak", sigma=sigma, block_matching_kwargs={"patch_size": 8, "num_patches_per_group": 32})
+    denoised_stack_m32 = bm3d_ring_artifact_removal(stack_noisy, mode="streak", sigma_random=sigma, patch_size=8, max_matches=32)
     end = time.time()
-    
+
     total_time_m32 = end - start
     per_frame_m32 = total_time_m32 / N
-    print(f"Total Time 8x8 M=32: {total_time_m32:.4f} s")
-    print(f"Per Frame 8x8 M=32: {per_frame_m32:.4f} s")
-    
+    print(f"Total Time max_matches=32: {total_time_m32:.4f} s")
+    print(f"Per Frame max_matches=32: {per_frame_m32:.4f} s")
+
     psnrs = []
     for i in range(N):
         p = skimage.metrics.peak_signal_noise_ratio(stack_clean[i], denoised_stack_m32[i])
         psnrs.append(p)
     avg_psnr_m32 = np.mean(psnrs)
-    print(f"Average PSNR (8x8 M=32): {avg_psnr_m32:.2f} dB")
+    print(f"Average PSNR (max_matches=32): {avg_psnr_m32:.2f} dB")
 
-
-    print(f"Processing stack (Mode=streak, Patch=8x8, Stride=3)...")
+    print(f"Processing stack (Mode=streak, Patch=8x8, step_size=3)...")
     start = time.time()
-    denoised_stack_s3 = bm3d_ring_artifact_removal(stack_noisy, mode="streak", sigma=sigma, block_matching_kwargs={"patch_size": 8, "stride": 3})
+    denoised_stack_s3 = bm3d_ring_artifact_removal(stack_noisy, mode="streak", sigma_random=sigma, patch_size=8, step_size=3)
     end = time.time()
-    
+
     total_time_s3 = end - start
     per_frame_s3 = total_time_s3 / N
-    print(f"Total Time 8x8 Stride=3: {total_time_s3:.4f} s")
-    print(f"Per Frame 8x8 Stride=3: {per_frame_s3:.4f} s")
-    
+    print(f"Total Time step_size=3: {total_time_s3:.4f} s")
+    print(f"Per Frame step_size=3: {per_frame_s3:.4f} s")
+
     psnrs = []
     for i in range(N):
         p = skimage.metrics.peak_signal_noise_ratio(stack_clean[i], denoised_stack_s3[i])
         psnrs.append(p)
     avg_psnr_s3 = np.mean(psnrs)
-    print(f"Average PSNR (8x8 Stride=3): {avg_psnr_s3:.2f} dB")
-    
-    if per_frame_8 < per_frame:
-         print(f"SUCCESS: Hadamard is faster by {per_frame - per_frame_8:.3f}s/frame")
-    else:
-         print("NOTE: Hadamard is not faster.")
+    print(f"Average PSNR (step_size=3): {avg_psnr_s3:.2f} dB")
 
 if __name__ == "__main__":
     test_stack_speed()

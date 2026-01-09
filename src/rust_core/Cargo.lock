@@ -547,7 +547,7 @@ dependencies = [
 
 [[package]]
 name = "bm3d_core"
-version = "0.1.0"
+version = "0.4.1"
 dependencies = [
  "criterion",
  "ndarray",
@@ -560,12 +560,13 @@ dependencies = [
 
 [[package]]
 name = "bm3d_gui_egui"
-version = "0.1.0"
+version = "0.4.1"
 dependencies = [
  "bm3d_core",
  "eframe",
  "egui_plot",
  "hdf5-metno",
+ "hdf5-metno-sys",
  "ndarray",
  "rfd",
  "tiff",
@@ -573,7 +574,7 @@ dependencies = [
 
 [[package]]
 name = "bm3d_python"
-version = "0.1.0"
+version = "0.4.1"
 dependencies = [
  "bm3d_core",
  "ndarray",
@@ -780,6 +781,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bde03770d3df201d4fb868f2c9c59e66a3e4e2bd06692a0fe701e7103c7e84d4"
 dependencies = [
  "error-code",
+]
+
+[[package]]
+name = "cmake"
+version = "0.1.57"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "75443c44cd6b379beb8c5b45d85d0773baf31cce901fe7bb252f4eff3008ef7d"
+dependencies = [
+ "cc",
 ]
 
 [[package]]
@@ -1708,13 +1718,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "hdf5-metno-src"
+version = "0.9.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "36b0303729f84fb0f2dc510d28b64cb716fb13e6a139a17e88db329123ecff82"
+dependencies = [
+ "cmake",
+ "libz-sys",
+]
+
+[[package]]
 name = "hdf5-metno-sys"
 version = "0.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "de20d5ba22c244493bdfefb91d8e9de08e3e58d96a792532da5e0df545aed279"
 dependencies = [
+ "hdf5-metno-src",
  "libc",
  "libloading",
+ "libz-sys",
  "parking_lot",
  "pkg-config",
  "regex",
@@ -2018,6 +2040,18 @@ dependencies = [
  "bitflags 2.10.0",
  "libc",
  "redox_syscall 0.7.0",
+]
+
+[[package]]
+name = "libz-sys"
+version = "1.1.23"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "15d118bbf3771060e7311cc7bb0545b01d08a8b4a7de949198dec1fa0ca1c0f7"
+dependencies = [
+ "cc",
+ "libc",
+ "pkg-config",
+ "vcpkg",
 ]
 
 [[package]]
@@ -3783,6 +3817,12 @@ dependencies = [
  "serde_core",
  "wasm-bindgen",
 ]
+
+[[package]]
+name = "vcpkg"
+version = "0.2.15"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "accd4ea62f7bb7a82fe23066fb0957d48ef677f6eeb8215f372f52e48bb32426"
 
 [[package]]
 name = "version_check"
