@@ -147,7 +147,13 @@ impl ImageStats {
             0.0
         };
 
-        Self { min, max, mean, std, pixel_count: count }
+        Self {
+            min,
+            max,
+            mean,
+            std,
+            pixel_count: count,
+        }
     }
 }
 
@@ -214,10 +220,7 @@ impl HistogramData {
         let max_count = counts.iter().copied().max().unwrap_or(1) as f32;
 
         // Normalize counts to [0, 1]
-        let normalized: Vec<f32> = counts
-            .iter()
-            .map(|&c| c as f32 / max_count)
-            .collect();
+        let normalized: Vec<f32> = counts.iter().map(|&c| c as f32 / max_count).collect();
 
         Self {
             counts: normalized,
@@ -255,8 +258,21 @@ impl SingleViewHistogram {
     }
 
     /// Show histogram panel. Returns the height used.
-    pub fn show(&mut self, ui: &mut egui::Ui, slice_data: Option<&Array2<f32>>, slice_index: usize) -> f32 {
-        self.show_with_roi(ui, slice_data, slice_index, None, &mut false, &mut false, false)
+    pub fn show(
+        &mut self,
+        ui: &mut egui::Ui,
+        slice_data: Option<&Array2<f32>>,
+        slice_index: usize,
+    ) -> f32 {
+        self.show_with_roi(
+            ui,
+            slice_data,
+            slice_index,
+            None,
+            &mut false,
+            &mut false,
+            false,
+        )
     }
 
     /// Show histogram panel with optional ROI. Returns the height used.
@@ -284,7 +300,11 @@ impl SingleViewHistogram {
             ui.separator();
 
             // ROI mode toggle button
-            let roi_button_text = if *roi_mode { "📐 ROI Mode ✓" } else { "📐 ROI Mode" };
+            let roi_button_text = if *roi_mode {
+                "📐 ROI Mode ✓"
+            } else {
+                "📐 ROI Mode"
+            };
             let roi_button = ui.selectable_label(*roi_mode, roi_button_text);
             if roi_button.clicked() {
                 *roi_mode = !*roi_mode;
@@ -294,24 +314,24 @@ impl SingleViewHistogram {
                  When ON: drag on image draws ROI.\n\
                  When OFF: drag pans image.\n\
                  Shortcut: Shift+drag always draws ROI.\n\
-                 Drag inside existing ROI to move it."
+                 Drag inside existing ROI to move it.",
             );
 
             if let Some(r) = roi {
                 ui.separator();
                 // Show cursor-in-roi indicator with theme-aware colors
                 let roi_text = if cursor_in_roi {
-                    format!("ROI: ({},{})→({},{}) [drag to move]", r.min_x, r.min_y, r.max_x, r.max_y)
+                    format!(
+                        "ROI: ({},{})→({},{}) [drag to move]",
+                        r.min_x, r.min_y, r.max_x, r.max_y
+                    )
                 } else {
                     format!("ROI: ({},{})→({},{})", r.min_x, r.min_y, r.max_x, r.max_y)
                 };
                 let roi_color = colors::roi_label(ui, cursor_in_roi);
-                ui.label(
-                    egui::RichText::new(roi_text)
-                        .small()
-                        .color(roi_color),
-                );
-                if ui.small_button("Clear")
+                ui.label(egui::RichText::new(roi_text).small().color(roi_color));
+                if ui
+                    .small_button("Clear")
                     .on_hover_text("Remove ROI selection")
                     .clicked()
                 {
@@ -328,7 +348,10 @@ impl SingleViewHistogram {
         // Update cached histogram if slice changed or ROI changed
         let roi_changed = self.cached_roi != roi.copied();
         if let Some(data) = slice_data {
-            if self.cached_slice_index != Some(slice_index) || roi_changed || self.cached_histogram.is_none() {
+            if self.cached_slice_index != Some(slice_index)
+                || roi_changed
+                || self.cached_histogram.is_none()
+            {
                 self.cached_histogram = Some(HistogramData::compute_with_roi(data, 256, roi));
                 self.cached_slice_index = Some(slice_index);
                 self.cached_roi = roi.copied();
@@ -348,17 +371,19 @@ impl SingleViewHistogram {
                 .iter()
                 .enumerate()
                 .map(|(i, &count)| {
-                    let bin_width = (histogram.max_val - histogram.min_val) / histogram.counts.len() as f32;
+                    let bin_width =
+                        (histogram.max_val - histogram.min_val) / histogram.counts.len() as f32;
                     let x = histogram.min_val + (i as f32 + 0.5) * bin_width;
-                    Bar::new(x as f64, count as f64)
-                        .width(bin_width as f64 * 0.9)
+                    Bar::new(x as f64, count as f64).width(bin_width as f64 * 0.9)
                 })
                 .collect();
 
-            let chart_name = if roi.is_some() { "ROI Intensity" } else { "Intensity" };
-            let chart = BarChart::new(bars)
-                .color(bar_color)
-                .name(chart_name);
+            let chart_name = if roi.is_some() {
+                "ROI Intensity"
+            } else {
+                "Intensity"
+            };
+            let chart = BarChart::new(bars).color(bar_color).name(chart_name);
 
             Plot::new("single_histogram")
                 .height(plot_height)
@@ -388,11 +413,7 @@ impl SingleViewHistogram {
                         stats.min, stats.max, stats.mean, stats.std
                     )
                 };
-                ui.label(
-                    egui::RichText::new(stats_text)
-                        .small()
-                        .weak(),
-                );
+                ui.label(egui::RichText::new(stats_text).small().weak());
             });
         }
 
@@ -446,7 +467,16 @@ impl CompareViewHistogram {
         processed_slice: Option<&Array2<f32>>,
         slice_index: usize,
     ) -> f32 {
-        self.show_with_roi(ui, original_slice, processed_slice, slice_index, None, &mut false, &mut false, false)
+        self.show_with_roi(
+            ui,
+            original_slice,
+            processed_slice,
+            slice_index,
+            None,
+            &mut false,
+            &mut false,
+            false,
+        )
     }
 
     /// Show histogram panel for comparison view with optional ROI.
@@ -485,7 +515,11 @@ impl CompareViewHistogram {
             ui.separator();
 
             // ROI mode toggle button
-            let roi_button_text = if *roi_mode { "📐 ROI Mode ✓" } else { "📐 ROI Mode" };
+            let roi_button_text = if *roi_mode {
+                "📐 ROI Mode ✓"
+            } else {
+                "📐 ROI Mode"
+            };
             let roi_button = ui.selectable_label(*roi_mode, roi_button_text);
             if roi_button.clicked() {
                 *roi_mode = !*roi_mode;
@@ -494,24 +528,24 @@ impl CompareViewHistogram {
                 "Click to toggle ROI selection mode.\n\
                  When ON: drag on image draws ROI.\n\
                  Shortcut: Shift+drag always draws ROI.\n\
-                 Drag inside existing ROI to move it."
+                 Drag inside existing ROI to move it.",
             );
 
             if let Some(r) = roi {
                 ui.separator();
                 // Show cursor-in-roi indicator with theme-aware colors
                 let roi_text = if cursor_in_roi {
-                    format!("ROI: ({},{})→({},{}) [drag to move]", r.min_x, r.min_y, r.max_x, r.max_y)
+                    format!(
+                        "ROI: ({},{})→({},{}) [drag to move]",
+                        r.min_x, r.min_y, r.max_x, r.max_y
+                    )
                 } else {
                     format!("ROI: ({},{})→({},{})", r.min_x, r.min_y, r.max_x, r.max_y)
                 };
                 let roi_color = colors::roi_label(ui, cursor_in_roi);
-                ui.label(
-                    egui::RichText::new(roi_text)
-                        .small()
-                        .color(roi_color),
-                );
-                if ui.small_button("Clear")
+                ui.label(egui::RichText::new(roi_text).small().color(roi_color));
+                if ui
+                    .small_button("Clear")
                     .on_hover_text("Remove ROI selection")
                     .clicked()
                 {
@@ -591,16 +625,11 @@ impl CompareViewHistogram {
                     .map(|(i, &count)| {
                         let bin_width = (hist.max_val - hist.min_val) / hist.counts.len() as f32;
                         let x = hist.min_val + (i as f32 + 0.5) * bin_width;
-                        Bar::new(x as f64, count as f64)
-                            .width(bin_width as f64 * 0.8)
+                        Bar::new(x as f64, count as f64).width(bin_width as f64 * 0.8)
                     })
                     .collect();
 
-                charts.push(
-                    BarChart::new(bars)
-                        .color(original_color)
-                        .name("Original"),
-                );
+                charts.push(BarChart::new(bars).color(original_color).name("Original"));
             }
         }
 
@@ -613,16 +642,11 @@ impl CompareViewHistogram {
                     .map(|(i, &count)| {
                         let bin_width = (hist.max_val - hist.min_val) / hist.counts.len() as f32;
                         let x = hist.min_val + (i as f32 + 0.5) * bin_width;
-                        Bar::new(x as f64, count as f64)
-                            .width(bin_width as f64 * 0.8)
+                        Bar::new(x as f64, count as f64).width(bin_width as f64 * 0.8)
                     })
                     .collect();
 
-                charts.push(
-                    BarChart::new(bars)
-                        .color(processed_color)
-                        .name("Processed"),
-                );
+                charts.push(BarChart::new(bars).color(processed_color).name("Processed"));
             }
         }
 
@@ -654,14 +678,11 @@ impl CompareViewHistogram {
                 .map(|(i, &count)| {
                     let bin_width = (hist.max_val - hist.min_val) / hist.counts.len() as f32;
                     let x = hist.min_val + (i as f32 + 0.5) * bin_width;
-                    Bar::new(x as f64, count as f64)
-                        .width(bin_width as f64 * 0.8)
+                    Bar::new(x as f64, count as f64).width(bin_width as f64 * 0.8)
                 })
                 .collect();
 
-            let chart = BarChart::new(bars)
-                .color(diff_color)
-                .name("Difference");
+            let chart = BarChart::new(bars).color(diff_color).name("Difference");
 
             Plot::new("compare_diff_histogram")
                 .height(height)

@@ -98,9 +98,11 @@ impl WindowLevel {
 
             // Auto button
             let auto_text = if self.auto_mode { "Auto ✓" } else { "Auto" };
-            if ui.button(auto_text)
+            if ui
+                .button(auto_text)
                 .on_hover_text("Reset window/level to full data range")
-                .clicked() {
+                .clicked()
+            {
                 self.auto();
                 changed = true;
             }

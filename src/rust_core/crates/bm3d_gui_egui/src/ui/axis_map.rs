@@ -72,9 +72,11 @@ impl AxisMappingWidget {
 
             ui.separator();
 
-            if ui.button("Reset to Standard")
+            if ui
+                .button("Reset to Standard")
                 .on_hover_text("Reset axis mapping to default (X=D2, Y=D1, Slice=D0)")
-                .clicked() {
+                .clicked()
+            {
                 self.mapping = AxisMapping::default();
                 changed = true;
             }

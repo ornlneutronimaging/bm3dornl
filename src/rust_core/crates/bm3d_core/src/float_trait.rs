@@ -17,15 +17,7 @@ use std::iter::Sum;
 /// - Iteration support (Sum)
 /// - Debug printing
 pub trait Bm3dFloat:
-    Float
-    + FftNum
-    + FromPrimitive
-    + NumAssign
-    + Sum
-    + Debug
-    + Send
-    + Sync
-    + 'static
+    Float + FftNum + FromPrimitive + NumAssign + Sum + Debug + Send + Sync + 'static
 {
     /// The constant PI for this float type.
     const PI: Self;

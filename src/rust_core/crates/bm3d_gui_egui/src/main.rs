@@ -254,7 +254,10 @@ impl App {
 
         let data = match request.data_type {
             SaveDataType::Original => self.volume.as_ref().map(|v| v.raw_data().to_owned()),
-            SaveDataType::Processed => self.processed_volume.as_ref().map(|v| v.raw_data().to_owned()),
+            SaveDataType::Processed => self
+                .processed_volume
+                .as_ref()
+                .map(|v| v.raw_data().to_owned()),
             SaveDataType::Difference => {
                 if let (Some(orig), Some(proc)) = (&self.volume, &self.processed_volume) {
                     Some(compute_difference(orig.raw_data(), proc.raw_data()))
@@ -302,9 +305,11 @@ impl App {
             ProcessingState::Idle => {
                 let can_process = self.volume.is_some();
                 ui.add_enabled_ui(can_process, |ui| {
-                    if ui.button("▶ Process")
+                    if ui
+                        .button("▶ Process")
                         .on_hover_text("Run BM3D denoising with current parameters")
-                        .clicked() {
+                        .clicked()
+                    {
                         self.start_processing();
                     }
                 });
@@ -325,36 +330,44 @@ impl App {
                         .text(format!("Slice {} / {}", current_slice, total_slices)),
                 );
 
-                if ui.button("⏹ Cancel")
+                if ui
+                    .button("⏹ Cancel")
                     .on_hover_text("Stop processing")
-                    .clicked() {
+                    .clicked()
+                {
                     self.processing_manager.cancel();
                 }
             }
             ProcessingState::Completed => {
                 ui.colored_label(egui::Color32::GREEN, "✓ Processing complete");
 
-                if ui.button("▶ Process Again")
+                if ui
+                    .button("▶ Process Again")
                     .on_hover_text("Re-run BM3D processing with current parameters")
-                    .clicked() {
+                    .clicked()
+                {
                     self.start_processing();
                 }
             }
             ProcessingState::Cancelled => {
                 ui.colored_label(egui::Color32::YELLOW, "⚠ Processing cancelled");
 
-                if ui.button("▶ Process")
+                if ui
+                    .button("▶ Process")
                     .on_hover_text("Run BM3D denoising with current parameters")
-                    .clicked() {
+                    .clicked()
+                {
                     self.start_processing();
                 }
             }
             ProcessingState::Error(msg) => {
                 ui.colored_label(egui::Color32::RED, format!("✗ Error: {}", msg));
 
-                if ui.button("▶ Retry")
+                if ui
+                    .button("▶ Retry")
                     .on_hover_text("Retry BM3D processing")
-                    .clicked() {
+                    .clicked()
+                {
                     self.start_processing();
                 }
             }
@@ -431,9 +444,11 @@ impl App {
 
         // Save button
         ui.heading("Export");
-        if ui.button("💾 Save...")
+        if ui
+            .button("💾 Save...")
             .on_hover_text("Save processed data to file")
-            .clicked() {
+            .clicked()
+        {
             self.save_dialog.open();
         }
     }
@@ -445,10 +460,7 @@ impl eframe::App for App {
         self.processing_manager.poll_progress();
 
         // Check if processing completed and store result
-        if matches!(
-            self.processing_manager.state(),
-            ProcessingState::Completed
-        ) {
+        if matches!(self.processing_manager.state(), ProcessingState::Completed) {
             if let Some(result) = self.processing_manager.take_processed_result() {
                 let processed_vol = Volume3D::new(result);
                 if let Some(original) = &self.volume {
@@ -480,9 +492,11 @@ impl eframe::App for App {
                 ui.heading("BM3D Volume Viewer");
                 ui.separator();
 
-                if ui.button("📂 Open File")
+                if ui
+                    .button("📂 Open File")
                     .on_hover_text("Load TIFF stack or HDF5 file")
-                    .clicked() {
+                    .clicked()
+                {
                     self.open_file_dialog();
                 }
 
@@ -552,9 +566,13 @@ impl eframe::App for App {
                     ui.add_space(10.0);
                     if let Some(tree) = &self.hdf5_tree {
                         if let Some(selected) = tree.selected_path() {
-                            if ui.button(format!("Load: {}", selected))
-                                .on_hover_text("Load the selected dataset for viewing and processing")
-                                .clicked() {
+                            if ui
+                                .button(format!("Load: {}", selected))
+                                .on_hover_text(
+                                    "Load the selected dataset for viewing and processing",
+                                )
+                                .clicked()
+                            {
                                 dataset_to_load = Some(selected.clone());
                             }
                         }
@@ -654,10 +672,14 @@ impl eframe::App for App {
                             }
 
                             // Show slice viewer with cursor tracking
-                            let slice_changed =
-                                self.slice_viewer.show_with_slice_data(
-                                    ui, vol, slice_data.as_ref(), colormap, &self.window_level, self.keep_aspect_ratio
-                                );
+                            let slice_changed = self.slice_viewer.show_with_slice_data(
+                                ui,
+                                vol,
+                                slice_data.as_ref(),
+                                colormap,
+                                &self.window_level,
+                                self.keep_aspect_ratio,
+                            );
 
                             if slice_changed {
                                 self.update_window_level_for_slice();
@@ -697,12 +719,16 @@ impl eframe::App for App {
                             }
 
                             // Show compare view with cursor tracking
-                            let slice_changed =
-                                self.compare_view.show_with_slice_data(
-                                    ui, orig, proc,
-                                    orig_slice.as_ref(), proc_slice.as_ref(),
-                                    colormap, &self.window_level, self.keep_aspect_ratio
-                                );
+                            let slice_changed = self.compare_view.show_with_slice_data(
+                                ui,
+                                orig,
+                                proc,
+                                orig_slice.as_ref(),
+                                proc_slice.as_ref(),
+                                colormap,
+                                &self.window_level,
+                                self.keep_aspect_ratio,
+                            );
 
                             if slice_changed {
                                 self.update_window_level_for_slice();

@@ -248,10 +248,7 @@ pub struct SaveRequest {
 }
 
 /// Save volume data to file
-pub fn save_volume(
-    data: &Array3<f32>,
-    request: &SaveRequest,
-) -> Result<(), String> {
+pub fn save_volume(data: &Array3<f32>, request: &SaveRequest) -> Result<(), String> {
     match request.format {
         SaveFormat::Tiff => save_as_tiff(data, &request.path),
         SaveFormat::Hdf5 => save_as_hdf5(data, &request.path, &request.hdf5_dataset_path),
@@ -266,7 +263,8 @@ fn save_as_tiff(data: &Array3<f32>, path: &PathBuf) -> Result<(), String> {
     let file = File::create(path).map_err(|e| format!("Failed to create file: {}", e))?;
     let writer = BufWriter::new(file);
 
-    let mut encoder = TiffEncoder::new(writer).map_err(|e| format!("Failed to create TIFF encoder: {}", e))?;
+    let mut encoder =
+        TiffEncoder::new(writer).map_err(|e| format!("Failed to create TIFF encoder: {}", e))?;
 
     let (num_slices, height, width) = data.dim();
 

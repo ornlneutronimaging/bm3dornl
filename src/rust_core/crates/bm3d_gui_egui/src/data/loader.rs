@@ -75,16 +75,19 @@ pub fn load_hdf5_dataset(path: &Path, dataset_path: &str) -> Result<Volume3D, Da
 pub fn load_tiff_stack(path: &Path) -> Result<Volume3D, DataLoadError> {
     let file = File::open(path).map_err(|e| DataLoadError::IoError(e.to_string()))?;
     let reader = BufReader::new(file);
-    let mut decoder =
-        Decoder::new(reader).map_err(|e| DataLoadError::TiffError(e.to_string()))?;
+    let mut decoder = Decoder::new(reader).map_err(|e| DataLoadError::TiffError(e.to_string()))?;
 
     let mut pages: Vec<Vec<f32>> = Vec::new();
     let mut width = 0usize;
     let mut height = 0usize;
 
     loop {
-        let (w, h) = decoder.dimensions().map_err(|e| DataLoadError::TiffError(e.to_string()))?;
-        let color_type = decoder.colortype().map_err(|e| DataLoadError::TiffError(e.to_string()))?;
+        let (w, h) = decoder
+            .dimensions()
+            .map_err(|e| DataLoadError::TiffError(e.to_string()))?;
+        let color_type = decoder
+            .colortype()
+            .map_err(|e| DataLoadError::TiffError(e.to_string()))?;
 
         // Only support grayscale for now
         if !matches!(
@@ -137,7 +140,9 @@ pub fn load_tiff_stack(path: &Path) -> Result<Volume3D, DataLoadError> {
     }
 
     if pages.is_empty() {
-        return Err(DataLoadError::TiffError("No pages found in TIFF".to_string()));
+        return Err(DataLoadError::TiffError(
+            "No pages found in TIFF".to_string(),
+        ));
     }
 
     let num_pages = pages.len();
@@ -195,7 +200,10 @@ pub fn build_hdf5_tree(path: &Path) -> Result<Vec<Hdf5Entry>, DataLoadError> {
     build_group_tree(&file, "/")
 }
 
-fn build_group_tree(group: &hdf5_metno::Group, prefix: &str) -> Result<Vec<Hdf5Entry>, DataLoadError> {
+fn build_group_tree(
+    group: &hdf5_metno::Group,
+    prefix: &str,
+) -> Result<Vec<Hdf5Entry>, DataLoadError> {
     let member_names = group
         .member_names()
         .map_err(|e| DataLoadError::Hdf5Error(e.to_string()))?;

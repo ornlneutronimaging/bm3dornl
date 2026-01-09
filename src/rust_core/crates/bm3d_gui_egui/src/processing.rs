@@ -11,7 +11,10 @@ pub enum ProcessingProgress {
     /// Processing started
     Started { total_slices: usize },
     /// Slice completed
-    SliceComplete { slice_index: usize, total_slices: usize },
+    SliceComplete {
+        slice_index: usize,
+        total_slices: usize,
+    },
     /// Processing finished successfully
     Finished { result: Array3<f32> },
     /// Processing was cancelled
@@ -24,7 +27,10 @@ pub enum ProcessingProgress {
 #[derive(Debug, Clone, PartialEq)]
 pub enum ProcessingState {
     Idle,
-    Processing { current_slice: usize, total_slices: usize },
+    Processing {
+        current_slice: usize,
+        total_slices: usize,
+    },
     Completed,
     Cancelled,
     Error(String),

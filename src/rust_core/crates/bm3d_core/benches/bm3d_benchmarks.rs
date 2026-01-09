@@ -11,14 +11,11 @@ use rand::prelude::*;
 use rustfft::FftPlanner;
 
 // Import from bm3d_core - the whole point of this restructure!
-use bm3d_core::{
-    Bm3dMode, Bm3dPlans,
-    fft2d, ifft2d,
-    wht2d_8x8_forward, wht2d_8x8_inverse,
-    estimate_streak_profile_impl,
-    run_bm3d_kernel,
-};
 use bm3d_core::block_matching::{compute_integral_images, find_similar_patches};
+use bm3d_core::{
+    estimate_streak_profile_impl, fft2d, ifft2d, run_bm3d_kernel, wht2d_8x8_forward,
+    wht2d_8x8_inverse, Bm3dMode, Bm3dPlans,
+};
 
 // =============================================================================
 // Helper Functions for Test Data Generation
@@ -51,33 +48,21 @@ fn bench_fft2d(c: &mut Criterion) {
 
         group.throughput(Throughput::Elements((size * size) as u64));
 
-        group.bench_with_input(
-            BenchmarkId::new("forward", size),
-            &size,
-            |b, _| {
-                b.iter(|| fft2d(black_box(input.view()), &fft_row, &fft_col))
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("forward", size), &size, |b, _| {
+            b.iter(|| fft2d(black_box(input.view()), &fft_row, &fft_col))
+        });
 
         let freq = fft2d(input.view(), &fft_row, &fft_col);
-        group.bench_with_input(
-            BenchmarkId::new("inverse", size),
-            &size,
-            |b, _| {
-                b.iter(|| ifft2d(black_box(&freq), &ifft_row, &ifft_col))
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("inverse", size), &size, |b, _| {
+            b.iter(|| ifft2d(black_box(&freq), &ifft_row, &ifft_col))
+        });
 
-        group.bench_with_input(
-            BenchmarkId::new("roundtrip", size),
-            &size,
-            |b, _| {
-                b.iter(|| {
-                    let f = fft2d(black_box(input.view()), &fft_row, &fft_col);
-                    ifft2d(&f, &ifft_row, &ifft_col)
-                })
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("roundtrip", size), &size, |b, _| {
+            b.iter(|| {
+                let f = fft2d(black_box(input.view()), &fft_row, &fft_col);
+                ifft2d(&f, &ifft_row, &ifft_col)
+            })
+        });
     }
 
     group.finish();
@@ -125,13 +110,9 @@ fn bench_block_matching(c: &mut Criterion) {
 
         group.throughput(Throughput::Elements((size * size) as u64));
 
-        group.bench_with_input(
-            BenchmarkId::new("integral_images", size),
-            &size,
-            |b, _| {
-                b.iter(|| compute_integral_images(black_box(image.view())))
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("integral_images", size), &size, |b, _| {
+            b.iter(|| compute_integral_images(black_box(image.view())))
+        });
 
         group.bench_with_input(
             BenchmarkId::new("find_similar_8x8_win24_max16", size),
@@ -194,13 +175,7 @@ fn bench_streak_profile(c: &mut Criterion) {
             BenchmarkId::new("f32/iter1", format!("{}x{}", rows, cols)),
             &(rows, cols),
             |b, _| {
-                b.iter(|| {
-                    estimate_streak_profile_impl(
-                        black_box(sinogram_f32.view()),
-                        3.0f32,
-                        1,
-                    )
-                })
+                b.iter(|| estimate_streak_profile_impl(black_box(sinogram_f32.view()), 3.0f32, 1))
             },
         );
 
@@ -208,13 +183,7 @@ fn bench_streak_profile(c: &mut Criterion) {
             BenchmarkId::new("f32/iter3", format!("{}x{}", rows, cols)),
             &(rows, cols),
             |b, _| {
-                b.iter(|| {
-                    estimate_streak_profile_impl(
-                        black_box(sinogram_f32.view()),
-                        3.0f32,
-                        3,
-                    )
-                })
+                b.iter(|| estimate_streak_profile_impl(black_box(sinogram_f32.view()), 3.0f32, 3))
             },
         );
 
@@ -223,13 +192,7 @@ fn bench_streak_profile(c: &mut Criterion) {
             BenchmarkId::new("f64/iter1", format!("{}x{}", rows, cols)),
             &(rows, cols),
             |b, _| {
-                b.iter(|| {
-                    estimate_streak_profile_impl(
-                        black_box(sinogram_f64.view()),
-                        3.0f64,
-                        1,
-                    )
-                })
+                b.iter(|| estimate_streak_profile_impl(black_box(sinogram_f64.view()), 3.0f64, 1))
             },
         );
 
@@ -237,13 +200,7 @@ fn bench_streak_profile(c: &mut Criterion) {
             BenchmarkId::new("f64/iter3", format!("{}x{}", rows, cols)),
             &(rows, cols),
             |b, _| {
-                b.iter(|| {
-                    estimate_streak_profile_impl(
-                        black_box(sinogram_f64.view()),
-                        3.0f64,
-                        3,
-                    )
-                })
+                b.iter(|| estimate_streak_profile_impl(black_box(sinogram_f64.view()), 3.0f64, 3))
             },
         );
     }
@@ -267,28 +224,24 @@ fn bench_bm3d_full(c: &mut Criterion) {
 
         group.throughput(Throughput::Elements((size * size) as u64));
 
-        group.bench_with_input(
-            BenchmarkId::new("hard_threshold", label),
-            &size,
-            |b, _| {
-                b.iter(|| {
-                    run_bm3d_kernel(
-                        black_box(image.view()),
-                        image.view(),
-                        Bm3dMode::HardThreshold,
-                        sigma_psd.view(),
-                        sigma_map.view(),
-                        0.1,
-                        2.7,
-                        8,
-                        2,
-                        24,
-                        64,
-                        &plans,
-                    )
-                })
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("hard_threshold", label), &size, |b, _| {
+            b.iter(|| {
+                run_bm3d_kernel(
+                    black_box(image.view()),
+                    image.view(),
+                    Bm3dMode::HardThreshold,
+                    sigma_psd.view(),
+                    sigma_map.view(),
+                    0.1,
+                    2.7,
+                    8,
+                    2,
+                    24,
+                    64,
+                    &plans,
+                )
+            })
+        });
 
         let pilot = run_bm3d_kernel(
             image.view(),
@@ -305,65 +258,57 @@ fn bench_bm3d_full(c: &mut Criterion) {
             &plans,
         );
 
-        group.bench_with_input(
-            BenchmarkId::new("wiener", label),
-            &size,
-            |b, _| {
-                b.iter(|| {
-                    run_bm3d_kernel(
-                        black_box(image.view()),
-                        pilot.view(),
-                        Bm3dMode::Wiener,
-                        sigma_psd.view(),
-                        sigma_map.view(),
-                        0.1,
-                        0.0,
-                        8,
-                        2,
-                        24,
-                        64,
-                        &plans,
-                    )
-                })
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("wiener", label), &size, |b, _| {
+            b.iter(|| {
+                run_bm3d_kernel(
+                    black_box(image.view()),
+                    pilot.view(),
+                    Bm3dMode::Wiener,
+                    sigma_psd.view(),
+                    sigma_map.view(),
+                    0.1,
+                    0.0,
+                    8,
+                    2,
+                    24,
+                    64,
+                    &plans,
+                )
+            })
+        });
 
-        group.bench_with_input(
-            BenchmarkId::new("full_2pass", label),
-            &size,
-            |b, _| {
-                b.iter(|| {
-                    let ht_result = run_bm3d_kernel(
-                        black_box(image.view()),
-                        image.view(),
-                        Bm3dMode::HardThreshold,
-                        sigma_psd.view(),
-                        sigma_map.view(),
-                        0.1,
-                        2.7,
-                        8,
-                        2,
-                        24,
-                        64,
-                        &plans,
-                    );
-                    run_bm3d_kernel(
-                        image.view(),
-                        ht_result.view(),
-                        Bm3dMode::Wiener,
-                        sigma_psd.view(),
-                        sigma_map.view(),
-                        0.1,
-                        0.0,
-                        8,
-                        2,
-                        24,
-                        64,
-                        &plans,
-                    )
-                })
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("full_2pass", label), &size, |b, _| {
+            b.iter(|| {
+                let ht_result = run_bm3d_kernel(
+                    black_box(image.view()),
+                    image.view(),
+                    Bm3dMode::HardThreshold,
+                    sigma_psd.view(),
+                    sigma_map.view(),
+                    0.1,
+                    2.7,
+                    8,
+                    2,
+                    24,
+                    64,
+                    &plans,
+                );
+                run_bm3d_kernel(
+                    image.view(),
+                    ht_result.view(),
+                    Bm3dMode::Wiener,
+                    sigma_psd.view(),
+                    sigma_map.view(),
+                    0.1,
+                    0.0,
+                    8,
+                    2,
+                    24,
+                    64,
+                    &plans,
+                )
+            })
+        });
     }
 
     group.finish();

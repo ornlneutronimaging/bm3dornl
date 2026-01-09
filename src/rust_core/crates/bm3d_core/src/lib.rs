@@ -23,6 +23,6 @@ pub use block_matching::PatchMatch;
 pub use float_trait::Bm3dFloat;
 pub use multiscale::{multiscale_bm3d_streak_removal, MultiscaleConfig};
 pub use orchestration::{bm3d_ring_artifact_removal, Bm3dConfig, RingRemovalMode};
-pub use pipeline::{Bm3dMode, Bm3dPlans, run_bm3d_kernel, run_bm3d_step, run_bm3d_step_stack};
+pub use pipeline::{run_bm3d_kernel, run_bm3d_step, run_bm3d_step_stack, Bm3dMode, Bm3dPlans};
 pub use streak::estimate_streak_profile_impl;
 pub use transforms::{fft2d, ifft2d, wht2d_8x8_forward, wht2d_8x8_inverse};

@@ -23,16 +23,16 @@ impl DivergingColormap {
         if t < 0.0 {
             // Blue side: interpolate from Blue to White
             let s = 1.0 + t; // s goes from 0 (t=-1) to 1 (t=0)
-            let r = (33.0 + s * (255.0 - 33.0)) as u8;   // 33 -> 255
+            let r = (33.0 + s * (255.0 - 33.0)) as u8; // 33 -> 255
             let g = (102.0 + s * (255.0 - 102.0)) as u8; // 102 -> 255
             let b = (172.0 + s * (255.0 - 172.0)) as u8; // 172 -> 255
             [r, g, b]
         } else {
             // Red side: interpolate from White to Red
             let s = t; // s goes from 0 (t=0) to 1 (t=1)
-            let r = 255;                                    // 255 -> 255
-            let g = (255.0 - s * (255.0 - 58.0)) as u8;    // 255 -> 58
-            let b = (255.0 - s * (255.0 - 56.0)) as u8;    // 255 -> 56
+            let r = 255; // 255 -> 255
+            let g = (255.0 - s * (255.0 - 58.0)) as u8; // 255 -> 58
+            let b = (255.0 - s * (255.0 - 56.0)) as u8; // 255 -> 56
             [r, g, b]
         }
     }
@@ -129,11 +129,7 @@ impl Colormap {
     fn inferno(t: f32) -> [u8; 3] {
         let (r, g, b) = if t < 0.25 {
             let s = t / 0.25;
-            (
-                0.0 + s * 87.0,
-                0.0 + s * 16.0,
-                4.0 + s * (110.0 - 4.0),
-            )
+            (0.0 + s * 87.0, 0.0 + s * 16.0, 4.0 + s * (110.0 - 4.0))
         } else if t < 0.5 {
             let s = (t - 0.25) / 0.25;
             (

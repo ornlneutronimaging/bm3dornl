@@ -242,13 +242,14 @@ fn subtract_streak_profile<F: Bm3dFloat>(
     let (rows, _cols) = image.dim();
 
     // Estimate streak profile
-    let profile = estimate_streak_profile_impl(image.view(), streak_sigma_smooth, streak_iterations);
+    let profile =
+        estimate_streak_profile_impl(image.view(), streak_sigma_smooth, streak_iterations);
 
     // Subtract from each row (broadcast)
     for r in 0..rows {
         let mut row = image.row_mut(r);
         for (c, val) in row.iter_mut().enumerate() {
-            *val = *val - profile[c];
+            *val -= profile[c];
         }
     }
 }
@@ -414,10 +415,7 @@ mod tests {
         }
 
         fn next_u64(&mut self) -> u64 {
-            self.state = self
-                .state
-                .wrapping_mul(6364136223846793005)
-                .wrapping_add(1);
+            self.state = self.state.wrapping_mul(6364136223846793005).wrapping_add(1);
             self.state
         }
 
@@ -505,11 +503,7 @@ mod tests {
         for r in 1..32 {
             let row: Vec<f32> = sigma_map.row(r).iter().copied().collect();
             for (a, b) in first_row.iter().zip(row.iter()) {
-                assert!(
-                    approx_eq(*a, *b, 1e-6),
-                    "Row {} differs from row 0",
-                    r
-                );
+                assert!(approx_eq(*a, *b, 1e-6), "Row {} differs from row 0", r);
             }
         }
     }
@@ -541,7 +535,11 @@ mod tests {
         for c in 1..8 {
             let col: Vec<f32> = (0..8).map(|r| psd[[r, c]]).collect();
             for (a, b) in first_col.iter().zip(col.iter()) {
-                assert!(approx_eq(*a, *b, 1e-6), "Column {} differs from column 0", c);
+                assert!(
+                    approx_eq(*a, *b, 1e-6),
+                    "Column {} differs from column 0",
+                    c
+                );
             }
         }
     }
@@ -554,10 +552,7 @@ mod tests {
 
         // Values should decrease as y increases
         for y in 1..8 {
-            assert!(
-                psd[[y, 0]] < psd[[y - 1, 0]],
-                "PSD should decrease with y"
-            );
+            assert!(psd[[y, 0]] < psd[[y - 1, 0]], "PSD should decrease with y");
         }
     }
 
@@ -624,9 +619,7 @@ mod tests {
     #[test]
     fn test_handles_non_normalized_input() {
         // Input outside [0,1] range
-        let image = Array2::from_shape_fn((32, 32), |(r, c)| {
-            100.0 + (r * 32 + c) as f32 * 10.0
-        });
+        let image = Array2::from_shape_fn((32, 32), |(r, c)| 100.0 + (r * 32 + c) as f32 * 10.0);
         let config = Bm3dConfig::default();
 
         let result = bm3d_ring_artifact_removal(image.view(), RingRemovalMode::Generic, &config);
@@ -730,7 +723,11 @@ mod tests {
             .collect();
 
         let overall_mean: f32 = col_means.iter().sum::<f32>() / 64.0;
-        let col_variance: f32 = col_means.iter().map(|m| (m - overall_mean).powi(2)).sum::<f32>() / 64.0;
+        let col_variance: f32 = col_means
+            .iter()
+            .map(|m| (m - overall_mean).powi(2))
+            .sum::<f32>()
+            / 64.0;
 
         // Original has high column variance due to streak
         let orig_col_means: Vec<f32> = (0..64)
@@ -783,9 +780,7 @@ mod tests {
 
     #[test]
     fn test_f64_generic_mode() {
-        let image = Array2::from_shape_fn((32, 32), |(r, c)| {
-            (r * 32 + c) as f64 / 1024.0
-        });
+        let image = Array2::from_shape_fn((32, 32), |(r, c)| (r * 32 + c) as f64 / 1024.0);
         let config: Bm3dConfig<f64> = Bm3dConfig::default();
 
         let result = bm3d_ring_artifact_removal(image.view(), RingRemovalMode::Generic, &config);
@@ -798,9 +793,7 @@ mod tests {
 
     #[test]
     fn test_f64_streak_mode() {
-        let image = Array2::from_shape_fn((32, 32), |(r, c)| {
-            (r * 32 + c) as f64 / 1024.0
-        });
+        let image = Array2::from_shape_fn((32, 32), |(r, c)| (r * 32 + c) as f64 / 1024.0);
         let config: Bm3dConfig<f64> = Bm3dConfig::default();
 
         let result = bm3d_ring_artifact_removal(image.view(), RingRemovalMode::Streak, &config);

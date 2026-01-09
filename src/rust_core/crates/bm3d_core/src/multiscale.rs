@@ -83,10 +83,11 @@ pub struct MultiscaleConfig<F: Bm3dFloat> {
 
 impl<F: Bm3dFloat> Default for MultiscaleConfig<F> {
     fn default() -> Self {
-        let mut bm3d_config = Bm3dConfig::default();
-        // Override threshold to multi-scale default
-        bm3d_config.threshold = F::from_f64_c(DEFAULT_MULTISCALE_THRESHOLD);
-        bm3d_config.filter_strength = F::from_f64_c(DEFAULT_MULTISCALE_FILTER_STRENGTH);
+        let bm3d_config = Bm3dConfig {
+            threshold: F::from_f64_c(DEFAULT_MULTISCALE_THRESHOLD),
+            filter_strength: F::from_f64_c(DEFAULT_MULTISCALE_FILTER_STRENGTH),
+            ..Default::default()
+        };
 
         Self {
             num_scales: None,
@@ -179,7 +180,7 @@ pub fn bin_horizontal<F: Bm3dFloat>(arr: ArrayView2<F>, factor: usize) -> Array2
             for k in 0..factor {
                 let src_c = c as isize + k as isize - (factor as isize / 2);
                 if src_c >= 0 && (src_c as usize) < padded_cols {
-                    sum = sum + padded[[r, src_c as usize]];
+                    sum += padded[[r, src_c as usize]];
                 }
             }
             convolved[[r, c]] = sum;
@@ -191,7 +192,7 @@ pub fn bin_horizontal<F: Bm3dFloat>(arr: ArrayView2<F>, factor: usize) -> Array2
     let start = h_half + if factor % 2 == 1 { 1 } else { 0 };
     let end = padded_cols - h_half + 1;
 
-    let num_bins = (end - start + factor - 1) / factor;
+    let num_bins = (end - start).div_ceil(factor);
     let mut result = Array2::zeros((rows, num_bins));
 
     for r in 0..rows {
@@ -225,7 +226,7 @@ fn compute_bin_weights<F: Bm3dFloat>(target_width: usize, factor: usize) -> Arra
         for k in 0..factor {
             let src_c = c as isize + k as isize - (factor as isize / 2);
             if src_c >= 0 && (src_c as usize) < padded_cols {
-                sum = sum + padded[[0, src_c as usize]];
+                sum += padded[[0, src_c as usize]];
             }
         }
         convolved[c] = sum;
@@ -299,9 +300,7 @@ pub fn debin_horizontal<F: Bm3dFloat>(
 
     let x1: Vec<f64> = (0..binned_cols)
         .map(|i| {
-            (h_half as f64)
-                + 1.0
-                - (if factor % 2 == 0 { 0.5 } else { 0.0 })
+            (h_half as f64) + 1.0 - (if factor.is_multiple_of(2) { 0.5 } else { 0.0 })
                 + (i * factor) as f64
         })
         .collect();
@@ -352,7 +351,7 @@ pub fn debin_horizontal<F: Bm3dFloat>(
 
                 for (c, &val) in interpolated.iter().enumerate() {
                     if c < target_width {
-                        y_j[[r, c]] = y_j[[r, c]] + val;
+                        y_j[[r, c]] += val;
                     }
                 }
             }
@@ -453,12 +452,17 @@ fn median_of_slice<F: Bm3dFloat>(data: &mut [F]) -> F {
     }
     let mid = data.len() / 2;
     // Partial sort to find median
-    data.select_nth_unstable_by(mid, |a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    data.select_nth_unstable_by(mid, |a, b| {
+        a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)
+    });
     if data.len() % 2 == 1 {
         data[mid]
     } else {
         // For even length, average of two middle elements
-        let lower = data[..mid].iter().copied().fold(F::neg_infinity(), |a, b| if b > a { b } else { a });
+        let lower = data[..mid]
+            .iter()
+            .copied()
+            .fold(F::neg_infinity(), |a, b| if b > a { b } else { a });
         (lower + data[mid]) / F::from_f64_c(2.0)
     }
 }
@@ -499,7 +503,7 @@ fn convolve_rows<F: Bm3dFloat>(arr: ArrayView2<F>, kernel: &[f64]) -> Array2<F> 
             for (ki, &kval) in kernel.iter().enumerate() {
                 let src_c = c as isize + ki as isize - half as isize;
                 if src_c >= 0 && (src_c as usize) < cols {
-                    sum = sum + arr[[r, src_c as usize]] * F::from_f64_c(kval);
+                    sum += arr[[r, src_c as usize]] * F::from_f64_c(kval);
                 }
             }
             result[[r, c]] = sum;
@@ -523,7 +527,7 @@ fn convolve_cols<F: Bm3dFloat>(arr: ArrayView2<F>, kernel: &[f64]) -> Array2<F> 
             for (ki, &kval) in kernel.iter().enumerate() {
                 let src_r = r as isize + ki as isize - half as isize;
                 if src_r >= 0 && (src_r as usize) < rows {
-                    sum = sum + arr[[src_r as usize, c]] * F::from_f64_c(kval);
+                    sum += arr[[src_r as usize, c]] * F::from_f64_c(kval);
                 }
             }
             result[[r, c]] = sum;
@@ -576,7 +580,7 @@ pub fn estimate_sigma_mad<F: Bm3dFloat>(image: ArrayView2<F>) -> F {
     // Step 1: Vertical Gaussian smoothing
     // Paper uses length m_v/2, sigma m_v/12 where m_v ≈ 64
     // We adapt based on actual image height
-    let gauss_len = (rows / 2).max(5).min(32);
+    let gauss_len = (rows / 2).clamp(5, 32);
     let gauss_sigma = gauss_len as f64 / 6.0; // Paper uses m_v/12, we use length/6
     let gauss_kernel = gaussian_kernel(gauss_len, gauss_sigma);
 
@@ -644,7 +648,9 @@ pub fn multiscale_bm3d_streak_removal<F: Bm3dFloat>(
     let (rows, cols) = sinogram.dim();
 
     // Compute number of scales
-    let num_scales = config.num_scales.unwrap_or_else(|| compute_num_scales(cols));
+    let num_scales = config
+        .num_scales
+        .unwrap_or_else(|| compute_num_scales(cols));
 
     // If K=0, just run single-scale BM3D
     if num_scales == 0 {
@@ -755,8 +761,11 @@ pub fn multiscale_bm3d_streak_removal<F: Bm3dFloat>(
         }
 
         // Denoise normalized image
-        let den_normalized =
-            bm3d_ring_artifact_removal(img_normalized.view(), RingRemovalMode::Streak, &scale_config)?;
+        let den_normalized = bm3d_ring_artifact_removal(
+            img_normalized.view(),
+            RingRemovalMode::Streak,
+            &scale_config,
+        )?;
 
         // === DENORMALIZE immediately after BM3D ===
         let den = den_normalized.mapv(|x| x * norm_factor);
@@ -839,10 +848,7 @@ mod tests {
         }
 
         fn next_u64(&mut self) -> u64 {
-            self.state = self
-                .state
-                .wrapping_mul(6364136223846793005)
-                .wrapping_add(1);
+            self.state = self.state.wrapping_mul(6364136223846793005).wrapping_add(1);
             self.state
         }
 
@@ -1167,8 +1173,11 @@ mod tests {
             .collect();
 
         let overall_mean: f32 = col_means.iter().sum::<f32>() / 256.0;
-        let col_variance: f32 =
-            col_means.iter().map(|m| (m - overall_mean).powi(2)).sum::<f32>() / 256.0;
+        let col_variance: f32 = col_means
+            .iter()
+            .map(|m| (m - overall_mean).powi(2))
+            .sum::<f32>()
+            / 256.0;
 
         // Original column variance
         let orig_col_means: Vec<f32> = (0..256)
@@ -1233,12 +1242,9 @@ mod tests {
 
         let multi_result = multiscale_bm3d_streak_removal(image.view(), &config).unwrap();
 
-        let single_result = bm3d_ring_artifact_removal(
-            image.view(),
-            RingRemovalMode::Streak,
-            &config.bm3d_config,
-        )
-        .unwrap();
+        let single_result =
+            bm3d_ring_artifact_removal(image.view(), RingRemovalMode::Streak, &config.bm3d_config)
+                .unwrap();
 
         // Should be identical when forcing K=0
         for (a, b) in multi_result.iter().zip(single_result.iter()) {

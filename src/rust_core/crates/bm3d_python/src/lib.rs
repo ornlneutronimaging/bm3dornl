@@ -7,12 +7,12 @@
 //! Both f32 and f64 precision are supported. Functions with `_f64` suffix
 //! accept and return float64 numpy arrays.
 
+use numpy::{PyArray1, PyArray2, PyArray3, PyReadonlyArray2, PyReadonlyArray3, ToPyArray};
 use pyo3::prelude::*;
-use numpy::{PyReadonlyArray2, PyArray2, PyReadonlyArray3, PyArray3, ToPyArray, PyArray1};
 
-use bm3d_core::{Bm3dMode, run_bm3d_step, run_bm3d_step_stack};
 use bm3d_core::{bm3d_ring_artifact_removal, Bm3dConfig, RingRemovalMode};
 use bm3d_core::{multiscale_bm3d_streak_removal, MultiscaleConfig};
+use bm3d_core::{run_bm3d_step, run_bm3d_step_stack, Bm3dMode};
 
 /// Hard thresholding step of BM3D for a single 2D image.
 #[pyfunction]
@@ -40,8 +40,9 @@ pub fn bm3d_hard_thresholding<'py>(
         patch_size,
         step_size,
         search_window,
-        max_matches
-    ).map_err(|e| pyo3::exceptions::PyValueError::new_err(e))?;
+        max_matches,
+    )
+    .map_err(|e| pyo3::exceptions::PyValueError::new_err(e))?;
     Ok(output.to_pyarray(py))
 }
 
@@ -70,8 +71,9 @@ pub fn bm3d_wiener_filtering<'py>(
         patch_size,
         step_size,
         search_window,
-        max_matches
-    ).map_err(|e| pyo3::exceptions::PyValueError::new_err(e))?;
+        max_matches,
+    )
+    .map_err(|e| pyo3::exceptions::PyValueError::new_err(e))?;
     Ok(output.to_pyarray(py))
 }
 
@@ -101,8 +103,9 @@ pub fn bm3d_hard_thresholding_stack<'py>(
         patch_size,
         step_size,
         search_window,
-        max_matches
-    ).map_err(|e| pyo3::exceptions::PyValueError::new_err(e))?;
+        max_matches,
+    )
+    .map_err(|e| pyo3::exceptions::PyValueError::new_err(e))?;
     Ok(output.to_pyarray(py))
 }
 
@@ -131,8 +134,9 @@ pub fn bm3d_wiener_filtering_stack<'py>(
         patch_size,
         step_size,
         search_window,
-        max_matches
-    ).map_err(|e| pyo3::exceptions::PyValueError::new_err(e))?;
+        max_matches,
+    )
+    .map_err(|e| pyo3::exceptions::PyValueError::new_err(e))?;
     Ok(output.to_pyarray(py))
 }
 
@@ -201,8 +205,9 @@ pub fn bm3d_hard_thresholding_f64<'py>(
         patch_size,
         step_size,
         search_window,
-        max_matches
-    ).map_err(|e| pyo3::exceptions::PyValueError::new_err(e))?;
+        max_matches,
+    )
+    .map_err(|e| pyo3::exceptions::PyValueError::new_err(e))?;
     Ok(output.to_pyarray(py))
 }
 
@@ -231,8 +236,9 @@ pub fn bm3d_wiener_filtering_f64<'py>(
         patch_size,
         step_size,
         search_window,
-        max_matches
-    ).map_err(|e| pyo3::exceptions::PyValueError::new_err(e))?;
+        max_matches,
+    )
+    .map_err(|e| pyo3::exceptions::PyValueError::new_err(e))?;
     Ok(output.to_pyarray(py))
 }
 
@@ -262,8 +268,9 @@ pub fn bm3d_hard_thresholding_stack_f64<'py>(
         patch_size,
         step_size,
         search_window,
-        max_matches
-    ).map_err(|e| pyo3::exceptions::PyValueError::new_err(e))?;
+        max_matches,
+    )
+    .map_err(|e| pyo3::exceptions::PyValueError::new_err(e))?;
     Ok(output.to_pyarray(py))
 }
 
@@ -292,8 +299,9 @@ pub fn bm3d_wiener_filtering_stack_f64<'py>(
         patch_size,
         step_size,
         search_window,
-        max_matches
-    ).map_err(|e| pyo3::exceptions::PyValueError::new_err(e))?;
+        max_matches,
+    )
+    .map_err(|e| pyo3::exceptions::PyValueError::new_err(e))?;
     Ok(output.to_pyarray(py))
 }
 
@@ -414,32 +422,54 @@ pub fn bm3d_ring_artifact_removal_2d<'py>(
     let ring_mode = match mode.to_lowercase().as_str() {
         "generic" => RingRemovalMode::Generic,
         "streak" => RingRemovalMode::Streak,
-        _ => return Err(pyo3::exceptions::PyValueError::new_err(
-            format!("Invalid mode '{}'. Expected 'generic' or 'streak'.", mode)
-        )),
+        _ => {
+            return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                "Invalid mode '{}'. Expected 'generic' or 'streak'.",
+                mode
+            )))
+        }
     };
 
     // Build config with defaults
     let mut config: Bm3dConfig<f32> = Bm3dConfig::default();
 
-    if let Some(v) = sigma_random { config.sigma_random = v; }
-    if let Some(v) = patch_size { config.patch_size = v; }
-    if let Some(v) = step_size { config.step_size = v; }
-    if let Some(v) = search_window { config.search_window = v; }
-    if let Some(v) = max_matches { config.max_matches = v; }
-    if let Some(v) = threshold { config.threshold = v; }
-    if let Some(v) = streak_sigma_smooth { config.streak_sigma_smooth = v; }
-    if let Some(v) = streak_iterations { config.streak_iterations = v; }
-    if let Some(v) = sigma_map_smoothing { config.sigma_map_smoothing = v; }
-    if let Some(v) = streak_sigma_scale { config.streak_sigma_scale = v; }
-    if let Some(v) = psd_width { config.psd_width = v; }
+    if let Some(v) = sigma_random {
+        config.sigma_random = v;
+    }
+    if let Some(v) = patch_size {
+        config.patch_size = v;
+    }
+    if let Some(v) = step_size {
+        config.step_size = v;
+    }
+    if let Some(v) = search_window {
+        config.search_window = v;
+    }
+    if let Some(v) = max_matches {
+        config.max_matches = v;
+    }
+    if let Some(v) = threshold {
+        config.threshold = v;
+    }
+    if let Some(v) = streak_sigma_smooth {
+        config.streak_sigma_smooth = v;
+    }
+    if let Some(v) = streak_iterations {
+        config.streak_iterations = v;
+    }
+    if let Some(v) = sigma_map_smoothing {
+        config.sigma_map_smoothing = v;
+    }
+    if let Some(v) = streak_sigma_scale {
+        config.streak_sigma_scale = v;
+    }
+    if let Some(v) = psd_width {
+        config.psd_width = v;
+    }
 
     // Call Rust implementation
-    let output = bm3d_ring_artifact_removal(
-        sinogram.as_array(),
-        ring_mode,
-        &config,
-    ).map_err(|e| pyo3::exceptions::PyValueError::new_err(e))?;
+    let output = bm3d_ring_artifact_removal(sinogram.as_array(), ring_mode, &config)
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e))?;
 
     Ok(output.to_pyarray(py))
 }
@@ -483,32 +513,54 @@ pub fn bm3d_ring_artifact_removal_2d_f64<'py>(
     let ring_mode = match mode.to_lowercase().as_str() {
         "generic" => RingRemovalMode::Generic,
         "streak" => RingRemovalMode::Streak,
-        _ => return Err(pyo3::exceptions::PyValueError::new_err(
-            format!("Invalid mode '{}'. Expected 'generic' or 'streak'.", mode)
-        )),
+        _ => {
+            return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                "Invalid mode '{}'. Expected 'generic' or 'streak'.",
+                mode
+            )))
+        }
     };
 
     // Build config with defaults
     let mut config: Bm3dConfig<f64> = Bm3dConfig::default();
 
-    if let Some(v) = sigma_random { config.sigma_random = v; }
-    if let Some(v) = patch_size { config.patch_size = v; }
-    if let Some(v) = step_size { config.step_size = v; }
-    if let Some(v) = search_window { config.search_window = v; }
-    if let Some(v) = max_matches { config.max_matches = v; }
-    if let Some(v) = threshold { config.threshold = v; }
-    if let Some(v) = streak_sigma_smooth { config.streak_sigma_smooth = v; }
-    if let Some(v) = streak_iterations { config.streak_iterations = v; }
-    if let Some(v) = sigma_map_smoothing { config.sigma_map_smoothing = v; }
-    if let Some(v) = streak_sigma_scale { config.streak_sigma_scale = v; }
-    if let Some(v) = psd_width { config.psd_width = v; }
+    if let Some(v) = sigma_random {
+        config.sigma_random = v;
+    }
+    if let Some(v) = patch_size {
+        config.patch_size = v;
+    }
+    if let Some(v) = step_size {
+        config.step_size = v;
+    }
+    if let Some(v) = search_window {
+        config.search_window = v;
+    }
+    if let Some(v) = max_matches {
+        config.max_matches = v;
+    }
+    if let Some(v) = threshold {
+        config.threshold = v;
+    }
+    if let Some(v) = streak_sigma_smooth {
+        config.streak_sigma_smooth = v;
+    }
+    if let Some(v) = streak_iterations {
+        config.streak_iterations = v;
+    }
+    if let Some(v) = sigma_map_smoothing {
+        config.sigma_map_smoothing = v;
+    }
+    if let Some(v) = streak_sigma_scale {
+        config.streak_sigma_scale = v;
+    }
+    if let Some(v) = psd_width {
+        config.psd_width = v;
+    }
 
     // Call Rust implementation
-    let output = bm3d_ring_artifact_removal(
-        sinogram.as_array(),
-        ring_mode,
-        &config,
-    ).map_err(|e| pyo3::exceptions::PyValueError::new_err(e))?;
+    let output = bm3d_ring_artifact_removal(sinogram.as_array(), ring_mode, &config)
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e))?;
 
     Ok(output.to_pyarray(py))
 }
@@ -575,23 +627,33 @@ pub fn multiscale_bm3d_streak_removal_2d<'py>(
     let mut config: MultiscaleConfig<f32> = MultiscaleConfig::default();
 
     config.num_scales = num_scales;
-    if let Some(v) = filter_strength { config.filter_strength = v; }
+    if let Some(v) = filter_strength {
+        config.filter_strength = v;
+    }
     if let Some(v) = threshold {
         config.threshold = v;
         // Also set inner BM3D threshold for num_scales=0 case
         config.bm3d_config.threshold = v;
     }
-    if let Some(v) = debin_iterations { config.debin_iterations = v; }
-    if let Some(v) = patch_size { config.bm3d_config.patch_size = v; }
-    if let Some(v) = step_size { config.bm3d_config.step_size = v; }
-    if let Some(v) = search_window { config.bm3d_config.search_window = v; }
-    if let Some(v) = max_matches { config.bm3d_config.max_matches = v; }
+    if let Some(v) = debin_iterations {
+        config.debin_iterations = v;
+    }
+    if let Some(v) = patch_size {
+        config.bm3d_config.patch_size = v;
+    }
+    if let Some(v) = step_size {
+        config.bm3d_config.step_size = v;
+    }
+    if let Some(v) = search_window {
+        config.bm3d_config.search_window = v;
+    }
+    if let Some(v) = max_matches {
+        config.bm3d_config.max_matches = v;
+    }
 
     // Call Rust implementation
-    let output = multiscale_bm3d_streak_removal(
-        sinogram.as_array(),
-        &config,
-    ).map_err(|e| pyo3::exceptions::PyValueError::new_err(e))?;
+    let output = multiscale_bm3d_streak_removal(sinogram.as_array(), &config)
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e))?;
 
     Ok(output.to_pyarray(py))
 }
@@ -627,23 +689,33 @@ pub fn multiscale_bm3d_streak_removal_2d_f64<'py>(
     let mut config: MultiscaleConfig<f64> = MultiscaleConfig::default();
 
     config.num_scales = num_scales;
-    if let Some(v) = filter_strength { config.filter_strength = v; }
+    if let Some(v) = filter_strength {
+        config.filter_strength = v;
+    }
     if let Some(v) = threshold {
         config.threshold = v;
         // Also set inner BM3D threshold for num_scales=0 case
         config.bm3d_config.threshold = v;
     }
-    if let Some(v) = debin_iterations { config.debin_iterations = v; }
-    if let Some(v) = patch_size { config.bm3d_config.patch_size = v; }
-    if let Some(v) = step_size { config.bm3d_config.step_size = v; }
-    if let Some(v) = search_window { config.bm3d_config.search_window = v; }
-    if let Some(v) = max_matches { config.bm3d_config.max_matches = v; }
+    if let Some(v) = debin_iterations {
+        config.debin_iterations = v;
+    }
+    if let Some(v) = patch_size {
+        config.bm3d_config.patch_size = v;
+    }
+    if let Some(v) = step_size {
+        config.bm3d_config.step_size = v;
+    }
+    if let Some(v) = search_window {
+        config.bm3d_config.search_window = v;
+    }
+    if let Some(v) = max_matches {
+        config.bm3d_config.max_matches = v;
+    }
 
     // Call Rust implementation
-    let output = multiscale_bm3d_streak_removal(
-        sinogram.as_array(),
-        &config,
-    ).map_err(|e| pyo3::exceptions::PyValueError::new_err(e))?;
+    let output = multiscale_bm3d_streak_removal(sinogram.as_array(), &config)
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e))?;
 
     Ok(output.to_pyarray(py))
 }

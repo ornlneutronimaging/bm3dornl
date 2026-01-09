@@ -149,7 +149,16 @@ impl CompareView {
         window_level: &WindowLevel,
         keep_aspect_ratio: bool,
     ) -> bool {
-        self.show_with_slice_data(ui, original, processed, None, None, colormap, window_level, keep_aspect_ratio)
+        self.show_with_slice_data(
+            ui,
+            original,
+            processed,
+            None,
+            None,
+            colormap,
+            window_level,
+            keep_aspect_ratio,
+        )
     }
 
     /// Show comparison view with optional slice data for cursor tracking.
@@ -175,25 +184,26 @@ impl CompareView {
 
         // Navigation controls (shared for all panels)
         ui.horizontal(|ui| {
-            if ui.button("◄")
-                .on_hover_text("Previous slice")
-                .clicked() && self.current_slice > 0 {
+            if ui.button("◄").on_hover_text("Previous slice").clicked() && self.current_slice > 0
+            {
                 self.current_slice -= 1;
                 slice_changed = true;
             }
 
-            let slider_response = ui.add(
-                egui::Slider::new(&mut self.current_slice, 0..=num_slices.saturating_sub(1))
-                    .text("")
-                    .show_value(false),
-            ).on_hover_text("Navigate through slices along the selected axis");
+            let slider_response = ui
+                .add(
+                    egui::Slider::new(&mut self.current_slice, 0..=num_slices.saturating_sub(1))
+                        .text("")
+                        .show_value(false),
+                )
+                .on_hover_text("Navigate through slices along the selected axis");
             if slider_response.changed() {
                 slice_changed = true;
             }
 
-            if ui.button("►")
-                .on_hover_text("Next slice")
-                .clicked() && self.current_slice < num_slices - 1 {
+            if ui.button("►").on_hover_text("Next slice").clicked()
+                && self.current_slice < num_slices - 1
+            {
                 self.current_slice += 1;
                 slice_changed = true;
             }
@@ -231,7 +241,8 @@ impl CompareView {
 
         // Calculate panel dimensions
         let panel_width = (available_size.x - 2.0 * spacing) / 3.0;
-        let image_height = available_size.y - colorbar_height - label_height - status_bar_height - 3.0 * spacing;
+        let image_height =
+            available_size.y - colorbar_height - label_height - status_bar_height - 3.0 * spacing;
 
         // Row 1: Labels
         ui.horizontal(|ui| {
@@ -259,21 +270,36 @@ impl CompareView {
         ui.horizontal(|ui| {
             // Original image
             let orig_result = self.draw_image_panel_with_response(
-                ui, &self.original_texture, panel_width, image_height, img_aspect, keep_aspect_ratio
+                ui,
+                &self.original_texture,
+                panel_width,
+                image_height,
+                img_aspect,
+                keep_aspect_ratio,
             );
             panel_data.push(orig_result);
             ui.add_space(spacing);
 
             // Processed image
             let proc_result = self.draw_image_panel_with_response(
-                ui, &self.processed_texture, panel_width, image_height, img_aspect, keep_aspect_ratio
+                ui,
+                &self.processed_texture,
+                panel_width,
+                image_height,
+                img_aspect,
+                keep_aspect_ratio,
             );
             panel_data.push(proc_result);
             ui.add_space(spacing);
 
             // Difference image
             let diff_result = self.draw_image_panel_with_response(
-                ui, &self.difference_texture, panel_width, image_height, img_aspect, keep_aspect_ratio
+                ui,
+                &self.difference_texture,
+                panel_width,
+                image_height,
+                img_aspect,
+                keep_aspect_ratio,
             );
             panel_data.push(diff_result);
         });
@@ -316,7 +342,8 @@ impl CompareView {
 
         // Track cursor position and look up intensities
         for (response, image_rect, _) in &panel_data {
-            if let Some((x, y)) = self.get_image_coords(response, image_rect, img_width, img_height) {
+            if let Some((x, y)) = self.get_image_coords(response, image_rect, img_width, img_height)
+            {
                 self.cursor_info.x = Some(x);
                 self.cursor_info.y = Some(y);
 
@@ -332,7 +359,10 @@ impl CompareView {
                     }
                 }
                 // Compute difference
-                if let (Some(orig_val), Some(proc_val)) = (self.cursor_info.orig_intensity, self.cursor_info.proc_intensity) {
+                if let (Some(orig_val), Some(proc_val)) = (
+                    self.cursor_info.orig_intensity,
+                    self.cursor_info.proc_intensity,
+                ) {
                     self.cursor_info.diff_intensity = Some(orig_val - proc_val);
                 }
                 break; // Only process the first hovered panel
@@ -353,7 +383,13 @@ impl CompareView {
         ui.horizontal(|ui| {
             // Shared colorbar for Original and Processed (spans 2 panels + spacing)
             let shared_colorbar_width = panel_width * 2.0 + spacing;
-            self.draw_horizontal_colorbar(ui, shared_colorbar_width, colorbar_height, colormap, window_level);
+            self.draw_horizontal_colorbar(
+                ui,
+                shared_colorbar_width,
+                colorbar_height,
+                colormap,
+                window_level,
+            );
             ui.add_space(spacing);
 
             // Difference colorbar (RdBu)
@@ -387,7 +423,8 @@ impl CompareView {
         let pixel_y = (norm_y * img_height as f32).floor() as i32;
 
         // Bounds check
-        if pixel_x >= 0 && pixel_x < img_width as i32 && pixel_y >= 0 && pixel_y < img_height as i32 {
+        if pixel_x >= 0 && pixel_x < img_width as i32 && pixel_y >= 0 && pixel_y < img_height as i32
+        {
             Some((pixel_x as usize, pixel_y as usize))
         } else {
             None
@@ -424,12 +461,7 @@ impl CompareView {
                                 .color(original_color),
                         );
                     } else {
-                        ui.label(
-                            egui::RichText::new("Orig: ---")
-                                .monospace()
-                                .small()
-                                .weak(),
-                        );
+                        ui.label(egui::RichText::new("Orig: ---").monospace().small().weak());
                     }
 
                     ui.separator();
@@ -443,12 +475,7 @@ impl CompareView {
                                 .color(processed_color),
                         );
                     } else {
-                        ui.label(
-                            egui::RichText::new("Proc: ---")
-                                .monospace()
-                                .small()
-                                .weak(),
-                        );
+                        ui.label(egui::RichText::new("Proc: ---").monospace().small().weak());
                     }
 
                     ui.separator();
@@ -462,12 +489,7 @@ impl CompareView {
                                 .color(diff_color),
                         );
                     } else {
-                        ui.label(
-                            egui::RichText::new("Diff: ---")
-                                .monospace()
-                                .small()
-                                .weak(),
-                        );
+                        ui.label(egui::RichText::new("Diff: ---").monospace().small().weak());
                     }
                 } else {
                     ui.label(
@@ -491,10 +513,8 @@ impl CompareView {
         img_aspect: f32,
         keep_aspect_ratio: bool,
     ) -> (egui::Response, Option<egui::Rect>, egui::Painter) {
-        let (response, painter) = ui.allocate_painter(
-            egui::vec2(width, height),
-            egui::Sense::click_and_drag(),
-        );
+        let (response, painter) =
+            ui.allocate_painter(egui::vec2(width, height), egui::Sense::click_and_drag());
 
         let mut computed_image_rect = None;
 
@@ -544,10 +564,8 @@ impl CompareView {
     ) {
         ui.vertical(|ui| {
             // Colorbar gradient
-            let (response, painter) = ui.allocate_painter(
-                egui::vec2(width, height - 15.0),
-                egui::Sense::hover(),
-            );
+            let (response, painter) =
+                ui.allocate_painter(egui::vec2(width, height - 15.0), egui::Sense::hover());
 
             let rect = response.rect;
             let lut = colormap.generate_lut();
@@ -581,10 +599,8 @@ impl CompareView {
     fn draw_horizontal_diff_colorbar(&self, ui: &mut egui::Ui, width: f32, height: f32) {
         ui.vertical(|ui| {
             // Colorbar gradient (RdBu: blue -> white -> red)
-            let (response, painter) = ui.allocate_painter(
-                egui::vec2(width, height - 15.0),
-                egui::Sense::hover(),
-            );
+            let (response, painter) =
+                ui.allocate_painter(egui::vec2(width, height - 15.0), egui::Sense::hover());
 
             let rect = response.rect;
             let num_steps = 256;
@@ -734,7 +750,8 @@ impl CompareView {
         let pixel_y = (norm_y * img_height as f32).floor() as i32;
 
         // Bounds check
-        if pixel_x >= 0 && pixel_x < img_width as i32 && pixel_y >= 0 && pixel_y < img_height as i32 {
+        if pixel_x >= 0 && pixel_x < img_width as i32 && pixel_y >= 0 && pixel_y < img_height as i32
+        {
             Some((pixel_x as usize, pixel_y as usize))
         } else {
             None
@@ -776,7 +793,9 @@ impl CompareView {
         // Update cursor_in_roi for visual feedback
         if response.hovered() {
             if let Some(pointer_pos) = response.hover_pos() {
-                if let Some((img_x, img_y)) = self.screen_to_image(pointer_pos, image_rect, img_width, img_height) {
+                if let Some((img_x, img_y)) =
+                    self.screen_to_image(pointer_pos, image_rect, img_width, img_height)
+                {
                     self.cursor_in_roi = self.roi_state.cursor_inside_roi(img_x, img_y);
                 } else {
                     self.cursor_in_roi = false;
@@ -791,7 +810,9 @@ impl CompareView {
         // Handle drag
         if response.dragged() {
             if let Some(pointer_pos) = response.interact_pointer_pos() {
-                if let Some((img_x, img_y)) = self.screen_to_image(pointer_pos, image_rect, img_width, img_height) {
+                if let Some((img_x, img_y)) =
+                    self.screen_to_image(pointer_pos, image_rect, img_width, img_height)
+                {
                     // Check if we're already in a dragging operation
                     if self.roi_state.drawing {
                         // Continue drawing ROI
@@ -800,7 +821,8 @@ impl CompareView {
                         self.last_drag_pos = None;
                     } else if self.roi_state.moving {
                         // Continue moving ROI
-                        self.roi_state.update_move(img_x, img_y, img_width, img_height);
+                        self.roi_state
+                            .update_move(img_x, img_y, img_width, img_height);
                         self.is_dragging = false;
                         self.last_drag_pos = None;
                     } else {
@@ -848,7 +870,8 @@ impl CompareView {
 
         if let Some(roi) = roi_to_draw {
             // Convert image coordinates to screen coordinates
-            let top_left = self.image_to_screen(roi.min_x, roi.min_y, image_rect, img_width, img_height);
+            let top_left =
+                self.image_to_screen(roi.min_x, roi.min_y, image_rect, img_width, img_height);
             let bottom_right = self.image_to_screen(
                 roi.max_x + 1, // +1 because max is inclusive
                 roi.max_y + 1,
@@ -860,7 +883,11 @@ impl CompareView {
             let screen_rect = egui::Rect::from_min_max(top_left, bottom_right);
 
             // Draw semi-transparent fill - brighter when cursor is inside (hover feedback)
-            let fill_alpha = if self.cursor_in_roi && !self.roi_state.drawing { 60 } else { 30 };
+            let fill_alpha = if self.cursor_in_roi && !self.roi_state.drawing {
+                60
+            } else {
+                30
+            };
             let fill_color = egui::Color32::from_rgba_unmultiplied(255, 255, 0, fill_alpha);
             painter.rect_filled(screen_rect, 0.0, fill_color);
 
@@ -874,8 +901,16 @@ impl CompareView {
             } else {
                 egui::Color32::from_rgb(255, 255, 0) // Yellow when finalized
             };
-            let stroke_width = if self.cursor_in_roi || self.roi_state.moving { 3.0 } else { 2.0 };
-            painter.rect_stroke(screen_rect, 0.0, egui::Stroke::new(stroke_width, stroke_color));
+            let stroke_width = if self.cursor_in_roi || self.roi_state.moving {
+                3.0
+            } else {
+                2.0
+            };
+            painter.rect_stroke(
+                screen_rect,
+                0.0,
+                egui::Stroke::new(stroke_width, stroke_color),
+            );
         }
     }
 }

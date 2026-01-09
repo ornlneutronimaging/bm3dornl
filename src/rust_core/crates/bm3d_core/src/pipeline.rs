@@ -1,14 +1,14 @@
 //! BM3D Pipeline - Core denoising kernel and multi-image processing.
 
+use ndarray::{s, Array2, Array3, ArrayView2, ArrayView3, Axis};
 use rayon::prelude::*;
-use ndarray::{Array2, Array3, ArrayView2, ArrayView3, s, Axis};
-use std::sync::Arc;
-use rustfft::Fft;
 use rustfft::num_complex::Complex;
+use rustfft::Fft;
+use std::sync::Arc;
 
 use crate::block_matching::{self, PatchMatch};
-use crate::transforms;
 use crate::float_trait::Bm3dFloat;
+use crate::transforms;
 
 // =============================================================================
 // Constants for BM3D Pipeline
@@ -82,8 +82,12 @@ impl<F: Bm3dFloat> Bm3dPlans<F> {
         }
 
         Self {
-            fft_2d_row, fft_2d_col, ifft_2d_row, ifft_2d_col,
-            fft_1d_plans, ifft_1d_plans
+            fft_2d_row,
+            fft_2d_col,
+            ifft_2d_row,
+            ifft_2d_col,
+            fft_1d_plans,
+            ifft_1d_plans,
         }
     }
 }
@@ -121,6 +125,7 @@ fn build_patch_groups<F: Bm3dFloat>(
 /// Combines random noise variance and structured (streak) noise variance
 /// based on the PSD and local sigma map values.
 #[inline]
+#[allow(clippy::too_many_arguments)]
 fn compute_noise_std<F: Bm3dFloat>(
     use_colored_noise: bool,
     sigma_psd: ArrayView2<F>,
@@ -131,7 +136,11 @@ fn compute_noise_std<F: Bm3dFloat>(
     c: usize,
     spatial_scale: F,
 ) -> F {
-    let sigma_s_dist = if use_colored_noise { sigma_psd[[r, c]] } else { F::zero() };
+    let sigma_s_dist = if use_colored_noise {
+        sigma_psd[[r, c]]
+    } else {
+        F::zero()
+    };
     let effective_sigma_s = sigma_s_dist * local_sigma_streak;
     let k_f = F::usize_as(k);
     let var_r = k_f * scalar_sigma_sq;
@@ -141,6 +150,7 @@ fn compute_noise_std<F: Bm3dFloat>(
 
 /// Compute the effective noise variance for Wiener filtering.
 #[inline]
+#[allow(clippy::too_many_arguments)]
 fn compute_noise_var<F: Bm3dFloat>(
     use_colored_noise: bool,
     sigma_psd: ArrayView2<F>,
@@ -151,7 +161,11 @@ fn compute_noise_var<F: Bm3dFloat>(
     c: usize,
     spatial_scale_sq: F,
 ) -> F {
-    let sigma_s_dist = if use_colored_noise { sigma_psd[[r, c]] } else { F::zero() };
+    let sigma_s_dist = if use_colored_noise {
+        sigma_psd[[r, c]]
+    } else {
+        F::zero()
+    };
     let effective_sigma_s = sigma_s_dist * local_sigma_streak;
     let k_f = F::usize_as(k);
     let var_r = k_f * scalar_sigma_sq;
@@ -192,8 +206,7 @@ fn apply_forward_1d_transform<F: Bm3dFloat>(
     let (k, patch_size, _) = group.dim();
     for r in 0..patch_size {
         for c in 0..patch_size {
-            let mut vec: Vec<Complex<F>> =
-                (0..k).map(|i| group[[i, r, c]]).collect();
+            let mut vec: Vec<Complex<F>> = (0..k).map(|i| group[[i, r, c]]).collect();
             fft_plan.process(&mut vec);
             for i in 0..k {
                 group[[i, r, c]] = vec[i];
@@ -211,8 +224,7 @@ fn apply_inverse_1d_transform<F: Bm3dFloat>(
     let norm_k = F::one() / F::usize_as(k);
     for r in 0..patch_size {
         for c in 0..patch_size {
-            let mut vec: Vec<Complex<F>> =
-                (0..k).map(|i| group[[i, r, c]]).collect();
+            let mut vec: Vec<Complex<F>> = (0..k).map(|i| group[[i, r, c]]).collect();
             ifft_plan.process(&mut vec);
             for i in 0..k {
                 group[[i, r, c]] = vec[i] * norm_k;
@@ -238,6 +250,7 @@ fn apply_inverse_2d_transform<F: Bm3dFloat>(
 }
 
 /// Aggregate a single denoised patch into the numerator and denominator accumulators.
+#[allow(clippy::too_many_arguments)]
 fn aggregate_patch<F: Bm3dFloat>(
     spatial: &Array2<F>,
     m: &PatchMatch<F>,
@@ -253,8 +266,8 @@ fn aggregate_patch<F: Bm3dFloat>(
             let tr = m.row + pr;
             let tc = m.col + pc;
             if tr < rows && tc < cols {
-                numerator[[tr, tc]] = numerator[[tr, tc]] + spatial[[pr, pc]] * weight;
-                denominator[[tr, tc]] = denominator[[tr, tc]] + weight;
+                numerator[[tr, tc]] += spatial[[pr, pc]] * weight;
+                denominator[[tr, tc]] += weight;
             }
         }
     }
@@ -287,6 +300,7 @@ fn finalize_output<F: Bm3dFloat>(
 }
 
 /// Core BM3D Single Image Kernel
+#[allow(clippy::too_many_arguments)]
 pub fn run_bm3d_kernel<F: Bm3dFloat>(
     input_noisy: ArrayView2<F>,
     input_pilot: ArrayView2<F>,
@@ -332,10 +346,16 @@ pub fn run_bm3d_kernel<F: Bm3dFloat>(
     let wiener_eps = F::from_f64_c(WIENER_EPSILON);
     let max_wiener_weight = F::from_f64_c(MAX_WIENER_WEIGHT);
 
-    let (final_num, final_den) = ref_coords.par_iter()
+    let (final_num, final_den) = ref_coords
+        .par_iter()
         .with_min_len(RAYON_MIN_CHUNK_LEN)
         .fold(
-            || (Array2::<F>::zeros((rows, cols)), Array2::<F>::zeros((rows, cols))),
+            || {
+                (
+                    Array2::<F>::zeros((rows, cols)),
+                    Array2::<F>::zeros((rows, cols)),
+                )
+            },
             |mut acc, &(ref_r, ref_c)| {
                 let (numerator_acc, denominator_acc) = &mut acc;
 
@@ -348,25 +368,38 @@ pub fn run_bm3d_kernel<F: Bm3dFloat>(
                     (patch_size, patch_size),
                     (search_window, search_window),
                     max_matches,
-                    step_size
+                    step_size,
                 );
                 let k = matches.len();
-                if k == 0 { return acc; }
+                if k == 0 {
+                    return acc;
+                }
 
                 // 1.5 Local Noise Level
-                let local_sigma_streak = if use_sigma_map { sigma_map[[ref_r, ref_c]] } else { F::zero() };
+                let local_sigma_streak = if use_sigma_map {
+                    sigma_map[[ref_r, ref_c]]
+                } else {
+                    F::zero()
+                };
 
                 // Build patch groups
-                let (group_noisy, group_pilot) = build_patch_groups(
-                    input_noisy, input_pilot, &matches, patch_size
-                );
+                let (group_noisy, group_pilot) =
+                    build_patch_groups(input_noisy, input_pilot, &matches, patch_size);
 
                 // Forward 2D transforms
                 let mut g_noisy_c = apply_forward_2d_transform(
-                    &group_noisy, use_hadamard, fft_2d_row_ref, fft_2d_col_ref
+                    &group_noisy,
+                    use_hadamard,
+                    fft_2d_row_ref,
+                    fft_2d_col_ref,
                 );
                 let mut g_pilot_c = if mode == Bm3dMode::Wiener {
-                    apply_forward_2d_transform(&group_pilot, use_hadamard, fft_2d_row_ref, fft_2d_col_ref)
+                    apply_forward_2d_transform(
+                        &group_pilot,
+                        use_hadamard,
+                        fft_2d_row_ref,
+                        fft_2d_col_ref,
+                    )
                 } else {
                     ndarray::Array3::<Complex<F>>::zeros((k, patch_size, patch_size))
                 };
@@ -392,8 +425,14 @@ pub fn run_bm3d_kernel<F: Bm3dFloat>(
                                 for c in 0..patch_size {
                                     let coeff = g_noisy_c[[i, r, c]];
                                     let noise_std_coeff = compute_noise_std(
-                                        use_colored_noise, sigma_psd, local_sigma_streak,
-                                        scalar_sigma_sq, k, r, c, spatial_scale
+                                        use_colored_noise,
+                                        sigma_psd,
+                                        local_sigma_streak,
+                                        scalar_sigma_sq,
+                                        k,
+                                        r,
+                                        c,
+                                        spatial_scale,
                                     );
                                     if coeff.norm() < threshold * noise_std_coeff {
                                         g_noisy_c[[i, r, c]] = Complex::new(F::zero(), F::zero());
@@ -403,7 +442,9 @@ pub fn run_bm3d_kernel<F: Bm3dFloat>(
                                 }
                             }
                         }
-                        if nz_count > 0 { weight_g = F::one() / (F::usize_as(nz_count) + F::one()); }
+                        if nz_count > 0 {
+                            weight_g = F::one() / (F::usize_as(nz_count) + F::one());
+                        }
                     }
                     Bm3dMode::Wiener => {
                         // Wiener Filtering
@@ -414,17 +455,26 @@ pub fn run_bm3d_kernel<F: Bm3dFloat>(
                                     let p_val = g_pilot_c[[i, r, c]];
                                     let n_val = g_noisy_c[[i, r, c]];
                                     let noise_var_coeff = compute_noise_var(
-                                        use_colored_noise, sigma_psd, local_sigma_streak,
-                                        scalar_sigma_sq, k, r, c, spatial_scale_sq
+                                        use_colored_noise,
+                                        sigma_psd,
+                                        local_sigma_streak,
+                                        scalar_sigma_sq,
+                                        k,
+                                        r,
+                                        c,
+                                        spatial_scale_sq,
                                     );
-                                    let w = p_val.norm_sqr() / (p_val.norm_sqr() + noise_var_coeff + wiener_eps);
+                                    let w = p_val.norm_sqr()
+                                        / (p_val.norm_sqr() + noise_var_coeff + wiener_eps);
                                     g_noisy_c[[i, r, c]] = n_val * w;
-                                    wiener_sum = wiener_sum + w * w;
+                                    wiener_sum += w * w;
                                 }
                             }
                         }
                         weight_g = F::one() / (wiener_sum * scalar_sigma_sq + wiener_eps);
-                        if weight_g > max_wiener_weight { weight_g = max_wiener_weight; }
+                        if weight_g > max_wiener_weight {
+                            weight_g = max_wiener_weight;
+                        }
                     }
                 }
 
@@ -433,29 +483,49 @@ pub fn run_bm3d_kernel<F: Bm3dFloat>(
                 apply_inverse_1d_transform(&mut g_noisy_c, ifft_k_plan);
 
                 // Inverse 2D transforms and aggregation
+                #[allow(clippy::needless_range_loop)]
                 for i in 0..k {
                     let complex_slice = g_noisy_c.slice(s![i, .., ..]).to_owned();
                     let spatial = apply_inverse_2d_transform(
-                        &complex_slice, use_hadamard, ifft_2d_row_ref, ifft_2d_col_ref
+                        &complex_slice,
+                        use_hadamard,
+                        ifft_2d_row_ref,
+                        ifft_2d_col_ref,
                     );
                     aggregate_patch(
-                        &spatial, &matches[i], weight_g, patch_size, rows, cols,
-                        numerator_acc, denominator_acc
+                        &spatial,
+                        &matches[i],
+                        weight_g,
+                        patch_size,
+                        rows,
+                        cols,
+                        numerator_acc,
+                        denominator_acc,
                     );
                 }
                 acc
-            })
+            },
+        )
         .reduce(
-            || (Array2::<F>::zeros((rows, cols)), Array2::<F>::zeros((rows, cols))),
-            |mut a, b| { a.0 = &a.0 + &b.0; a.1 = &a.1 + &b.1; a }
+            || {
+                (
+                    Array2::<F>::zeros((rows, cols)),
+                    Array2::<F>::zeros((rows, cols)),
+                )
+            },
+            |mut a, b| {
+                a.0 = &a.0 + &b.0;
+                a.1 = &a.1 + &b.1;
+                a
+            },
         );
 
     // Finalize: divide numerator by denominator
     finalize_output(&final_num, &final_den, input_noisy)
 }
 
-
 /// Run BM3D step on a single 2D image.
+#[allow(clippy::too_many_arguments)]
 pub fn run_bm3d_step<F: Bm3dFloat>(
     input_noisy: ArrayView2<F>,
     input_pilot: ArrayView2<F>,
@@ -472,21 +542,37 @@ pub fn run_bm3d_step<F: Bm3dFloat>(
     if input_pilot.dim() != input_noisy.dim() {
         return Err(format!(
             "Dimension mismatch: input_noisy has shape {:?}, but input_pilot has shape {:?}",
-            input_noisy.dim(), input_pilot.dim()
+            input_noisy.dim(),
+            input_pilot.dim()
         ));
     }
     if sigma_map.dim() != input_noisy.dim() && sigma_map.dim() != (1, 1) {
         return Err(format!(
             "Sigma map dimension mismatch: expected {:?} or (1, 1), got {:?}",
-            input_noisy.dim(), sigma_map.dim()
+            input_noisy.dim(),
+            sigma_map.dim()
         ));
     }
 
     let plans = Bm3dPlans::new(patch_size, max_matches);
-    Ok(run_bm3d_kernel(input_noisy, input_pilot, mode, sigma_psd, sigma_map, sigma_random, threshold, patch_size, step_size, search_window, max_matches, &plans))
+    Ok(run_bm3d_kernel(
+        input_noisy,
+        input_pilot,
+        mode,
+        sigma_psd,
+        sigma_map,
+        sigma_random,
+        threshold,
+        patch_size,
+        step_size,
+        search_window,
+        max_matches,
+        &plans,
+    ))
 }
 
 /// Run BM3D step on a 3D stack of images.
+#[allow(clippy::too_many_arguments)]
 pub fn run_bm3d_step_stack<F: Bm3dFloat>(
     input_noisy: ArrayView3<F>,
     input_pilot: ArrayView3<F>,
@@ -504,31 +590,44 @@ pub fn run_bm3d_step_stack<F: Bm3dFloat>(
     if input_pilot.dim() != (n, rows, cols) {
         return Err(format!(
             "Stack dimension mismatch: input_noisy has shape {:?}, but input_pilot has shape {:?}",
-            input_noisy.dim(), input_pilot.dim()
+            input_noisy.dim(),
+            input_pilot.dim()
         ));
     }
     if sigma_map.dim() != (n, rows, cols) && sigma_map.dim() != (1, 1, 1) {
         return Err(format!(
             "Sigma map dimension mismatch: expected {:?} or (1, 1, 1), got {:?}",
-            (n, rows, cols), sigma_map.dim()
+            (n, rows, cols),
+            sigma_map.dim()
         ));
     }
 
     let plans = Bm3dPlans::new(patch_size, max_matches);
 
-    let results: Vec<Array2<F>> = (0..n).into_par_iter()
+    let results: Vec<Array2<F>> = (0..n)
+        .into_par_iter()
         .map(|i| {
             let noisy_slice = input_noisy.index_axis(Axis(0), i);
             let pilot_slice = input_pilot.index_axis(Axis(0), i);
-            let map_slice = if sigma_map.dim() == (1,1,1) {
-                 sigma_map.index_axis(Axis(0), 0) // Dummy view
+            let map_slice = if sigma_map.dim() == (1, 1, 1) {
+                sigma_map.index_axis(Axis(0), 0) // Dummy view
             } else {
-                 sigma_map.index_axis(Axis(0), i)
+                sigma_map.index_axis(Axis(0), i)
             };
 
             run_bm3d_kernel(
-                noisy_slice, pilot_slice, mode, sigma_psd, map_slice,
-                sigma_random, threshold, patch_size, step_size, search_window, max_matches, &plans
+                noisy_slice,
+                pilot_slice,
+                mode,
+                sigma_psd,
+                map_slice,
+                sigma_random,
+                threshold,
+                patch_size,
+                step_size,
+                search_window,
+                max_matches,
+                &plans,
             )
         })
         .collect();
@@ -559,9 +658,12 @@ pub fn test_block_matching<F: Bm3dFloat>(
         (patch_size, patch_size),
         (search_win, search_win),
         max_matches,
-        1
+        1,
     );
-    matches.into_iter().map(|m| (m.row, m.col, m.distance)).collect()
+    matches
+        .into_iter()
+        .map(|m| (m.row, m.col, m.distance))
+        .collect()
 }
 
 #[cfg(test)]
@@ -673,7 +775,7 @@ mod tests {
 
         let output = run_bm3d_step(
             image.view(),
-            image.view(),  // pilot = noisy for first pass
+            image.view(), // pilot = noisy for first pass
             Bm3dMode::HardThreshold,
             sigma_psd.view(),
             sigma_map.view(),
@@ -683,11 +785,15 @@ mod tests {
             TEST_STEP_SIZE,
             TEST_SEARCH_WINDOW,
             TEST_MAX_MATCHES,
-        ).unwrap();
+        )
+        .unwrap();
 
         // Should complete without panic and produce valid output
         assert_eq!(output.dim(), image.dim());
-        assert!(output.iter().all(|&x| x.is_finite()), "Output contains non-finite values");
+        assert!(
+            output.iter().all(|&x| x.is_finite()),
+            "Output contains non-finite values"
+        );
     }
 
     #[test]
@@ -703,15 +809,19 @@ mod tests {
             sigma_psd.view(),
             sigma_map.view(),
             TEST_SIGMA_RANDOM,
-            0.0,           // threshold not used for Wiener
+            0.0, // threshold not used for Wiener
             TEST_PATCH_SIZE,
             TEST_STEP_SIZE,
             TEST_SEARCH_WINDOW,
             TEST_MAX_MATCHES,
-        ).unwrap();
+        )
+        .unwrap();
 
         assert_eq!(output.dim(), image.dim());
-        assert!(output.iter().all(|&x| x.is_finite()), "Output contains non-finite values");
+        assert!(
+            output.iter().all(|&x| x.is_finite()),
+            "Output contains non-finite values"
+        );
     }
 
     #[test]
@@ -732,10 +842,14 @@ mod tests {
             TEST_STEP_SIZE,
             TEST_SEARCH_WINDOW,
             TEST_MAX_MATCHES,
-        ).unwrap();
+        )
+        .unwrap();
 
         assert_eq!(output.dim(), stack.dim());
-        assert!(output.iter().all(|&x| x.is_finite()), "Output contains non-finite values");
+        assert!(
+            output.iter().all(|&x| x.is_finite()),
+            "Output contains non-finite values"
+        );
     }
 
     #[test]
@@ -756,10 +870,14 @@ mod tests {
             TEST_STEP_SIZE,
             TEST_SEARCH_WINDOW,
             TEST_MAX_MATCHES,
-        ).unwrap();
+        )
+        .unwrap();
 
         assert_eq!(output.dim(), stack.dim());
-        assert!(output.iter().all(|&x| x.is_finite()), "Output contains non-finite values");
+        assert!(
+            output.iter().all(|&x| x.is_finite()),
+            "Output contains non-finite values"
+        );
     }
 
     // ==================== Output Shape Tests ====================
@@ -783,11 +901,15 @@ mod tests {
                 TEST_STEP_SIZE,
                 TEST_SEARCH_WINDOW,
                 TEST_MAX_MATCHES,
-            ).unwrap();
+            )
+            .unwrap();
 
             assert_eq!(
-                output.dim(), (rows, cols),
-                "Output shape mismatch for {}x{}", rows, cols
+                output.dim(),
+                (rows, cols),
+                "Output shape mismatch for {}x{}",
+                rows,
+                cols
             );
         }
     }
@@ -810,7 +932,8 @@ mod tests {
             TEST_STEP_SIZE,
             TEST_SEARCH_WINDOW,
             TEST_MAX_MATCHES,
-        ).unwrap();
+        )
+        .unwrap();
 
         assert_eq!(output.dim(), image.dim());
     }
@@ -833,7 +956,8 @@ mod tests {
             TEST_STEP_SIZE,
             TEST_SEARCH_WINDOW,
             TEST_MAX_MATCHES,
-        ).unwrap();
+        )
+        .unwrap();
 
         assert_eq!(output.dim(), stack.dim());
     }
@@ -853,13 +977,14 @@ mod tests {
             Bm3dMode::HardThreshold,
             sigma_psd.view(),
             sigma_map.view(),
-            0.1,  // Match noise level
+            0.1, // Match noise level
             TEST_THRESHOLD,
             TEST_PATCH_SIZE,
             TEST_STEP_SIZE,
             TEST_SEARCH_WINDOW,
             TEST_MAX_MATCHES,
-        ).unwrap();
+        )
+        .unwrap();
 
         // Output should differ from input (denoising did something)
         let diff = mse(&output, &noisy);
@@ -889,12 +1014,13 @@ mod tests {
             sigma_psd.view(),
             sigma_map.view(),
             0.1,
-            2.7,  // Standard HT threshold
-            8,    // patch_size
-            2,    // smaller step for better coverage
-            24,   // larger search window
-            16,   // more matches
-        ).unwrap();
+            2.7, // Standard HT threshold
+            8,   // patch_size
+            2,   // smaller step for better coverage
+            24,  // larger search window
+            16,  // more matches
+        )
+        .unwrap();
 
         let mse_before = mse(&noisy, &clean);
         let mse_after = mse(&output, &clean);
@@ -904,7 +1030,8 @@ mod tests {
         assert!(
             mse_after < mse_before * 1.5,
             "Denoising should not significantly increase MSE: before={}, after={}",
-            mse_before, mse_after
+            mse_before,
+            mse_after
         );
     }
 
@@ -922,16 +1049,18 @@ mod tests {
             Bm3dMode::HardThreshold,
             sigma_psd.view(),
             sigma_map.view(),
-            0.01,  // Very low noise
+            0.01, // Very low noise
             TEST_THRESHOLD,
             TEST_PATCH_SIZE,
             TEST_STEP_SIZE,
             TEST_SEARCH_WINDOW,
             TEST_MAX_MATCHES,
-        ).unwrap();
+        )
+        .unwrap();
 
         // Output should be very close to input for constant image
-        let max_diff = output.iter()
+        let max_diff = output
+            .iter()
             .map(|&x| (x - constant_val).abs())
             .fold(0.0f32, f32::max);
 
@@ -961,7 +1090,8 @@ mod tests {
             TEST_STEP_SIZE,
             TEST_SEARCH_WINDOW,
             TEST_MAX_MATCHES,
-        ).unwrap();
+        )
+        .unwrap();
 
         for &val in output.iter() {
             assert!(val.is_finite(), "Output contains non-finite value");
@@ -996,7 +1126,8 @@ mod tests {
             2,
             24,
             16,
-        ).unwrap();
+        )
+        .unwrap();
 
         let mse_before = mse_stack(&noisy, &clean);
         let mse_after = mse_stack(&output, &clean);
@@ -1005,7 +1136,8 @@ mod tests {
         assert!(
             mse_after < mse_before * 1.5,
             "Stack denoising should not significantly increase MSE: before={}, after={}",
-            mse_before, mse_after
+            mse_before,
+            mse_after
         );
     }
 
@@ -1028,13 +1160,23 @@ mod tests {
                 TEST_SIGMA_RANDOM,
                 TEST_THRESHOLD,
                 patch_size,
-                patch_size / 2,  // step = patch/2
+                patch_size / 2, // step = patch/2
                 TEST_SEARCH_WINDOW,
                 TEST_MAX_MATCHES,
-            ).unwrap();
+            )
+            .unwrap();
 
-            assert_eq!(output.dim(), image.dim(), "Shape mismatch for patch_size={}", patch_size);
-            assert!(output.iter().all(|&x| x.is_finite()), "Non-finite values for patch_size={}", patch_size);
+            assert_eq!(
+                output.dim(),
+                image.dim(),
+                "Shape mismatch for patch_size={}",
+                patch_size
+            );
+            assert!(
+                output.iter().all(|&x| x.is_finite()),
+                "Non-finite values for patch_size={}",
+                patch_size
+            );
         }
     }
 
@@ -1057,9 +1199,15 @@ mod tests {
                 TEST_STEP_SIZE,
                 search_window,
                 TEST_MAX_MATCHES,
-            ).unwrap();
+            )
+            .unwrap();
 
-            assert_eq!(output.dim(), image.dim(), "Shape mismatch for search_window={}", search_window);
+            assert_eq!(
+                output.dim(),
+                image.dim(),
+                "Shape mismatch for search_window={}",
+                search_window
+            );
         }
     }
 
@@ -1082,9 +1230,15 @@ mod tests {
                 TEST_STEP_SIZE,
                 TEST_SEARCH_WINDOW,
                 max_matches,
-            ).unwrap();
+            )
+            .unwrap();
 
-            assert_eq!(output.dim(), image.dim(), "Shape mismatch for max_matches={}", max_matches);
+            assert_eq!(
+                output.dim(),
+                image.dim(),
+                "Shape mismatch for max_matches={}",
+                max_matches
+            );
         }
     }
 
@@ -1107,10 +1261,11 @@ mod tests {
             TEST_SIGMA_RANDOM,
             TEST_THRESHOLD,
             TEST_PATCH_SIZE,
-            1,  // step=1 for small image
-            TEST_PATCH_SIZE,  // small search window
-            4,  // fewer matches
-        ).unwrap();
+            1,               // step=1 for small image
+            TEST_PATCH_SIZE, // small search window
+            4,               // fewer matches
+        )
+        .unwrap();
 
         assert_eq!(output.dim(), image.dim());
     }
@@ -1134,7 +1289,8 @@ mod tests {
             TEST_STEP_SIZE,
             TEST_SEARCH_WINDOW,
             TEST_MAX_MATCHES,
-        ).unwrap();
+        )
+        .unwrap();
 
         assert_eq!(output.dim(), (1, 32, 32));
         assert!(output.iter().all(|&x| x.is_finite()));
@@ -1159,7 +1315,8 @@ mod tests {
             TEST_STEP_SIZE,
             TEST_SEARCH_WINDOW,
             TEST_MAX_MATCHES,
-        ).unwrap();
+        )
+        .unwrap();
 
         assert_eq!(output.dim(), (32, 64));
     }
@@ -1188,12 +1345,13 @@ mod tests {
             2,
             24,
             16,
-        ).unwrap();
+        )
+        .unwrap();
 
         // Second pass: Wiener with pilot
         let output = run_bm3d_step(
             noisy.view(),
-            pilot.view(),  // Use HT result as pilot
+            pilot.view(), // Use HT result as pilot
             Bm3dMode::Wiener,
             sigma_psd.view(),
             sigma_map.view(),
@@ -1203,11 +1361,15 @@ mod tests {
             2,
             24,
             16,
-        ).unwrap();
+        )
+        .unwrap();
 
         // Verify both passes produce finite outputs with correct shape
         assert_eq!(output.dim(), clean.dim());
-        assert!(output.iter().all(|&x| x.is_finite()), "Wiener output should be finite");
+        assert!(
+            output.iter().all(|&x| x.is_finite()),
+            "Wiener output should be finite"
+        );
 
         // Wiener should not drastically increase MSE compared to noisy input
         let mse_noisy = mse(&noisy, &clean);
@@ -1216,7 +1378,8 @@ mod tests {
         assert!(
             mse_wiener < mse_noisy * 2.0,
             "Wiener should not drastically increase MSE: noisy={}, wiener={}",
-            mse_noisy, mse_wiener
+            mse_noisy,
+            mse_wiener
         );
     }
 
@@ -1239,9 +1402,15 @@ mod tests {
                 step_size,
                 TEST_SEARCH_WINDOW,
                 TEST_MAX_MATCHES,
-            ).unwrap();
+            )
+            .unwrap();
 
-            assert_eq!(output.dim(), image.dim(), "Shape mismatch for step_size={}", step_size);
+            assert_eq!(
+                output.dim(),
+                image.dim(),
+                "Shape mismatch for step_size={}",
+                step_size
+            );
         }
     }
 }

@@ -141,7 +141,13 @@ impl RoiState {
     }
 
     /// Update ROI position during move, clamping to image bounds.
-    pub fn update_move(&mut self, cursor_x: usize, cursor_y: usize, img_width: usize, img_height: usize) {
+    pub fn update_move(
+        &mut self,
+        cursor_x: usize,
+        cursor_y: usize,
+        img_width: usize,
+        img_height: usize,
+    ) {
         if self.moving {
             if let (Some(roi), Some((off_x, off_y))) = (&self.roi, self.move_offset) {
                 let width = roi.width();
@@ -361,27 +367,28 @@ impl SliceViewer {
         // Navigation controls
         ui.horizontal(|ui| {
             // Step backward button
-            if ui.button("◄")
-                .on_hover_text("Previous slice")
-                .clicked() && self.current_slice > 0 {
+            if ui.button("◄").on_hover_text("Previous slice").clicked() && self.current_slice > 0
+            {
                 self.current_slice -= 1;
                 slice_changed = true;
             }
 
             // Slider
-            let slider_response = ui.add(
-                egui::Slider::new(&mut self.current_slice, 0..=num_slices.saturating_sub(1))
-                    .text("")
-                    .show_value(false),
-            ).on_hover_text("Navigate through slices along the selected axis");
+            let slider_response = ui
+                .add(
+                    egui::Slider::new(&mut self.current_slice, 0..=num_slices.saturating_sub(1))
+                        .text("")
+                        .show_value(false),
+                )
+                .on_hover_text("Navigate through slices along the selected axis");
             if slider_response.changed() {
                 slice_changed = true;
             }
 
             // Step forward button
-            if ui.button("►")
-                .on_hover_text("Next slice")
-                .clicked() && self.current_slice < num_slices - 1 {
+            if ui.button("►").on_hover_text("Next slice").clicked()
+                && self.current_slice < num_slices - 1
+            {
                 self.current_slice += 1;
                 slice_changed = true;
             }
@@ -399,9 +406,11 @@ impl SliceViewer {
             // Zoom indicator and reset
             ui.label(format!("Zoom: {}%", self.view_transform.zoom_percent()))
                 .on_hover_text("Current zoom level. Scroll to zoom, drag to pan");
-            if ui.button("Reset View")
+            if ui
+                .button("Reset View")
                 .on_hover_text("Reset zoom and pan to default")
-                .clicked() {
+                .clicked()
+            {
                 self.reset_view();
             }
         });
@@ -430,8 +439,10 @@ impl SliceViewer {
             let img_aspect = img_width as f32 / img_height as f32;
 
             // Create a clip rect for the image area
-            let (response, painter) =
-                ui.allocate_painter(egui::vec2(available_size.x, image_area_height), egui::Sense::click_and_drag());
+            let (response, painter) = ui.allocate_painter(
+                egui::vec2(available_size.x, image_area_height),
+                egui::Sense::click_and_drag(),
+            );
 
             let clip_rect = response.rect;
 
@@ -459,7 +470,13 @@ impl SliceViewer {
             self.cached_image_dims = Some((img_width, img_height));
 
             // Handle mouse interactions (pan/zoom and ROI)
-            self.handle_mouse_input(&response, clip_rect.center(), image_rect, img_width, img_height);
+            self.handle_mouse_input(
+                &response,
+                clip_rect.center(),
+                image_rect,
+                img_width,
+                img_height,
+            );
 
             // Track cursor position and compute image coordinates
             self.update_cursor_info(&response, image_rect, img_width, img_height, slice_data);
@@ -479,18 +496,20 @@ impl SliceViewer {
             self.draw_roi_overlay(&clipped_painter, image_rect, img_width, img_height);
 
             // Draw border around clip area
-            painter.rect_stroke(
-                clip_rect,
-                0.0,
-                egui::Stroke::new(1.0, egui::Color32::GRAY),
-            );
+            painter.rect_stroke(clip_rect, 0.0, egui::Stroke::new(1.0, egui::Color32::GRAY));
         }
 
         // Cursor status bar
         self.draw_cursor_status_bar(ui, available_size.x, status_bar_height);
 
         // Horizontal colorbar below image
-        self.draw_horizontal_colorbar(ui, available_size.x, colorbar_height, colormap, window_level);
+        self.draw_horizontal_colorbar(
+            ui,
+            available_size.x,
+            colorbar_height,
+            colormap,
+            window_level,
+        );
 
         slice_changed
     }
@@ -516,7 +535,11 @@ impl SliceViewer {
                 let pixel_y = (norm_y * img_height as f32).floor() as i32;
 
                 // Bounds check
-                if pixel_x >= 0 && pixel_x < img_width as i32 && pixel_y >= 0 && pixel_y < img_height as i32 {
+                if pixel_x >= 0
+                    && pixel_x < img_width as i32
+                    && pixel_y >= 0
+                    && pixel_y < img_height as i32
+                {
                     let x = pixel_x as usize;
                     let y = pixel_y as usize;
 
@@ -567,12 +590,7 @@ impl SliceViewer {
                                 .small(),
                         );
                     } else {
-                        ui.label(
-                            egui::RichText::new("I: ---")
-                                .monospace()
-                                .small()
-                                .weak(),
-                        );
+                        ui.label(egui::RichText::new("I: ---").monospace().small().weak());
                     }
                 } else {
                     ui.label(
@@ -597,10 +615,8 @@ impl SliceViewer {
     ) {
         ui.vertical(|ui| {
             // Colorbar gradient
-            let (response, painter) = ui.allocate_painter(
-                egui::vec2(width, height - 15.0),
-                egui::Sense::hover(),
-            );
+            let (response, painter) =
+                ui.allocate_painter(egui::vec2(width, height - 15.0), egui::Sense::hover());
 
             let rect = response.rect;
             let lut = colormap.generate_lut();
@@ -652,7 +668,8 @@ impl SliceViewer {
         let pixel_y = (norm_y * img_height as f32).floor() as i32;
 
         // Bounds check
-        if pixel_x >= 0 && pixel_x < img_width as i32 && pixel_y >= 0 && pixel_y < img_height as i32 {
+        if pixel_x >= 0 && pixel_x < img_width as i32 && pixel_y >= 0 && pixel_y < img_height as i32
+        {
             Some((pixel_x as usize, pixel_y as usize))
         } else {
             None
@@ -710,7 +727,9 @@ impl SliceViewer {
 
             // Update cursor_in_roi for visual feedback
             if let Some(pointer_pos) = response.hover_pos() {
-                if let Some((img_x, img_y)) = self.screen_to_image(pointer_pos, image_rect, img_width, img_height) {
+                if let Some((img_x, img_y)) =
+                    self.screen_to_image(pointer_pos, image_rect, img_width, img_height)
+                {
                     self.cursor_in_roi = self.roi_state.cursor_inside_roi(img_x, img_y);
                 } else {
                     self.cursor_in_roi = false;
@@ -725,7 +744,9 @@ impl SliceViewer {
         // Handle drag
         if response.dragged() {
             if let Some(pointer_pos) = response.interact_pointer_pos() {
-                if let Some((img_x, img_y)) = self.screen_to_image(pointer_pos, image_rect, img_width, img_height) {
+                if let Some((img_x, img_y)) =
+                    self.screen_to_image(pointer_pos, image_rect, img_width, img_height)
+                {
                     // Check if we're already in a dragging operation
                     if self.roi_state.drawing {
                         // Continue drawing ROI
@@ -734,7 +755,8 @@ impl SliceViewer {
                         self.last_drag_pos = None;
                     } else if self.roi_state.moving {
                         // Continue moving ROI
-                        self.roi_state.update_move(img_x, img_y, img_width, img_height);
+                        self.roi_state
+                            .update_move(img_x, img_y, img_width, img_height);
                         self.is_dragging = false;
                         self.last_drag_pos = None;
                     } else {
@@ -799,7 +821,8 @@ impl SliceViewer {
 
         if let Some(roi) = roi_to_draw {
             // Convert image coordinates to screen coordinates
-            let top_left = self.image_to_screen(roi.min_x, roi.min_y, image_rect, img_width, img_height);
+            let top_left =
+                self.image_to_screen(roi.min_x, roi.min_y, image_rect, img_width, img_height);
             let bottom_right = self.image_to_screen(
                 roi.max_x + 1, // +1 because max is inclusive
                 roi.max_y + 1,
@@ -811,7 +834,11 @@ impl SliceViewer {
             let screen_rect = egui::Rect::from_min_max(top_left, bottom_right);
 
             // Draw semi-transparent fill - brighter when cursor is inside (hover feedback)
-            let fill_alpha = if self.cursor_in_roi && !self.roi_state.drawing { 60 } else { 30 };
+            let fill_alpha = if self.cursor_in_roi && !self.roi_state.drawing {
+                60
+            } else {
+                30
+            };
             let fill_color = egui::Color32::from_rgba_unmultiplied(255, 255, 0, fill_alpha);
             painter.rect_filled(screen_rect, 0.0, fill_color);
 
@@ -825,8 +852,16 @@ impl SliceViewer {
             } else {
                 egui::Color32::from_rgb(255, 255, 0) // Yellow when finalized
             };
-            let stroke_width = if self.cursor_in_roi || self.roi_state.moving { 3.0 } else { 2.0 };
-            painter.rect_stroke(screen_rect, 0.0, egui::Stroke::new(stroke_width, stroke_color));
+            let stroke_width = if self.cursor_in_roi || self.roi_state.moving {
+                3.0
+            } else {
+                2.0
+            };
+            painter.rect_stroke(
+                screen_rect,
+                0.0,
+                egui::Stroke::new(stroke_width, stroke_color),
+            );
         }
     }
 
@@ -863,7 +898,8 @@ impl SliceViewer {
                 ..Default::default()
             };
 
-            self.texture_handle = Some(ctx.load_texture("slice_texture", color_image, texture_options));
+            self.texture_handle =
+                Some(ctx.load_texture("slice_texture", color_image, texture_options));
 
             self.cached_slice_index = Some(self.current_slice);
             self.cached_axis_mapping = Some(volume.axis_mapping());

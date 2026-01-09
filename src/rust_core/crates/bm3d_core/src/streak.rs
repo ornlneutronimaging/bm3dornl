@@ -39,7 +39,10 @@ fn gaussian_kernel_1d<F: Bm3dFloat>(sigma: F) -> Vec<F> {
         return vec![F::one()];
     }
 
-    let radius = (F::GAUSSIAN_TRUNCATE * sigma).ceil().to_usize().unwrap_or(0);
+    let radius = (F::GAUSSIAN_TRUNCATE * sigma)
+        .ceil()
+        .to_usize()
+        .unwrap_or(0);
     let size = 2 * radius + 1;
     let mut kernel = vec![F::zero(); size];
 
@@ -48,17 +51,17 @@ fn gaussian_kernel_1d<F: Bm3dFloat>(sigma: F) -> Vec<F> {
     let two = F::from_f64_c(2.0);
     let neg_one = F::from_f64_c(-1.0);
 
-    for i in 0..size {
+    for (i, k) in kernel.iter_mut().enumerate() {
         let x = F::usize_as(i) - F::usize_as(radius);
         let val = (neg_one * x * x / (two * sigma2)).exp();
-        kernel[i] = val;
-        sum = sum + val;
+        *k = val;
+        sum += val;
     }
 
     // Normalize
     let inv_sum = F::one() / sum;
     for val in kernel.iter_mut() {
-        *val = *val * inv_sum;
+        *val *= inv_sum;
     }
 
     kernel
@@ -119,7 +122,7 @@ fn convolve_1d_padded<F: Bm3dFloat>(padded: &[F], kernel: &[F], output: &mut [F]
         let mut sum = F::zero();
         // Unroll hint: kernel is typically small (e.g., 25 elements for sigma=3)
         for k in 0..klen {
-            sum = sum + padded[i + k] * kernel[k];
+            sum += padded[i + k] * kernel[k];
         }
         output[i] = sum;
     }
@@ -144,7 +147,7 @@ pub fn gaussian_blur_1d<F: Bm3dFloat>(input: ArrayView1<F>, sigma: F) -> Array1<
             for (k, &w) in kernel.iter().enumerate() {
                 let src_idx = i as isize + k as isize - radius as isize;
                 let reflected = reflect_index(src_idx, n);
-                sum = sum + w * input[reflected];
+                sum += w * input[reflected];
             }
             output[i] = sum;
         }
@@ -180,7 +183,8 @@ fn blur_rows<F: Bm3dFloat>(input: ArrayView2<F>, sigma: F) -> Array2<F> {
         let output_rows: Vec<_> = output.axis_iter_mut(Axis(0)).collect();
         let input_rows: Vec<_> = input.axis_iter(Axis(0)).collect();
 
-        output_rows.into_par_iter()
+        output_rows
+            .into_par_iter()
             .zip(input_rows.into_par_iter())
             .for_each(|(mut out_row, in_row)| {
                 let in_slice: Vec<F> = in_row.iter().copied().collect();
@@ -222,7 +226,8 @@ fn blur_cols<F: Bm3dFloat>(input: ArrayView2<F>, sigma: F) -> Array2<F> {
         let col_indices: Vec<usize> = (0..cols).collect();
 
         // Collect column data, process, and write back
-        let results: Vec<Vec<F>> = col_indices.par_iter()
+        let results: Vec<Vec<F>> = col_indices
+            .par_iter()
             .map(|&c| {
                 let col_data: Vec<F> = (0..rows).map(|r| input[[r, c]]).collect();
                 let padded = create_padded_row(&col_data, radius);
@@ -293,7 +298,10 @@ fn median_slice<F: Bm3dFloat>(data: &mut [F]) -> F {
             a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)
         });
         // The lower middle is the max of the left partition
-        let lower = left.iter().copied().fold(F::neg_infinity(), |acc, x| if x > acc { x } else { acc });
+        let lower = left
+            .iter()
+            .copied()
+            .fold(F::neg_infinity(), |acc, x| if x > acc { x } else { acc });
         (lower + *upper) / F::from_f64_c(2.0)
     }
 }
@@ -361,12 +369,12 @@ pub fn estimate_streak_profile_impl<F: Bm3dFloat>(
         let streak_update_smooth = gaussian_blur_1d(streak_update.view(), update_sigma);
 
         // 5. Accumulate
-        streak_acc = streak_acc + &streak_update_smooth;
+        streak_acc += &streak_update_smooth;
 
         // 6. Subtract from current estimate (broadcast across rows)
         for r in 0..rows {
             for c in 0..cols {
-                z_clean[[r, c]] = z_clean[[r, c]] - streak_update_smooth[c];
+                z_clean[[r, c]] -= streak_update_smooth[c];
             }
         }
     }
@@ -436,7 +444,8 @@ mod tests {
             assert!(
                 approx_eq(sum, 1.0, 1e-6),
                 "Kernel for sigma={} sums to {} instead of 1.0",
-                sigma, sum
+                sigma,
+                sum
             );
         }
     }
@@ -448,7 +457,8 @@ mod tests {
         for i in 0..n / 2 {
             assert!(
                 approx_eq(kernel[i], kernel[n - 1 - i], 1e-7),
-                "Kernel not symmetric at position {}", i
+                "Kernel not symmetric at position {}",
+                i
             );
         }
     }
@@ -481,7 +491,8 @@ mod tests {
         for &val in output.iter() {
             assert!(
                 approx_eq(val, 5.0, 1e-5),
-                "Uniform input should remain uniform, got {}", val
+                "Uniform input should remain uniform, got {}",
+                val
             );
         }
     }
@@ -497,7 +508,10 @@ mod tests {
 
         // The transition region should have intermediate values
         assert!(output[9] > 0.0 && output[9] < 1.0, "Should smooth the step");
-        assert!(output[10] > 0.0 && output[10] < 1.0, "Should smooth the step");
+        assert!(
+            output[10] > 0.0 && output[10] < 1.0,
+            "Should smooth the step"
+        );
     }
 
     #[test]
@@ -513,7 +527,8 @@ mod tests {
         assert!(
             approx_eq(input_mean, output_mean, 0.5),
             "Mean should be approximately preserved: {} vs {}",
-            input_mean, output_mean
+            input_mean,
+            output_mean
         );
     }
 
@@ -539,7 +554,8 @@ mod tests {
         for &val in output.iter() {
             assert!(
                 (val - 5.0).abs() < 1e-10,
-                "Uniform input should remain uniform, got {}", val
+                "Uniform input should remain uniform, got {}",
+                val
             );
         }
     }
@@ -555,7 +571,8 @@ mod tests {
         for &val in output.iter() {
             assert!(
                 approx_eq(val, 3.0, 1e-5),
-                "Uniform image should remain uniform, got {}", val
+                "Uniform image should remain uniform, got {}",
+                val
             );
         }
     }
@@ -580,18 +597,30 @@ mod tests {
     #[test]
     fn test_gaussian_2d_anisotropic() {
         // Different sigmas should produce different blurs
-        let input = Array2::from_shape_fn((16, 16), |(r, c)| {
-            if r == 8 && c == 8 { 1.0f32 } else { 0.0 }
-        });
+        let input = Array2::from_shape_fn(
+            (16, 16),
+            |(r, c)| {
+                if r == 8 && c == 8 {
+                    1.0f32
+                } else {
+                    0.0
+                }
+            },
+        );
 
         let output_iso = gaussian_blur_2d(input.view(), 2.0f32, 2.0f32);
         let output_aniso = gaussian_blur_2d(input.view(), 4.0f32, 1.0f32);
 
         // Anisotropic blur should be different
-        let diff: f32 = output_iso.iter().zip(output_aniso.iter())
+        let diff: f32 = output_iso
+            .iter()
+            .zip(output_aniso.iter())
             .map(|(a, b)| (a - b).abs())
             .sum();
-        assert!(diff > 0.01, "Different sigmas should produce different results");
+        assert!(
+            diff > 0.01,
+            "Different sigmas should produce different results"
+        );
     }
 
     // ==================== Median Tests ====================
@@ -599,11 +628,15 @@ mod tests {
     #[test]
     fn test_median_axis0_simple() {
         // 3x3 matrix with known medians
-        let input = Array2::from_shape_vec((3, 3), vec![
-            1.0f32, 4.0, 7.0,  // row 0
-            2.0, 5.0, 8.0,  // row 1
-            3.0, 6.0, 9.0,  // row 2
-        ]).unwrap();
+        let input = Array2::from_shape_vec(
+            (3, 3),
+            vec![
+                1.0f32, 4.0, 7.0, // row 0
+                2.0, 5.0, 8.0, // row 1
+                3.0, 6.0, 9.0, // row 2
+            ],
+        )
+        .unwrap();
 
         let result = median_axis0(input.view());
 
@@ -619,12 +652,9 @@ mod tests {
     #[test]
     fn test_median_axis0_even_rows() {
         // 4x2 matrix - even number of rows means average of middle two
-        let input = Array2::from_shape_vec((4, 2), vec![
-            1.0f32, 10.0,
-            2.0, 20.0,
-            3.0, 30.0,
-            4.0, 40.0,
-        ]).unwrap();
+        let input =
+            Array2::from_shape_vec((4, 2), vec![1.0f32, 10.0, 2.0, 20.0, 3.0, 30.0, 4.0, 40.0])
+                .unwrap();
 
         let result = median_axis0(input.view());
 
@@ -670,7 +700,8 @@ mod tests {
         for &val in profile.iter() {
             assert!(
                 val.abs() < 1e-5,
-                "Uniform image should have zero streak profile, got {}", val
+                "Uniform image should have zero streak profile, got {}",
+                val
             );
         }
     }
@@ -680,13 +711,14 @@ mod tests {
         // Image with one bright vertical stripe
         let mut input = Array2::from_elem((32, 64), 0.0f32);
         for r in 0..32 {
-            input[[r, 20]] = 1.0;  // Bright stripe at column 20
+            input[[r, 20]] = 1.0; // Bright stripe at column 20
         }
 
         let profile = estimate_streak_profile_impl(input.view(), 3.0f32, 3);
 
         // Profile should be highest around column 20
-        let max_idx = profile.iter()
+        let max_idx = profile
+            .iter()
             .enumerate()
             .max_by(|a, b| a.1.partial_cmp(b.1).unwrap())
             .map(|(i, _)| i)
@@ -694,7 +726,8 @@ mod tests {
 
         assert!(
             (max_idx as i32 - 20).abs() <= 2,
-            "Peak should be near column 20, found at {}", max_idx
+            "Peak should be near column 20, found at {}",
+            max_idx
         );
     }
 
@@ -712,8 +745,14 @@ mod tests {
 
         // Profile should have local maxima near columns 10, 30, 50
         // Column 30 should have highest value (brightest stripe)
-        assert!(profile[30] > profile[10], "Brightest stripe should have highest profile");
-        assert!(profile[30] > profile[50], "Brightest stripe should have highest profile");
+        assert!(
+            profile[30] > profile[10],
+            "Brightest stripe should have highest profile"
+        );
+        assert!(
+            profile[30] > profile[50],
+            "Brightest stripe should have highest profile"
+        );
     }
 
     #[test]
@@ -738,7 +777,11 @@ mod tests {
         let input = Array2::from_elem((64, 128), 0.5f32);
         let profile = estimate_streak_profile_impl(input.view(), 3.0f32, 2);
 
-        assert_eq!(profile.len(), 128, "Profile length should equal image width");
+        assert_eq!(
+            profile.len(),
+            128,
+            "Profile length should equal image width"
+        );
     }
 
     #[test]
@@ -746,7 +789,7 @@ mod tests {
         // Horizontal structures should not create streak profile
         let mut input = Array2::from_elem((64, 64), 0.0f32);
         for c in 0..64 {
-            input[[32, c]] = 1.0;  // Bright horizontal line
+            input[[32, c]] = 1.0; // Bright horizontal line
         }
 
         let profile = estimate_streak_profile_impl(input.view(), 3.0f32, 3);

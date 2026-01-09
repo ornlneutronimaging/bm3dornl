@@ -1,5 +1,5 @@
-use rustfft::{Fft, num_complex::Complex};
 use ndarray::{Array2, ArrayView2};
+use rustfft::{num_complex::Complex, Fft};
 use std::sync::Arc;
 
 use crate::float_trait::Bm3dFloat;
@@ -16,7 +16,7 @@ use crate::float_trait::Bm3dFloat;
 pub fn fft2d<F: Bm3dFloat>(
     input: ArrayView2<F>,
     fft_row_plan: &Arc<dyn Fft<F>>,
-    fft_col_plan: &Arc<dyn Fft<F>>
+    fft_col_plan: &Arc<dyn Fft<F>>,
 ) -> Array2<Complex<F>> {
     let (rows, cols) = input.dim();
 
@@ -62,7 +62,7 @@ pub fn fft2d<F: Bm3dFloat>(
 pub fn ifft2d<F: Bm3dFloat>(
     input: &Array2<Complex<F>>,
     ifft_row_plan: &Arc<dyn Fft<F>>,
-    ifft_col_plan: &Arc<dyn Fft<F>>
+    ifft_col_plan: &Arc<dyn Fft<F>>,
 ) -> Array2<F> {
     let (rows, cols) = input.dim();
 
@@ -71,7 +71,7 @@ pub fn ifft2d<F: Bm3dFloat>(
     let mut col_vec = vec![Complex::new(F::zero(), F::zero()); rows];
 
     for c in 0..cols {
-         for r in 0..rows {
+        for r in 0..rows {
             col_vec[r] = intermediate[[r, c]];
         }
         ifft_col_plan.process(&mut col_vec);
@@ -105,22 +105,46 @@ pub fn ifft2d<F: Bm3dFloat>(
 #[inline(always)]
 fn fwht8<F: Bm3dFloat>(buf: &mut [F; 8]) {
     // Stage 1 (Stride 1)
-    let t0 = buf[0] + buf[1]; buf[1] = buf[0] - buf[1]; buf[0] = t0;
-    let t2 = buf[2] + buf[3]; buf[3] = buf[2] - buf[3]; buf[2] = t2;
-    let t4 = buf[4] + buf[5]; buf[5] = buf[4] - buf[5]; buf[4] = t4;
-    let t6 = buf[6] + buf[7]; buf[7] = buf[6] - buf[7]; buf[6] = t6;
+    let t0 = buf[0] + buf[1];
+    buf[1] = buf[0] - buf[1];
+    buf[0] = t0;
+    let t2 = buf[2] + buf[3];
+    buf[3] = buf[2] - buf[3];
+    buf[2] = t2;
+    let t4 = buf[4] + buf[5];
+    buf[5] = buf[4] - buf[5];
+    buf[4] = t4;
+    let t6 = buf[6] + buf[7];
+    buf[7] = buf[6] - buf[7];
+    buf[6] = t6;
 
     // Stage 2 (Stride 2)
-    let t0 = buf[0] + buf[2]; buf[2] = buf[0] - buf[2]; buf[0] = t0;
-    let t1 = buf[1] + buf[3]; buf[3] = buf[1] - buf[3]; buf[1] = t1;
-    let t4 = buf[4] + buf[6]; buf[6] = buf[4] - buf[6]; buf[4] = t4;
-    let t5 = buf[5] + buf[7]; buf[7] = buf[5] - buf[7]; buf[5] = t5;
+    let t0 = buf[0] + buf[2];
+    buf[2] = buf[0] - buf[2];
+    buf[0] = t0;
+    let t1 = buf[1] + buf[3];
+    buf[3] = buf[1] - buf[3];
+    buf[1] = t1;
+    let t4 = buf[4] + buf[6];
+    buf[6] = buf[4] - buf[6];
+    buf[4] = t4;
+    let t5 = buf[5] + buf[7];
+    buf[7] = buf[5] - buf[7];
+    buf[5] = t5;
 
     // Stage 3 (Stride 4)
-    let t0 = buf[0] + buf[4]; buf[4] = buf[0] - buf[4]; buf[0] = t0;
-    let t1 = buf[1] + buf[5]; buf[5] = buf[1] - buf[5]; buf[1] = t1;
-    let t2 = buf[2] + buf[6]; buf[6] = buf[2] - buf[6]; buf[2] = t2;
-    let t3 = buf[3] + buf[7]; buf[7] = buf[3] - buf[7]; buf[3] = t3;
+    let t0 = buf[0] + buf[4];
+    buf[4] = buf[0] - buf[4];
+    buf[0] = t0;
+    let t1 = buf[1] + buf[5];
+    buf[5] = buf[1] - buf[5];
+    buf[1] = t1;
+    let t2 = buf[2] + buf[6];
+    buf[6] = buf[2] - buf[6];
+    buf[2] = t2;
+    let t3 = buf[3] + buf[7];
+    buf[7] = buf[3] - buf[7];
+    buf[3] = t3;
 }
 
 /// 2D WHT for 8x8 patch. Returns Complex (im=0) for compatibility.
@@ -136,18 +160,18 @@ pub fn wht2d_8x8_forward<F: Bm3dFloat>(input: ArrayView2<F>) -> Array2<Complex<F
     for r in 0..8 {
         let mut row_buf = [F::zero(); 8];
         let offset = r * 8;
-        row_buf.copy_from_slice(&data[offset..offset+8]);
+        row_buf.copy_from_slice(&data[offset..offset + 8]);
         fwht8(&mut row_buf);
-        data[offset..offset+8].copy_from_slice(&row_buf);
+        data[offset..offset + 8].copy_from_slice(&row_buf);
     }
     for c in 0..8 {
         let mut col_buf = [F::zero(); 8];
         for r in 0..8 {
-            col_buf[r] = data[r*8 + c];
+            col_buf[r] = data[r * 8 + c];
         }
         fwht8(&mut col_buf);
         for r in 0..8 {
-            data[r*8 + c] = col_buf[r];
+            data[r * 8 + c] = col_buf[r];
         }
     }
     let mut output = Array2::<Complex<F>>::zeros((8, 8));
@@ -174,18 +198,18 @@ pub fn wht2d_8x8_inverse<F: Bm3dFloat>(input: &Array2<Complex<F>>) -> Array2<F> 
     for r in 0..8 {
         let mut row_buf = [F::zero(); 8];
         let offset = r * 8;
-        row_buf.copy_from_slice(&data[offset..offset+8]);
+        row_buf.copy_from_slice(&data[offset..offset + 8]);
         fwht8(&mut row_buf);
-        data[offset..offset+8].copy_from_slice(&row_buf);
+        data[offset..offset + 8].copy_from_slice(&row_buf);
     }
     for c in 0..8 {
         let mut col_buf = [F::zero(); 8];
         for r in 0..8 {
-            col_buf[r] = data[r*8 + c];
+            col_buf[r] = data[r * 8 + c];
         }
         fwht8(&mut col_buf);
         for r in 0..8 {
-            data[r*8 + c] = col_buf[r];
+            data[r * 8 + c] = col_buf[r];
         }
     }
     let norm_scale = F::one() / F::usize_as(64);
@@ -237,7 +261,10 @@ mod tests {
     }
 
     // Helper: Create FFT plans for a given size
-    fn create_fft_plans_f32(rows: usize, cols: usize) -> (
+    fn create_fft_plans_f32(
+        rows: usize,
+        cols: usize,
+    ) -> (
         std::sync::Arc<dyn Fft<f32>>,
         std::sync::Arc<dyn Fft<f32>>,
         std::sync::Arc<dyn Fft<f32>>,
@@ -251,7 +278,10 @@ mod tests {
         (fft_row, fft_col, ifft_row, ifft_col)
     }
 
-    fn create_fft_plans_f64(rows: usize, cols: usize) -> (
+    fn create_fft_plans_f64(
+        rows: usize,
+        cols: usize,
+    ) -> (
         std::sync::Arc<dyn Fft<f64>>,
         std::sync::Arc<dyn Fft<f64>>,
         std::sync::Arc<dyn Fft<f64>>,
@@ -304,7 +334,11 @@ mod tests {
         assert!(
             arrays_approx_equal_f32(&input, &output, 1e-5),
             "FFT roundtrip failed: max diff = {}",
-            input.iter().zip(output.iter()).map(|(a, b)| (a - b).abs()).fold(0.0f32, f32::max)
+            input
+                .iter()
+                .zip(output.iter())
+                .map(|(a, b)| (a - b).abs())
+                .fold(0.0f32, f32::max)
         );
     }
 
@@ -319,14 +353,18 @@ mod tests {
             let freq = fft2d(input.view(), &fft_row, &fft_col);
             let output = ifft2d(&freq, &ifft_row, &ifft_col);
 
-            let max_diff = input.iter().zip(output.iter())
+            let max_diff = input
+                .iter()
+                .zip(output.iter())
                 .map(|(a, b)| (a - b).abs())
                 .fold(0.0f32, f32::max);
 
             assert!(
                 arrays_approx_equal_f32(&input, &output, 1e-5),
                 "FFT roundtrip failed for {}x{}: max diff = {}",
-                rows, cols, max_diff
+                rows,
+                cols,
+                max_diff
             );
         }
     }
@@ -343,7 +381,8 @@ mod tests {
 
             assert!(
                 arrays_approx_equal_f32(&input, &output, 1e-5),
-                "FFT roundtrip failed for seed {}", seed
+                "FFT roundtrip failed for seed {}",
+                seed
             );
         }
     }
@@ -361,7 +400,11 @@ mod tests {
         assert!(
             arrays_approx_equal_f64(&input, &output, 1e-12),
             "FFT f64 roundtrip failed: max diff = {}",
-            input.iter().zip(output.iter()).map(|(a, b)| (a - b).abs()).fold(0.0f64, f64::max)
+            input
+                .iter()
+                .zip(output.iter())
+                .map(|(a, b)| (a - b).abs())
+                .fold(0.0f64, f64::max)
         );
     }
 
@@ -376,14 +419,18 @@ mod tests {
             let freq = fft2d(input.view(), &fft_row, &fft_col);
             let output = ifft2d(&freq, &ifft_row, &ifft_col);
 
-            let max_diff = input.iter().zip(output.iter())
+            let max_diff = input
+                .iter()
+                .zip(output.iter())
                 .map(|(a, b)| (a - b).abs())
                 .fold(0.0f64, f64::max);
 
             assert!(
                 arrays_approx_equal_f64(&input, &output, 1e-12),
                 "FFT f64 roundtrip failed for {}x{}: max diff = {}",
-                rows, cols, max_diff
+                rows,
+                cols,
+                max_diff
             );
         }
     }
@@ -431,7 +478,9 @@ mod tests {
                     assert!(
                         val.norm() < 1e-5,
                         "Non-DC component [{},{}] should be ~0, got magnitude {}",
-                        r, c, val.norm()
+                        r,
+                        c,
+                        val.norm()
                     );
                 }
             }
@@ -455,7 +504,9 @@ mod tests {
                 assert!(
                     (mag - 1.0).abs() < 1e-5,
                     "Impulse FFT at [{},{}] should have magnitude 1, got {}",
-                    r, c, mag
+                    r,
+                    c,
+                    mag
                 );
             }
         }
@@ -478,7 +529,9 @@ mod tests {
         assert!(
             (energy_freq - expected_freq_energy).abs() / expected_freq_energy < 1e-4,
             "Parseval's theorem violated: spatial={}, freq={}, expected={}",
-            energy_spatial, energy_freq, expected_freq_energy
+            energy_spatial,
+            energy_freq,
+            expected_freq_energy
         );
     }
 
@@ -497,10 +550,7 @@ mod tests {
         );
 
         let output = ifft2d(&freq, &ifft_row, &ifft_col);
-        assert!(
-            (output[[0, 0]] - 3.14).abs() < 1e-5,
-            "1x1 roundtrip failed"
-        );
+        assert!((output[[0, 0]] - 3.14).abs() < 1e-5, "1x1 roundtrip failed");
     }
 
     #[test]
@@ -518,7 +568,8 @@ mod tests {
             assert!(
                 arrays_approx_equal_f32(&input, &output, 1e-5),
                 "Non-square {}x{} roundtrip failed",
-                rows, cols
+                rows,
+                cols
             );
         }
     }
@@ -545,7 +596,11 @@ mod tests {
                 assert!(
                     rel_err < 1e-4,
                     "Large value roundtrip failed at [{},{}]: input={}, output={}, rel_err={}",
-                    r, c, input[[r, c]], output[[r, c]], rel_err
+                    r,
+                    c,
+                    input[[r, c]],
+                    output[[r, c]],
+                    rel_err
                 );
             }
         }
@@ -583,7 +638,11 @@ mod tests {
         assert!(
             arrays_approx_equal_f32(&input, &output, 1e-6),
             "WHT roundtrip failed: max diff = {}",
-            input.iter().zip(output.iter()).map(|(a, b)| (a - b).abs()).fold(0.0f32, f32::max)
+            input
+                .iter()
+                .zip(output.iter())
+                .map(|(a, b)| (a - b).abs())
+                .fold(0.0f32, f32::max)
         );
     }
 
@@ -596,14 +655,17 @@ mod tests {
             let freq = wht2d_8x8_forward(input.view());
             let output = wht2d_8x8_inverse(&freq);
 
-            let max_diff = input.iter().zip(output.iter())
+            let max_diff = input
+                .iter()
+                .zip(output.iter())
                 .map(|(a, b)| (a - b).abs())
                 .fold(0.0f32, f32::max);
 
             assert!(
                 arrays_approx_equal_f32(&input, &output, 1e-6),
                 "WHT roundtrip failed for seed {}: max diff = {}",
-                seed, max_diff
+                seed,
+                max_diff
             );
         }
     }
@@ -620,7 +682,11 @@ mod tests {
         assert!(
             arrays_approx_equal_f64(&input, &output, 1e-14),
             "WHT f64 roundtrip failed: max diff = {}",
-            input.iter().zip(output.iter()).map(|(a, b)| (a - b).abs()).fold(0.0f64, f64::max)
+            input
+                .iter()
+                .zip(output.iter())
+                .map(|(a, b)| (a - b).abs())
+                .fold(0.0f64, f64::max)
         );
     }
 
@@ -632,14 +698,17 @@ mod tests {
             let freq = wht2d_8x8_forward(input.view());
             let output = wht2d_8x8_inverse(&freq);
 
-            let max_diff = input.iter().zip(output.iter())
+            let max_diff = input
+                .iter()
+                .zip(output.iter())
                 .map(|(a, b)| (a - b).abs())
                 .fold(0.0f64, f64::max);
 
             assert!(
                 arrays_approx_equal_f64(&input, &output, 1e-14),
                 "WHT f64 roundtrip failed for seed {}: max diff = {}",
-                seed, max_diff
+                seed,
+                max_diff
             );
         }
     }
@@ -683,7 +752,9 @@ mod tests {
                     assert!(
                         val.norm() < 1e-6,
                         "Non-DC component [{},{}] should be 0, got {}",
-                        r, c, val.norm()
+                        r,
+                        c,
+                        val.norm()
                     );
                 }
             }
@@ -706,7 +777,9 @@ mod tests {
                 assert!(
                     (output[[r, c]].re - expected).abs() < 1e-6,
                     "WHT of impulse should have uniform coefficients, got [{},{}]={}",
-                    r, c, output[[r, c]].re
+                    r,
+                    c,
+                    output[[r, c]].re
                 );
             }
         }
@@ -736,7 +809,10 @@ mod tests {
                 assert!(
                     (expected - actual).abs() < 1e-4,
                     "WHT symmetry failed at [{},{}]: expected {}, got {}",
-                    r, c, expected, actual
+                    r,
+                    c,
+                    expected,
+                    actual
                 );
             }
         }
@@ -785,7 +861,9 @@ mod tests {
                 assert!(
                     rel_err < 1e-5,
                     "WHT large value roundtrip failed at [{},{}]: rel_err={}",
-                    r, c, rel_err
+                    r,
+                    c,
+                    rel_err
                 );
             }
         }

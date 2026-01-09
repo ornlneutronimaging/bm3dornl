@@ -1,4 +1,4 @@
-use ndarray::{Array2, ArrayView2, s};
+use ndarray::{s, Array2, ArrayView2};
 use std::cmp::Ordering;
 
 use crate::float_trait::Bm3dFloat;
@@ -18,15 +18,17 @@ impl<F: Bm3dFloat> PartialEq for PatchMatch<F> {
 
 impl<F: Bm3dFloat> Eq for PatchMatch<F> {}
 
-impl<F: Bm3dFloat> PartialOrd for PatchMatch<F> {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        self.distance.partial_cmp(&other.distance)
+impl<F: Bm3dFloat> Ord for PatchMatch<F> {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.distance
+            .partial_cmp(&other.distance)
+            .unwrap_or(Ordering::Equal)
     }
 }
 
-impl<F: Bm3dFloat> Ord for PatchMatch<F> {
-    fn cmp(&self, other: &Self) -> Ordering {
-        self.partial_cmp(other).unwrap_or(Ordering::Equal)
+impl<F: Bm3dFloat> PartialOrd for PatchMatch<F> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
     }
 }
 
@@ -37,7 +39,7 @@ fn compute_squared_distance<F: Bm3dFloat>(p1: ArrayView2<F>, p2: ArrayView2<F>, 
     for (r1, r2) in p1.outer_iter().zip(p2.outer_iter()) {
         for (a, b) in r1.iter().zip(r2.iter()) {
             let diff = *a - *b;
-            sum_sq = sum_sq + diff * diff;
+            sum_sq += diff * diff;
         }
         if sum_sq >= threshold {
             return sum_sq;
@@ -47,11 +49,13 @@ fn compute_squared_distance<F: Bm3dFloat>(p1: ArrayView2<F>, p2: ArrayView2<F>, 
 }
 
 /// Compute Integral Images (Sum and Squared Sum).
+///
 /// Integral Image I(x, y) = sum(i(x', y')) for x'<=x, y'<=y.
 /// This allows O(1) computation of sum of pixels in any rectangular region.
 /// We use this for fast pre-screening in Block Matching:
 /// 1. Compute Mean Difference Bound: (sum1 - sum2)^2 / N
 /// 2. Compute Norm Difference Bound: (norm1 - norm2)^2
+///
 /// If either bound exceeds threshold, we skip strict distance calculation.
 /// Returns (Sum, SqSum). Indexing: [row+1, col+1].
 pub fn compute_integral_images<F: Bm3dFloat>(image: ArrayView2<F>) -> (Array2<F>, Array2<F>) {
@@ -64,8 +68,8 @@ pub fn compute_integral_images<F: Bm3dFloat>(image: ArrayView2<F>) -> (Array2<F>
         let mut row_sq_sum = F::zero();
         for c in 0..w {
             let val = image[[r, c]];
-            row_sum = row_sum + val;
-            row_sq_sum = row_sq_sum + val * val;
+            row_sum += val;
+            row_sq_sum += val * val;
 
             sum_img[[r + 1, c + 1]] = sum_img[[r, c + 1]] + row_sum;
             sq_sum_img[[r + 1, c + 1]] = sq_sum_img[[r, c + 1]] + row_sq_sum;
@@ -78,7 +82,10 @@ pub fn compute_integral_images<F: Bm3dFloat>(image: ArrayView2<F>) -> (Array2<F>
 fn get_patch_sums<F: Bm3dFloat>(
     sum_img: &Array2<F>,
     sq_sum_img: &Array2<F>,
-    r: usize, c: usize, h: usize, w: usize
+    r: usize,
+    c: usize,
+    h: usize,
+    w: usize,
 ) -> (F, F) {
     let r1 = r;
     let c1 = c;
@@ -86,12 +93,14 @@ fn get_patch_sums<F: Bm3dFloat>(
     let c2 = c + w;
 
     let sum = sum_img[[r2, c2]] - sum_img[[r1, c2]] - sum_img[[r2, c1]] + sum_img[[r1, c1]];
-    let sq_sum = sq_sum_img[[r2, c2]] - sq_sum_img[[r1, c2]] - sq_sum_img[[r2, c1]] + sq_sum_img[[r1, c1]];
+    let sq_sum =
+        sq_sum_img[[r2, c2]] - sq_sum_img[[r1, c2]] - sq_sum_img[[r2, c1]] + sq_sum_img[[r1, c1]];
 
     (sum, sq_sum)
 }
 
 /// Find similar patches within a search window using Integral Image Pre-Screening.
+#[allow(clippy::too_many_arguments)]
 pub fn find_similar_patches<F: Bm3dFloat>(
     image: ArrayView2<F>,
     integral_sum: &Array2<F>,
@@ -115,9 +124,17 @@ pub fn find_similar_patches<F: Bm3dFloat>(
 
     let mut heap = std::collections::BinaryHeap::with_capacity(max_matches + 1);
 
-    heap.push(PatchMatch { row: ref_r, col: ref_c, distance: F::zero() });
+    heap.push(PatchMatch {
+        row: ref_r,
+        col: ref_c,
+        distance: F::zero(),
+    });
 
-    let mut threshold = if max_matches > 1 { F::max_value() } else { F::zero() };
+    let mut threshold = if max_matches > 1 {
+        F::max_value()
+    } else {
+        F::zero()
+    };
 
     // Pre-calculate Reference stats
     let (ref_sum, ref_sq_sum) = get_patch_sums(integral_sum, integral_sq_sum, ref_r, ref_c, ph, pw);
@@ -126,26 +143,33 @@ pub fn find_similar_patches<F: Bm3dFloat>(
 
     for r in (search_r_start..=search_r_end).step_by(step) {
         for c in (search_c_start..=search_c_end).step_by(step) {
-             if r == ref_r && c == ref_c { continue; }
+            if r == ref_r && c == ref_c {
+                continue;
+            }
 
             // 1. Pre-Screening (Bounds Check)
             // Bound 1: Mean Difference: (sum1 - sum2)^2 / N
             // Bound 2: Norm Difference: (norm1 - norm2)^2
             // If Max(Bound) > threshold, skip.
 
-            let (cand_sum, cand_sq_sum) = get_patch_sums(integral_sum, integral_sq_sum, r, c, ph, pw);
+            let (cand_sum, cand_sq_sum) =
+                get_patch_sums(integral_sum, integral_sq_sum, r, c, ph, pw);
             let check_threshold = threshold;
 
             // Mean Bound
             let diff_sum = cand_sum - ref_sum;
             let lb_mean = (diff_sum * diff_sum) * inv_n;
-            if lb_mean >= check_threshold { continue; }
+            if lb_mean >= check_threshold {
+                continue;
+            }
 
             // Norm Bound
             let cand_norm = cand_sq_sum.max(F::zero()).sqrt();
             let diff_norm = (cand_norm - ref_norm).abs();
             let lb_norm = diff_norm * diff_norm;
-            if lb_norm >= check_threshold { continue; }
+            if lb_norm >= check_threshold {
+                continue;
+            }
 
             // 2. Full Distance Calculation
             let candidate_patch = image.slice(s![r..r + ph, c..c + pw]);
@@ -153,13 +177,21 @@ pub fn find_similar_patches<F: Bm3dFloat>(
 
             if dist < threshold {
                 if heap.len() < max_matches {
-                    heap.push(PatchMatch { row: r, col: c, distance: dist });
-                     if heap.len() == max_matches {
+                    heap.push(PatchMatch {
+                        row: r,
+                        col: c,
+                        distance: dist,
+                    });
+                    if heap.len() == max_matches {
                         threshold = heap.peek().unwrap().distance;
                     }
                 } else {
                     heap.pop();
-                    heap.push(PatchMatch { row: r, col: c, distance: dist });
+                    heap.push(PatchMatch {
+                        row: r,
+                        col: c,
+                        distance: dist,
+                    });
                     threshold = heap.peek().unwrap().distance;
                 }
             }
@@ -167,7 +199,11 @@ pub fn find_similar_patches<F: Bm3dFloat>(
     }
 
     let mut sorted_matches = heap.into_vec();
-    sorted_matches.sort_by(|a, b| a.distance.partial_cmp(&b.distance).unwrap_or(Ordering::Equal));
+    sorted_matches.sort_by(|a, b| {
+        a.distance
+            .partial_cmp(&b.distance)
+            .unwrap_or(Ordering::Equal)
+    });
 
     sorted_matches
 }
@@ -175,8 +211,8 @@ pub fn find_similar_patches<F: Bm3dFloat>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::BinaryHeap;
     use ndarray::Array2;
+    use std::collections::BinaryHeap;
 
     // Helper: Simple Linear Congruential Generator for deterministic "random" test data
     // Copied from transforms.rs tests to maintain consistency
@@ -224,9 +260,21 @@ mod tests {
     #[test]
     fn test_patch_match_ordering_by_distance() {
         // Verify Ord impl sorts by distance ascending (for min-heap behavior with BinaryHeap)
-        let p1: PatchMatch<f32> = PatchMatch { row: 0, col: 0, distance: 1.0 };
-        let p2: PatchMatch<f32> = PatchMatch { row: 1, col: 1, distance: 2.0 };
-        let p3: PatchMatch<f32> = PatchMatch { row: 2, col: 2, distance: 0.5 };
+        let p1: PatchMatch<f32> = PatchMatch {
+            row: 0,
+            col: 0,
+            distance: 1.0,
+        };
+        let p2: PatchMatch<f32> = PatchMatch {
+            row: 1,
+            col: 1,
+            distance: 2.0,
+        };
+        let p3: PatchMatch<f32> = PatchMatch {
+            row: 2,
+            col: 2,
+            distance: 0.5,
+        };
 
         // Ord comparison: smaller distance should be Less
         assert!(p3 < p1, "0.5 should be less than 1.0");
@@ -238,10 +286,26 @@ mod tests {
     fn test_patch_match_heap_behavior() {
         // BinaryHeap is a max-heap, so largest distance pops first
         let mut heap: BinaryHeap<PatchMatch<f32>> = BinaryHeap::new();
-        heap.push(PatchMatch { row: 0, col: 0, distance: 1.0 });
-        heap.push(PatchMatch { row: 1, col: 1, distance: 3.0 });
-        heap.push(PatchMatch { row: 2, col: 2, distance: 2.0 });
-        heap.push(PatchMatch { row: 3, col: 3, distance: 0.5 });
+        heap.push(PatchMatch {
+            row: 0,
+            col: 0,
+            distance: 1.0,
+        });
+        heap.push(PatchMatch {
+            row: 1,
+            col: 1,
+            distance: 3.0,
+        });
+        heap.push(PatchMatch {
+            row: 2,
+            col: 2,
+            distance: 2.0,
+        });
+        heap.push(PatchMatch {
+            row: 3,
+            col: 3,
+            distance: 0.5,
+        });
 
         // Pop order should be: 3.0, 2.0, 1.0, 0.5 (max-heap)
         let p1 = heap.pop().unwrap();
@@ -260,10 +324,22 @@ mod tests {
     #[test]
     fn test_patch_match_equal_distance() {
         // When distances are equal, Ord should return Equal
-        let p1: PatchMatch<f32> = PatchMatch { row: 0, col: 0, distance: 1.0 };
-        let p2: PatchMatch<f32> = PatchMatch { row: 5, col: 5, distance: 1.0 };
+        let p1: PatchMatch<f32> = PatchMatch {
+            row: 0,
+            col: 0,
+            distance: 1.0,
+        };
+        let p2: PatchMatch<f32> = PatchMatch {
+            row: 5,
+            col: 5,
+            distance: 1.0,
+        };
 
-        assert_eq!(p1.cmp(&p2), Ordering::Equal, "Equal distances should compare as Equal");
+        assert_eq!(
+            p1.cmp(&p2),
+            Ordering::Equal,
+            "Equal distances should compare as Equal"
+        );
         assert_eq!(p1.partial_cmp(&p2), Some(Ordering::Equal));
     }
 
@@ -271,9 +347,21 @@ mod tests {
     fn test_patch_match_heap_with_equal_distances() {
         // Verify heap handles equal distances without panic
         let mut heap: BinaryHeap<PatchMatch<f32>> = BinaryHeap::new();
-        heap.push(PatchMatch { row: 0, col: 0, distance: 1.0 });
-        heap.push(PatchMatch { row: 1, col: 1, distance: 1.0 });
-        heap.push(PatchMatch { row: 2, col: 2, distance: 1.0 });
+        heap.push(PatchMatch {
+            row: 0,
+            col: 0,
+            distance: 1.0,
+        });
+        heap.push(PatchMatch {
+            row: 1,
+            col: 1,
+            distance: 1.0,
+        });
+        heap.push(PatchMatch {
+            row: 2,
+            col: 2,
+            distance: 1.0,
+        });
 
         assert_eq!(heap.len(), 3);
 
@@ -309,9 +397,9 @@ mod tests {
         assert_eq!(sum_img[[0, 2]], 0.0);
         assert_eq!(sum_img[[1, 0]], 0.0);
         assert_eq!(sum_img[[1, 1]], 1.0);
-        assert_eq!(sum_img[[1, 2]], 3.0);  // 1 + 2
+        assert_eq!(sum_img[[1, 2]], 3.0); // 1 + 2
         assert_eq!(sum_img[[2, 0]], 0.0);
-        assert_eq!(sum_img[[2, 1]], 4.0);  // 1 + 3
+        assert_eq!(sum_img[[2, 1]], 4.0); // 1 + 3
         assert_eq!(sum_img[[2, 2]], 10.0); // 1 + 2 + 3 + 4
 
         // Squared sum integral image:
@@ -319,9 +407,9 @@ mod tests {
         // [0, 1, 5]     (1, 1+4=5)
         // [0, 10, 30]   (1+9=10, 1+4+9+16=30)
         assert_eq!(sq_sum_img[[1, 1]], 1.0);
-        assert_eq!(sq_sum_img[[1, 2]], 5.0);   // 1 + 4
-        assert_eq!(sq_sum_img[[2, 1]], 10.0);  // 1 + 9
-        assert_eq!(sq_sum_img[[2, 2]], 30.0);  // 1 + 4 + 9 + 16
+        assert_eq!(sq_sum_img[[1, 2]], 5.0); // 1 + 4
+        assert_eq!(sq_sum_img[[2, 1]], 10.0); // 1 + 9
+        assert_eq!(sq_sum_img[[2, 2]], 30.0); // 1 + 4 + 9 + 16
     }
 
     #[test]
@@ -361,9 +449,12 @@ mod tests {
             for c in 0..4 {
                 let expected = ((r + 1) * (c + 1)) as f32;
                 assert_eq!(
-                    sum_img[[r + 1, c + 1]], expected,
+                    sum_img[[r + 1, c + 1]],
+                    expected,
                     "Integral of ones at [{},{}] should be {}",
-                    r + 1, c + 1, expected
+                    r + 1,
+                    c + 1,
+                    expected
                 );
             }
         }
@@ -425,7 +516,8 @@ mod tests {
         assert!(
             (sum_img[[4, 4]] - expected_sum).abs() < 1.0,
             "Large value sum should be correct: got {}, expected {}",
-            sum_img[[4, 4]], expected_sum
+            sum_img[[4, 4]],
+            expected_sum
         );
 
         // Total squared sum should be 16 * (1e6)^2 = 1.6e13
@@ -434,7 +526,9 @@ mod tests {
         assert!(
             rel_err < 1e-5,
             "Large value squared sum should be correct: got {}, expected {}, rel_err={}",
-            sq_sum_img[[4, 4]], expected_sq_sum, rel_err
+            sq_sum_img[[4, 4]],
+            expected_sq_sum,
+            rel_err
         );
     }
 
@@ -450,11 +544,11 @@ mod tests {
             image.view(),
             &sum_img,
             &sq_sum_img,
-            (4, 4),       // ref_pos
-            (4, 4),       // patch_size
-            (8, 8),       // search_window
-            5,            // max_matches
-            1,            // step
+            (4, 4), // ref_pos
+            (4, 4), // patch_size
+            (8, 8), // search_window
+            5,      // max_matches
+            1,      // step
         );
 
         // All matches should have distance ≈ 0
@@ -477,17 +571,21 @@ mod tests {
             image.view(),
             &sum_img,
             &sq_sum_img,
-            (4, 4),       // ref_pos
-            (4, 4),       // patch_size
-            (8, 8),       // search_window
-            10,           // max_matches
-            1,            // step
+            (4, 4), // ref_pos
+            (4, 4), // patch_size
+            (8, 8), // search_window
+            10,     // max_matches
+            1,      // step
         );
 
         // Should contain self-match at (4, 4) with distance 0
         let self_match = matches.iter().find(|m| m.row == 4 && m.col == 4);
         assert!(self_match.is_some(), "Self-match should be in results");
-        assert_eq!(self_match.unwrap().distance, 0.0, "Self-match distance should be 0");
+        assert_eq!(
+            self_match.unwrap().distance,
+            0.0,
+            "Self-match distance should be 0"
+        );
 
         // Self-match should be first (smallest distance)
         assert_eq!(matches[0].row, 4);
@@ -535,11 +633,11 @@ mod tests {
             image.view(),
             &sum_img,
             &sq_sum_img,
-            (4, 2),       // ref_pos (in left region)
-            (4, 4),       // patch_size
-            (16, 16),     // large search window
-            5,            // max_matches
-            1,            // step
+            (4, 2),   // ref_pos (in left region)
+            (4, 4),   // patch_size
+            (16, 16), // large search window
+            5,        // max_matches
+            1,        // step
         );
 
         // All best matches should be in left region (columns 0-4 for 4-wide patches)
@@ -572,7 +670,8 @@ mod tests {
             assert!(
                 matches.len() <= max_matches,
                 "Should return at most {} matches, got {}",
-                max_matches, matches.len()
+                max_matches,
+                matches.len()
             );
         }
     }
@@ -584,7 +683,7 @@ mod tests {
         let (sum_img, sq_sum_img) = compute_integral_images(image.view());
 
         let ref_pos = (16, 16);
-        let search_window = (8, 8);  // ±4 from reference
+        let search_window = (8, 8); // ±4 from reference
 
         let matches = find_similar_patches(
             image.view(),
@@ -605,12 +704,14 @@ mod tests {
             assert!(
                 row_dist <= (search_window.0 / 2) as i32,
                 "Match row {} outside search window of ref {}",
-                m.row, ref_pos.0
+                m.row,
+                ref_pos.0
             );
             assert!(
                 col_dist <= (search_window.1 / 2) as i32,
                 "Match col {} outside search window of ref {}",
-                m.col, ref_pos.1
+                m.col,
+                ref_pos.1
             );
         }
     }
@@ -626,26 +727,32 @@ mod tests {
             image.view(),
             &sum_img,
             &sq_sum_img,
-            (0, 0),       // corner position
+            (0, 0), // corner position
             (4, 4),
             (8, 8),
             5,
             1,
         );
-        assert!(!matches.is_empty(), "Should find matches at top-left corner");
+        assert!(
+            !matches.is_empty(),
+            "Should find matches at top-left corner"
+        );
 
         // Bottom-right corner (need to leave room for patch)
         let matches = find_similar_patches(
             image.view(),
             &sum_img,
             &sq_sum_img,
-            (12, 12),     // 16-4=12, last valid position for 4x4 patch
+            (12, 12), // 16-4=12, last valid position for 4x4 patch
             (4, 4),
             (8, 8),
             5,
             1,
         );
-        assert!(!matches.is_empty(), "Should find matches at bottom-right corner");
+        assert!(
+            !matches.is_empty(),
+            "Should find matches at bottom-right corner"
+        );
     }
 
     #[test]
@@ -669,7 +776,9 @@ mod tests {
             assert!(
                 matches[i].distance >= matches[i - 1].distance,
                 "Results should be sorted: {} >= {} at index {}",
-                matches[i].distance, matches[i - 1].distance, i
+                matches[i].distance,
+                matches[i - 1].distance,
+                i
             );
         }
     }
@@ -687,8 +796,8 @@ mod tests {
             (8, 8),
             (4, 4),
             (16, 16),
-            50,  // Request many matches
-            1,   // step=1
+            50, // Request many matches
+            1,  // step=1
         );
 
         let matches_step2 = find_similar_patches(
@@ -699,7 +808,7 @@ mod tests {
             (4, 4),
             (16, 16),
             50,
-            2,   // step=2
+            2, // step=2
         );
 
         // With step=2, we search fewer positions, so typically get fewer or equal matches
@@ -707,7 +816,8 @@ mod tests {
         assert!(
             matches_step2.len() <= matches_step1.len(),
             "Step=2 should find same or fewer matches than step=1: {} vs {}",
-            matches_step2.len(), matches_step1.len()
+            matches_step2.len(),
+            matches_step1.len()
         );
     }
 
@@ -748,7 +858,7 @@ mod tests {
             &sum_img,
             &sq_sum_img,
             (0, 0),
-            (8, 8),       // patch_size equals image
+            (8, 8), // patch_size equals image
             (8, 8),
             5,
             1,
