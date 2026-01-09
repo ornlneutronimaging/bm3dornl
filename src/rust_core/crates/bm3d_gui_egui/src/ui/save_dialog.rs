@@ -136,7 +136,8 @@ impl SaveDialog {
                     SaveState::Idle => {
                         // Data type selection
                         ui.horizontal(|ui| {
-                            ui.label("Data:");
+                            ui.label("Data:")
+                                .on_hover_text("Select which data to save");
                             egui::ComboBox::from_id_salt("save_data_type")
                                 .selected_text(self.data_type.name())
                                 .show_ui(ui, |ui| {
@@ -144,18 +145,18 @@ impl SaveDialog {
                                         &mut self.data_type,
                                         SaveDataType::Original,
                                         "Original",
-                                    );
+                                    ).on_hover_text("Save the original input data");
                                     ui.add_enabled_ui(has_processed, |ui| {
                                         ui.selectable_value(
                                             &mut self.data_type,
                                             SaveDataType::Processed,
                                             "Processed",
-                                        );
+                                        ).on_hover_text("Save the BM3D-processed data");
                                         ui.selectable_value(
                                             &mut self.data_type,
                                             SaveDataType::Difference,
                                             "Difference (Original - Processed)",
-                                        );
+                                        ).on_hover_text("Save the difference between original and processed");
                                     });
                                 });
                         });
@@ -172,12 +173,15 @@ impl SaveDialog {
 
                         // Format selection
                         ui.horizontal(|ui| {
-                            ui.label("Format:");
+                            ui.label("Format:")
+                                .on_hover_text("Select output file format");
                             egui::ComboBox::from_id_salt("save_format")
                                 .selected_text(self.format.name())
                                 .show_ui(ui, |ui| {
-                                    ui.selectable_value(&mut self.format, SaveFormat::Tiff, "TIFF Stack");
-                                    ui.selectable_value(&mut self.format, SaveFormat::Hdf5, "HDF5");
+                                    ui.selectable_value(&mut self.format, SaveFormat::Tiff, "TIFF Stack")
+                                        .on_hover_text("Multi-page TIFF with 32-bit float values");
+                                    ui.selectable_value(&mut self.format, SaveFormat::Hdf5, "HDF5")
+                                        .on_hover_text("HDF5 file with single dataset");
                                 });
                         });
 
@@ -185,7 +189,8 @@ impl SaveDialog {
                         if self.format == SaveFormat::Hdf5 {
                             ui.add_space(5.0);
                             ui.horizontal(|ui| {
-                                ui.label("Dataset path:");
+                                ui.label("Dataset path:")
+                                    .on_hover_text("Path within HDF5 file where data will be stored (e.g., /data or /entry/data)");
                                 ui.text_edit_singleline(&mut self.hdf5_dataset_path);
                             });
                         }
@@ -200,7 +205,9 @@ impl SaveDialog {
 
                             ui.add_space(10.0);
 
-                            if ui.button("Save...").clicked() {
+                            if ui.button("Save...")
+                                .on_hover_text("Choose file location and save")
+                                .clicked() {
                                 // Open file dialog
                                 let filter_name = self.format.name();
                                 let filter_ext = self.format.extension();

@@ -115,7 +115,9 @@ impl SliceViewer {
         // Navigation controls
         ui.horizontal(|ui| {
             // Step backward button
-            if ui.button("◄").clicked() && self.current_slice > 0 {
+            if ui.button("◄")
+                .on_hover_text("Previous slice")
+                .clicked() && self.current_slice > 0 {
                 self.current_slice -= 1;
                 slice_changed = true;
             }
@@ -125,13 +127,15 @@ impl SliceViewer {
                 egui::Slider::new(&mut self.current_slice, 0..=num_slices.saturating_sub(1))
                     .text("")
                     .show_value(false),
-            );
+            ).on_hover_text("Navigate through slices along the selected axis");
             if slider_response.changed() {
                 slice_changed = true;
             }
 
             // Step forward button
-            if ui.button("►").clicked() && self.current_slice < num_slices - 1 {
+            if ui.button("►")
+                .on_hover_text("Next slice")
+                .clicked() && self.current_slice < num_slices - 1 {
                 self.current_slice += 1;
                 slice_changed = true;
             }
@@ -147,8 +151,11 @@ impl SliceViewer {
             ui.separator();
 
             // Zoom indicator and reset
-            ui.label(format!("Zoom: {}%", self.view_transform.zoom_percent()));
-            if ui.button("Reset View").clicked() {
+            ui.label(format!("Zoom: {}%", self.view_transform.zoom_percent()))
+                .on_hover_text("Current zoom level. Scroll to zoom, drag to pan");
+            if ui.button("Reset View")
+                .on_hover_text("Reset zoom and pan to default")
+                .clicked() {
                 self.reset_view();
             }
         });

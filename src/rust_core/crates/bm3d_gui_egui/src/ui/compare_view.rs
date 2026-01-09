@@ -79,7 +79,9 @@ impl CompareView {
 
         // Navigation controls (shared for all panels)
         ui.horizontal(|ui| {
-            if ui.button("◄").clicked() && self.current_slice > 0 {
+            if ui.button("◄")
+                .on_hover_text("Previous slice")
+                .clicked() && self.current_slice > 0 {
                 self.current_slice -= 1;
                 slice_changed = true;
             }
@@ -88,12 +90,14 @@ impl CompareView {
                 egui::Slider::new(&mut self.current_slice, 0..=num_slices.saturating_sub(1))
                     .text("")
                     .show_value(false),
-            );
+            ).on_hover_text("Navigate through slices along the selected axis");
             if slider_response.changed() {
                 slice_changed = true;
             }
 
-            if ui.button("►").clicked() && self.current_slice < num_slices - 1 {
+            if ui.button("►")
+                .on_hover_text("Next slice")
+                .clicked() && self.current_slice < num_slices - 1 {
                 self.current_slice += 1;
                 slice_changed = true;
             }

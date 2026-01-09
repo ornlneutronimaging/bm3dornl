@@ -107,6 +107,7 @@ impl Bm3dParameters {
         ui.horizontal(|ui| {
             if ui
                 .selectable_label(self.show_advanced, "⚙ Advanced")
+                .on_hover_text("Show advanced parameters for fine-tuning BM3D algorithm")
                 .clicked()
             {
                 self.show_advanced = !self.show_advanced;
@@ -186,7 +187,9 @@ impl Bm3dParameters {
                 });
 
                 // Reset to defaults button
-                if ui.button("Reset to Defaults").clicked() {
+                if ui.button("Reset to Defaults")
+                    .on_hover_text("Reset all advanced parameters to their default values")
+                    .clicked() {
                     self.patch_size = 8;
                     self.search_window = 24;
                     self.max_matches = 32;

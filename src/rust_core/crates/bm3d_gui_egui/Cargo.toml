@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 eframe = "0.29"
+egui_plot = "0.29"
 hdf5-metno = "0.11"
 rfd = "0.15"
 tiff = "0.9"

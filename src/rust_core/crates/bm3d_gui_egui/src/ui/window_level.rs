@@ -61,10 +61,12 @@ impl WindowLevel {
         let mut changed = false;
 
         ui.horizontal(|ui| {
-            ui.label("Window/Level:");
+            ui.label("Window/Level:")
+                .on_hover_text("Adjust display intensity range (contrast/brightness)");
 
             // Min slider
-            ui.label("Min:");
+            ui.label("Min:")
+                .on_hover_text("Minimum display value. Values below this appear black");
             let min_response = ui.add(
                 egui::DragValue::new(&mut self.min)
                     .speed(0.01 * (self.data_max - self.data_min).abs().max(1.0))
@@ -79,7 +81,8 @@ impl WindowLevel {
             ui.separator();
 
             // Max slider
-            ui.label("Max:");
+            ui.label("Max:")
+                .on_hover_text("Maximum display value. Values above this appear white");
             let max_response = ui.add(
                 egui::DragValue::new(&mut self.max)
                     .speed(0.01 * (self.data_max - self.data_min).abs().max(1.0))
@@ -95,7 +98,9 @@ impl WindowLevel {
 
             // Auto button
             let auto_text = if self.auto_mode { "Auto ✓" } else { "Auto" };
-            if ui.button(auto_text).clicked() {
+            if ui.button(auto_text)
+                .on_hover_text("Reset window/level to full data range")
+                .clicked() {
                 self.auto();
                 changed = true;
             }

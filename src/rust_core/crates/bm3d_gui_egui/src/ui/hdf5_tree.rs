@@ -70,7 +70,9 @@ impl Hdf5TreeBrowser {
                     let is_expanded = self.expanded.contains(path);
                     let icon = if is_expanded { "▼" } else { "▶" };
 
-                    if ui.small_button(icon).clicked() {
+                    if ui.small_button(icon)
+                        .on_hover_text(if is_expanded { "Collapse group" } else { "Expand group" })
+                        .clicked() {
                         if is_expanded {
                             self.expanded.remove(path);
                         } else {
@@ -97,7 +99,13 @@ impl Hdf5TreeBrowser {
                         format!("📄 {} [{:?}] ({}D)", name, shape, shape.len())
                     };
 
-                    let response = ui.selectable_label(is_selected, label);
+                    let tooltip = if is_3d {
+                        "Click to select this 3D dataset for loading"
+                    } else {
+                        "Only 3D datasets can be loaded"
+                    };
+                    let response = ui.selectable_label(is_selected, label)
+                        .on_hover_text(tooltip);
 
                     if response.clicked() && is_3d {
                         self.selected_path = Some(path.clone());

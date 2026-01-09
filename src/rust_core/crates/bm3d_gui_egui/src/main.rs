@@ -8,7 +8,8 @@ use processing::{ProcessingManager, ProcessingState};
 use std::path::PathBuf;
 use ui::{
     compute_difference, save_volume, AxisMappingWidget, Bm3dParameters, ColormapSelector,
-    CompareView, Hdf5TreeBrowser, SaveDataType, SaveDialog, SliceViewer, WindowLevel,
+    CompareView, CompareViewHistogram, Hdf5TreeBrowser, SaveDataType, SaveDialog,
+    SingleViewHistogram, SliceViewer, WindowLevel,
 };
 
 fn main() -> eframe::Result<()> {
@@ -56,6 +57,10 @@ struct App {
     colormap_selector: ColormapSelector,
     window_level: WindowLevel,
 
+    // Histogram overlays
+    single_histogram: SingleViewHistogram,
+    compare_histogram: CompareViewHistogram,
+
     // Processing
     bm3d_params: Bm3dParameters,
     processing_manager: ProcessingManager,
@@ -85,6 +90,8 @@ impl Default for App {
             compare_view: CompareView::default(),
             colormap_selector: ColormapSelector::default(),
             window_level: WindowLevel::default(),
+            single_histogram: SingleViewHistogram::new(),
+            compare_histogram: CompareViewHistogram::new(),
             bm3d_params: Bm3dParameters::default(),
             processing_manager: ProcessingManager::default(),
             view_mode: ViewMode::default(),
@@ -117,6 +124,8 @@ impl App {
         self.axis_mapping_widget = None;
         self.slice_viewer.reset();
         self.compare_view.reset();
+        self.single_histogram.reset();
+        self.compare_histogram.reset();
         self.window_level = WindowLevel::new();
         self.processing_manager.reset();
         self.view_mode = ViewMode::Original;
@@ -188,6 +197,8 @@ impl App {
         self.processed_volume = None;
         self.slice_viewer.reset();
         self.compare_view.reset();
+        self.single_histogram.reset();
+        self.compare_histogram.reset();
         self.view_mode = ViewMode::Original;
         self.display_mode = DisplayMode::Single;
     }
@@ -291,7 +302,9 @@ impl App {
             ProcessingState::Idle => {
                 let can_process = self.volume.is_some();
                 ui.add_enabled_ui(can_process, |ui| {
-                    if ui.button("▶ Process").clicked() {
+                    if ui.button("▶ Process")
+                        .on_hover_text("Run BM3D denoising with current parameters")
+                        .clicked() {
                         self.start_processing();
                     }
                 });
@@ -312,28 +325,36 @@ impl App {
                         .text(format!("Slice {} / {}", current_slice, total_slices)),
                 );
 
-                if ui.button("⏹ Cancel").clicked() {
+                if ui.button("⏹ Cancel")
+                    .on_hover_text("Stop processing")
+                    .clicked() {
                     self.processing_manager.cancel();
                 }
             }
             ProcessingState::Completed => {
                 ui.colored_label(egui::Color32::GREEN, "✓ Processing complete");
 
-                if ui.button("▶ Process Again").clicked() {
+                if ui.button("▶ Process Again")
+                    .on_hover_text("Re-run BM3D processing with current parameters")
+                    .clicked() {
                     self.start_processing();
                 }
             }
             ProcessingState::Cancelled => {
                 ui.colored_label(egui::Color32::YELLOW, "⚠ Processing cancelled");
 
-                if ui.button("▶ Process").clicked() {
+                if ui.button("▶ Process")
+                    .on_hover_text("Run BM3D denoising with current parameters")
+                    .clicked() {
                     self.start_processing();
                 }
             }
             ProcessingState::Error(msg) => {
                 ui.colored_label(egui::Color32::RED, format!("✗ Error: {}", msg));
 
-                if ui.button("▶ Retry").clicked() {
+                if ui.button("▶ Retry")
+                    .on_hover_text("Retry BM3D processing")
+                    .clicked() {
                     self.start_processing();
                 }
             }
@@ -349,9 +370,11 @@ impl App {
 
         // Display mode toggle (Single / Compare)
         ui.horizontal(|ui| {
-            ui.label("Display:");
+            ui.label("Display:")
+                .on_hover_text("Switch between single image and side-by-side comparison");
             if ui
                 .selectable_value(&mut self.display_mode, DisplayMode::Single, "Single")
+                .on_hover_text("View one image at a time")
                 .clicked()
             {
                 self.update_window_level_for_slice();
@@ -360,6 +383,7 @@ impl App {
             ui.add_enabled_ui(has_processed, |ui| {
                 if ui
                     .selectable_value(&mut self.display_mode, DisplayMode::Compare, "Compare")
+                    .on_hover_text("Show original, processed, and difference side by side")
                     .clicked()
                 {
                     self.update_window_level_for_slice();
@@ -370,9 +394,11 @@ impl App {
         // Single view: Original/Processed toggle
         if self.display_mode == DisplayMode::Single {
             ui.horizontal(|ui| {
-                ui.label("View:");
+                ui.label("View:")
+                    .on_hover_text("Select which volume to display");
                 if ui
                     .selectable_value(&mut self.view_mode, ViewMode::Original, "Original")
+                    .on_hover_text("View the original input data")
                     .clicked()
                 {
                     self.update_window_level_for_slice();
@@ -381,6 +407,7 @@ impl App {
                 ui.add_enabled_ui(has_processed, |ui| {
                     if ui
                         .selectable_value(&mut self.view_mode, ViewMode::Processed, "Processed")
+                        .on_hover_text("View the BM3D-processed data")
                         .clicked()
                     {
                         self.update_window_level_for_slice();
@@ -404,7 +431,9 @@ impl App {
 
         // Save button
         ui.heading("Export");
-        if ui.button("💾 Save...").clicked() {
+        if ui.button("💾 Save...")
+            .on_hover_text("Save processed data to file")
+            .clicked() {
             self.save_dialog.open();
         }
     }
@@ -451,7 +480,9 @@ impl eframe::App for App {
                 ui.heading("BM3D Volume Viewer");
                 ui.separator();
 
-                if ui.button("📂 Open File").clicked() {
+                if ui.button("📂 Open File")
+                    .on_hover_text("Load TIFF stack or HDF5 file")
+                    .clicked() {
                     self.open_file_dialog();
                 }
 
@@ -521,7 +552,9 @@ impl eframe::App for App {
                     ui.add_space(10.0);
                     if let Some(tree) = &self.hdf5_tree {
                         if let Some(selected) = tree.selected_path() {
-                            if ui.button(format!("Load: {}", selected)).clicked() {
+                            if ui.button(format!("Load: {}", selected))
+                                .on_hover_text("Load the selected dataset for viewing and processing")
+                                .clicked() {
                                 dataset_to_load = Some(selected.clone());
                             }
                         }
@@ -594,6 +627,14 @@ impl eframe::App for App {
 
                         if let Some(vol) = vol_ref {
                             let colormap = self.colormap_selector.current();
+                            let slice_index = self.slice_viewer.current_slice();
+
+                            // Get slice data for histogram
+                            let slice_data = vol.get_slice(slice_index);
+
+                            // Show histogram panel
+                            self.single_histogram.show(ui, slice_data.as_ref(), slice_index);
+
                             let slice_changed =
                                 self.slice_viewer.show(ui, vol, colormap, &self.window_level, self.keep_aspect_ratio);
 
@@ -606,6 +647,20 @@ impl eframe::App for App {
                         // Three-panel comparison view
                         if let (Some(orig), Some(proc)) = (&self.volume, &self.processed_volume) {
                             let colormap = self.colormap_selector.current();
+                            let slice_index = self.compare_view.current_slice();
+
+                            // Get slice data for histograms
+                            let orig_slice = orig.get_slice(slice_index);
+                            let proc_slice = proc.get_slice(slice_index);
+
+                            // Show histogram panel
+                            self.compare_histogram.show(
+                                ui,
+                                orig_slice.as_ref(),
+                                proc_slice.as_ref(),
+                                slice_index,
+                            );
+
                             let slice_changed =
                                 self.compare_view.show(ui, orig, proc, colormap, &self.window_level, self.keep_aspect_ratio);
 

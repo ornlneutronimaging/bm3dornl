@@ -32,10 +32,12 @@ impl AxisMappingWidget {
         let old_slice = self.mapping.slice_axis;
 
         ui.horizontal(|ui| {
-            ui.label("Axis Mapping:");
+            ui.label("Axis Mapping:")
+                .on_hover_text("Map data dimensions to display axes. Axes auto-swap when changed");
 
             // X axis dropdown
-            ui.label("X:");
+            ui.label("X:")
+                .on_hover_text("Dimension to display horizontally");
             let mut new_x = self.mapping.x_axis;
             let x_changed = Self::axis_dropdown_static(ui, "x_axis", &mut new_x, &labels, &shape);
             if x_changed && new_x != old_x {
@@ -46,7 +48,8 @@ impl AxisMappingWidget {
             ui.separator();
 
             // Y axis dropdown
-            ui.label("Y:");
+            ui.label("Y:")
+                .on_hover_text("Dimension to display vertically");
             let mut new_y = self.mapping.y_axis;
             let y_changed = Self::axis_dropdown_static(ui, "y_axis", &mut new_y, &labels, &shape);
             if y_changed && new_y != old_y {
@@ -57,7 +60,8 @@ impl AxisMappingWidget {
             ui.separator();
 
             // Slice axis dropdown
-            ui.label("Slice:");
+            ui.label("Slice:")
+                .on_hover_text("Dimension to slice through for viewing");
             let mut new_slice = self.mapping.slice_axis;
             let slice_changed =
                 Self::axis_dropdown_static(ui, "slice_axis", &mut new_slice, &labels, &shape);
@@ -68,7 +72,9 @@ impl AxisMappingWidget {
 
             ui.separator();
 
-            if ui.button("Reset to Standard").clicked() {
+            if ui.button("Reset to Standard")
+                .on_hover_text("Reset axis mapping to default (X=D2, Y=D1, Slice=D0)")
+                .clicked() {
                 self.mapping = AxisMapping::default();
                 changed = true;
             }

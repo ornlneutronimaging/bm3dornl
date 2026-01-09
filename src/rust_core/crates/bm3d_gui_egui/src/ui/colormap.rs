@@ -221,7 +221,8 @@ impl ColormapSelector {
         let mut changed = false;
 
         ui.horizontal(|ui| {
-            ui.label("Colormap:");
+            ui.label("Colormap:")
+                .on_hover_text("Color mapping for image display");
             egui::ComboBox::from_id_salt("colormap_selector")
                 .selected_text(self.current.name())
                 .show_ui(ui, |ui| {
