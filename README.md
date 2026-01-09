@@ -48,23 +48,21 @@ import numpy as np
 sinogram = np.load("sinogram.npy")
 
 # Standard BM3D denoising (generic white noise)
-denoised = bm3d_ring_artifact_removal(sinogram, mode="generic", sigma=0.1)
+denoised = bm3d_ring_artifact_removal(sinogram, mode="generic", sigma_random=0.1)
 
 # Streak artifact removal (recommended for ring artifacts)
-denoised = bm3d_ring_artifact_removal(sinogram, mode="streak", sigma=0.1)
+denoised = bm3d_ring_artifact_removal(sinogram, mode="streak", sigma_random=0.1)
 
-# With custom parameters
+# With custom parameters (all parameters are flat, no dict wrapping)
 denoised = bm3d_ring_artifact_removal(
     sinogram,
     mode="streak",
-    sigma=0.1,
-    block_matching_kwargs={
-        "patch_size": 8,        # Patch size (7 or 8 recommended)
-        "stride": 2,            # Step size for patch extraction
-        "cut_off_distance": (40, 40),  # Max search distance
-        "num_patches_per_group": 64,   # Patches per 3D group
-        "batch_size": 32,       # Batch size for stack processing
-    }
+    sigma_random=0.1,
+    patch_size=8,           # Patch size (7 or 8 recommended)
+    step_size=4,            # Step size for patch extraction
+    search_window=40,       # Max search distance
+    max_matches=64,         # Similar patches per 3D group
+    batch_size=32,          # Batch size for stack processing
 )
 ```
 

@@ -5,7 +5,8 @@ use eframe::egui;
 pub struct Bm3dParameters {
     // Tier 1 - Simple (always visible)
     pub mode: RingRemovalMode,
-    pub sigma: f32,
+    /// Random noise standard deviation (maps to Rust core's sigma_random).
+    pub sigma_random: f32,
 
     // Tier 2 - Advanced (behind toggle)
     pub patch_size: usize,
@@ -21,9 +22,12 @@ pub struct Bm3dParameters {
 
 impl Default for Bm3dParameters {
     fn default() -> Self {
+        // GUI defaults optimized for neutron sinogram data:
+        // - sigma_random: 0.005 (vs Rust default 0.1) - typical noise level for neutron imaging
+        // - max_matches: 32 (vs Rust default 16) - better quality for interactive use
         Self {
             mode: RingRemovalMode::Streak,
-            sigma: 0.005,
+            sigma_random: 0.005,
             patch_size: 8,
             search_window: 24,
             max_matches: 32,
@@ -41,7 +45,7 @@ impl Bm3dParameters {
     /// Convert to bm3d_core config.
     pub fn to_config(&self) -> Bm3dConfig<f32> {
         let mut config = Bm3dConfig::default();
-        config.sigma_random = self.sigma;
+        config.sigma_random = self.sigma_random;
         config.patch_size = self.patch_size;
         config.step_size = self.patch_size / 2; // Standard: half patch size
         config.search_window = self.search_window;
@@ -83,11 +87,13 @@ impl Bm3dParameters {
 
         ui.horizontal(|ui| {
             ui.label("Sigma:")
-                .on_hover_text("Noise level estimate. Higher values = stronger denoising.\nTypical range: 0.01 - 0.5");
+                .on_hover_text("Noise level estimate (sigma_random). Higher values = stronger denoising.\nTypical range: 0.001 - 0.5\nSupports scientific notation (e.g., 5e-3)");
 
+            // Use DragValue which accepts scientific notation input (e.g., 5e-3, 1.5E-4)
             let sigma_response = ui.add(
-                egui::Slider::new(&mut self.sigma, 0.001..=0.5)
-                    .logarithmic(true)
+                egui::DragValue::new(&mut self.sigma_random)
+                    .speed(0.0001)
+                    .range(0.0001..=0.5)
                     .max_decimals(4),
             );
             if sigma_response.changed() {

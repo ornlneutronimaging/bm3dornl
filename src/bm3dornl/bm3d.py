@@ -8,16 +8,6 @@ from scipy.ndimage import gaussian_filter1d
 from . import bm3d_rust
 from .bm3d_rust import estimate_streak_profile_rust
 
-# Default parameters - aligned with Rust implementation defaults
-default_block_matching_kwargs = {
-    "patch_size": 8,
-    "stride": 4,
-    "cut_off_distance": (24, 24),
-    "num_patches_per_group": 16,
-}
-# Legacy filter kwargs preserved just for signature compatibility if needed
-default_filter_kwargs = {}
-
 def estimate_streak_profile(sinogram, sigma_smooth=3.0, iterations=3):
     """
     Estimate the static vertical streak profile using an iterative robust approach.
@@ -45,9 +35,19 @@ def estimate_streak_profile(sinogram, sigma_smooth=3.0, iterations=3):
 def bm3d_ring_artifact_removal(
     sinogram: np.ndarray,
     mode: str = "generic",
-    sigma: float = 0.1,
-    block_matching_kwargs: dict = default_block_matching_kwargs,
-    filter_kwargs: dict = default_filter_kwargs,
+    sigma_random: float = 0.1,
+    patch_size: int = 8,
+    step_size: int = 4,
+    search_window: int = 24,
+    max_matches: int = 16,
+    batch_size: int = 32,
+    threshold: float = 2.7,
+    streak_sigma_smooth: float = 3.0,
+    streak_iterations: int = 2,
+    sigma_map_smoothing: float = 20.0,
+    streak_sigma_scale: float = 1.1,
+    psd_width: float = 0.6,
+    sigma_map: np.ndarray | None = None,
     multiscale: bool = False,
     num_scales: int | None = None,
     filter_strength: float = 1.0,
@@ -70,26 +70,32 @@ def bm3d_ring_artifact_removal(
         - "generic": Standard BM3D (assume white noise).
         - "streak": Additive Streak Removal (Residual Median) + Standard BM3D.
         By default "generic".
-    sigma : float, optional
-        Noise standard deviation, by default 0.1.
-    block_matching_kwargs : dict, optional
-        Parameters for block matching:
-        - patch_size (tuple[int, int] | int): Size of patches (default 8).
-        - stride (int): Step size for patch extraction (default 4).
-        - cut_off_distance (tuple[int, int]): Max distance for block matching (default (24, 24)).
-        - num_patches_per_group (int): Number of similar patches to group (default 16).
-        - batch_size (int): Chunk size for stack processing (default 32).
-        By default `default_block_matching_kwargs`.
-    filter_kwargs : dict, optional
-        Parameters for filtering:
-        - sigma_map (np.ndarray): Optional pre-computed sigma map (3D processing only).
-        - streak_sigma_scale (float): Scale factor for streak sigma estimation (default 1.1).
-        - sigma_smooth (float): Sigma for smoothing in streak estimation (default 3.0).
-        - streak_iterations (int): Iterations for streak estimation (default 2).
-        - sigma_map_smoothing (float): Sigma for sigma map profile smoothing (default 20.0).
-        - psd_width (float): PSD Gaussian width for streak mode (default 0.6).
-        - threshold (float): Hard thresholding coefficient (default 2.7).
-        By default `default_filter_kwargs`.
+    sigma_random : float, optional
+        Random noise standard deviation, by default 0.1.
+    patch_size : int, optional
+        Size of patches for block matching, by default 8.
+    step_size : int, optional
+        Step size (stride) for patch extraction, by default 4.
+    search_window : int, optional
+        Search window size for block matching, by default 24.
+    max_matches : int, optional
+        Maximum number of similar patches per group, by default 16.
+    batch_size : int, optional
+        Chunk size for 3D stack processing, by default 32.
+    threshold : float, optional
+        Hard thresholding coefficient, by default 2.7.
+    streak_sigma_smooth : float, optional
+        Sigma for smoothing in streak estimation, by default 3.0.
+    streak_iterations : int, optional
+        Number of iterations for streak estimation, by default 2.
+    sigma_map_smoothing : float, optional
+        Sigma for sigma map profile smoothing, by default 20.0.
+    streak_sigma_scale : float, optional
+        Scale factor for streak sigma estimation, by default 1.1.
+    psd_width : float, optional
+        PSD Gaussian width for streak mode, by default 0.6.
+    sigma_map : np.ndarray | None, optional
+        Optional pre-computed sigma map (3D processing only), by default None.
     multiscale : bool, optional
         **[EXPERIMENTAL]** If True, use multi-scale BM3D for handling wide streaks.
         Only supported with mode="streak". By default False.
@@ -133,31 +139,6 @@ def bm3d_ring_artifact_removal(
             stacklevel=2,
         )
 
-    # Unpack parameters
-    patch_size = block_matching_kwargs.get("patch_size", 8)
-    if isinstance(patch_size, tuple):
-        patch_size_dim = patch_size[0]
-    else:
-        patch_size_dim = patch_size
-
-    step_size = block_matching_kwargs.get("stride", 4)
-    cut_off = block_matching_kwargs.get("cut_off_distance", (24, 24))
-    if isinstance(cut_off, tuple):
-        search_window = cut_off[0]
-    else:
-        search_window = cut_off
-    num_patches = block_matching_kwargs.get("num_patches_per_group", 16)
-    batch_size = block_matching_kwargs.get("batch_size", 32)
-
-    # Filter parameters
-    scale_factor = filter_kwargs.get("streak_sigma_scale", 1.1)
-    sigma_smooth = filter_kwargs.get("sigma_smooth", 3.0)
-    streak_iterations = filter_kwargs.get("streak_iterations", 2)
-    sigma_map_smoothing = filter_kwargs.get("sigma_map_smoothing", 20.0)
-    psd_width = filter_kwargs.get("psd_width", 0.6)
-    threshold_hard = filter_kwargs.get("threshold", 2.7)
-    sigma_map_arg = filter_kwargs.get("sigma_map", None)
-
     # Check Dimension
     is_stack = sinogram.ndim == 3
 
@@ -173,28 +154,28 @@ def bm3d_ring_artifact_removal(
                 sinogram_f32,
                 num_scales=num_scales,
                 filter_strength=filter_strength,
-                threshold=threshold_hard,
+                threshold=threshold,
                 debin_iterations=debin_iterations,
-                patch_size=patch_size_dim,
+                patch_size=patch_size,
                 step_size=step_size,
                 search_window=search_window,
-                max_matches=num_patches,
+                max_matches=max_matches,
             )
         else:
             # Single-scale BM3D
             return bm3d_rust.bm3d_ring_artifact_removal_2d(
                 sinogram_f32,
                 mode,
-                sigma_random=float(sigma),
-                patch_size=patch_size_dim,
+                sigma_random=float(sigma_random),
+                patch_size=patch_size,
                 step_size=step_size,
                 search_window=search_window,
-                max_matches=num_patches,
-                threshold=threshold_hard,
-                streak_sigma_smooth=sigma_smooth,
+                max_matches=max_matches,
+                threshold=threshold,
+                streak_sigma_smooth=streak_sigma_smooth,
                 streak_iterations=streak_iterations,
                 sigma_map_smoothing=sigma_map_smoothing,
-                streak_sigma_scale=scale_factor,
+                streak_sigma_scale=streak_sigma_scale,
                 psd_width=psd_width,
             )
 
@@ -212,12 +193,12 @@ def bm3d_ring_artifact_removal(
                 slice_f32,
                 num_scales=num_scales,
                 filter_strength=filter_strength,
-                threshold=threshold_hard,
+                threshold=threshold,
                 debin_iterations=debin_iterations,
-                patch_size=patch_size_dim,
+                patch_size=patch_size,
                 step_size=step_size,
                 search_window=search_window,
-                max_matches=num_patches,
+                max_matches=max_matches,
             )
         return output_result
 
@@ -231,19 +212,17 @@ def bm3d_ring_artifact_removal(
         profile_smooth = gaussian_filter1d(streak_profile_rough, sigma_map_smoothing)
         streak_signal = streak_profile_rough - profile_smooth
         sigma_streak_1d = np.abs(streak_signal).astype(np.float32)
-        return np.tile(sigma_streak_1d * scale_factor, (slice_img.shape[0], 1))
+        return np.tile(sigma_streak_1d * streak_sigma_scale, (slice_img.shape[0], 1))
 
     # Prepare PSD (Shared)
     sigma_psd = np.zeros((1, 1), dtype=np.float32)
-    if mode == "streak" and patch_size_dim > 0:
-        sigma_psd = np.zeros((patch_size_dim, patch_size_dim), dtype=np.float32)
-        y_coords = np.arange(patch_size_dim)
+    if mode == "streak" and patch_size > 0:
+        sigma_psd = np.zeros((patch_size, patch_size), dtype=np.float32)
+        y_coords = np.arange(patch_size)
         psd_profile = np.exp(-0.5 * (y_coords / psd_width)**2)
-        for x in range(patch_size_dim):
+        for x in range(patch_size):
             sigma_psd[:, x] = psd_profile
         sigma_psd = sigma_psd.astype(np.float32)
-
-    sigma_random = float(sigma)
 
     # Output allocation
     output_result = np.empty_like(sinogram)
@@ -251,8 +230,8 @@ def bm3d_ring_artifact_removal(
     n_slices = sinogram.shape[0]
     # Validate sigma_map if provided
     sigma_map_full = None
-    if sigma_map_arg is not None:
-        sigma_map_full = np.ascontiguousarray(sigma_map_arg, dtype=np.float32)
+    if sigma_map is not None:
+        sigma_map_full = np.ascontiguousarray(sigma_map, dtype=np.float32)
         if sigma_map_full.ndim != 3:
             raise ValueError("sigma_map must be 3D for stack input")
 
@@ -283,7 +262,7 @@ def bm3d_ring_artifact_removal(
         # 3. Streak Pre-Subtraction
         if mode == "streak":
             for k in range(z_chunk.shape[0]):
-                prof = estimate_streak_profile(z_chunk[k], sigma_smooth=sigma_smooth, iterations=streak_iterations)
+                prof = estimate_streak_profile(z_chunk[k], sigma_smooth=streak_sigma_smooth, iterations=streak_iterations)
                 corr = np.tile(prof, (z_chunk[k].shape[0], 1))
                 z_chunk[k] -= corr
 
@@ -291,14 +270,14 @@ def bm3d_ring_artifact_removal(
         yhat_ht = bm3d_rust.bm3d_hard_thresholding_stack(
             z_chunk, z_chunk, sigma_psd,
             chunk_map, sigma_random,
-            threshold_hard,
-            patch_size_dim, step_size, search_window, num_patches
+            threshold,
+            patch_size, step_size, search_window, max_matches
         )
 
         yhat_final_chunk = bm3d_rust.bm3d_wiener_filtering_stack(
             z_chunk, yhat_ht, sigma_psd,
             chunk_map, sigma_random,
-            patch_size_dim, step_size, search_window, num_patches
+            patch_size, step_size, search_window, max_matches
         )
 
         # 5. Denormalize and Store
