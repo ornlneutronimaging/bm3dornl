@@ -19,17 +19,17 @@ use bm3d_core::{run_bm3d_step, run_bm3d_step_stack, Bm3dMode};
 #[allow(clippy::too_many_arguments)]
 pub fn bm3d_hard_thresholding<'py>(
     py: Python<'py>,
-    input_noisy: PyReadonlyArray2<f32>,
-    input_pilot: PyReadonlyArray2<f32>,
-    sigma_psd: PyReadonlyArray2<f32>,
-    sigma_map: PyReadonlyArray2<f32>,
+    input_noisy: PyReadonlyArray2<'py, f32>,
+    input_pilot: PyReadonlyArray2<'py, f32>,
+    sigma_psd: PyReadonlyArray2<'py, f32>,
+    sigma_map: PyReadonlyArray2<'py, f32>,
     sigma_random: f32,
     threshold: f32,
     patch_size: usize,
     step_size: usize,
     search_window: usize,
     max_matches: usize,
-) -> PyResult<&'py PyArray2<f32>> {
+) -> PyResult<Bound<'py, PyArray2<f32>>> {
     let output = run_bm3d_step(
         input_noisy.as_array(),
         input_pilot.as_array(),
@@ -52,16 +52,16 @@ pub fn bm3d_hard_thresholding<'py>(
 #[allow(clippy::too_many_arguments)]
 pub fn bm3d_wiener_filtering<'py>(
     py: Python<'py>,
-    input_noisy: PyReadonlyArray2<f32>,
-    input_pilot: PyReadonlyArray2<f32>,
-    sigma_psd: PyReadonlyArray2<f32>,
-    sigma_map: PyReadonlyArray2<f32>,
+    input_noisy: PyReadonlyArray2<'py, f32>,
+    input_pilot: PyReadonlyArray2<'py, f32>,
+    sigma_psd: PyReadonlyArray2<'py, f32>,
+    sigma_map: PyReadonlyArray2<'py, f32>,
     sigma_random: f32,
     patch_size: usize,
     step_size: usize,
     search_window: usize,
     max_matches: usize,
-) -> PyResult<&'py PyArray2<f32>> {
+) -> PyResult<Bound<'py, PyArray2<f32>>> {
     let output = run_bm3d_step(
         input_noisy.as_array(),
         input_pilot.as_array(),
@@ -84,17 +84,17 @@ pub fn bm3d_wiener_filtering<'py>(
 #[allow(clippy::too_many_arguments)]
 pub fn bm3d_hard_thresholding_stack<'py>(
     py: Python<'py>,
-    input_noisy: PyReadonlyArray3<f32>,
-    input_pilot: PyReadonlyArray3<f32>,
-    sigma_psd: PyReadonlyArray2<f32>,
-    sigma_map: PyReadonlyArray3<f32>,
+    input_noisy: PyReadonlyArray3<'py, f32>,
+    input_pilot: PyReadonlyArray3<'py, f32>,
+    sigma_psd: PyReadonlyArray2<'py, f32>,
+    sigma_map: PyReadonlyArray3<'py, f32>,
     sigma_random: f32,
     threshold: f32,
     patch_size: usize,
     step_size: usize,
     search_window: usize,
     max_matches: usize,
-) -> PyResult<&'py PyArray3<f32>> {
+) -> PyResult<Bound<'py, PyArray3<f32>>> {
     let output = run_bm3d_step_stack(
         input_noisy.as_array(),
         input_pilot.as_array(),
@@ -117,16 +117,16 @@ pub fn bm3d_hard_thresholding_stack<'py>(
 #[allow(clippy::too_many_arguments)]
 pub fn bm3d_wiener_filtering_stack<'py>(
     py: Python<'py>,
-    input_noisy: PyReadonlyArray3<f32>,
-    input_pilot: PyReadonlyArray3<f32>,
-    sigma_psd: PyReadonlyArray2<f32>,
-    sigma_map: PyReadonlyArray3<f32>,
+    input_noisy: PyReadonlyArray3<'py, f32>,
+    input_pilot: PyReadonlyArray3<'py, f32>,
+    sigma_psd: PyReadonlyArray2<'py, f32>,
+    sigma_map: PyReadonlyArray3<'py, f32>,
     sigma_random: f32,
     patch_size: usize,
     step_size: usize,
     search_window: usize,
     max_matches: usize,
-) -> PyResult<&'py PyArray3<f32>> {
+) -> PyResult<Bound<'py, PyArray3<f32>>> {
     let output = run_bm3d_step_stack(
         input_noisy.as_array(),
         input_pilot.as_array(),
@@ -147,7 +147,7 @@ pub fn bm3d_wiener_filtering_stack<'py>(
 /// Test function for block matching (used for debugging/validation).
 #[pyfunction]
 pub fn test_block_matching_rust(
-    input: PyReadonlyArray2<f32>,
+    input: PyReadonlyArray2<'_, f32>,
     ref_r: usize,
     ref_c: usize,
     patch_size: usize,
@@ -168,15 +168,15 @@ pub fn test_block_matching_rust(
 /// Estimate the static vertical streak profile using an iterative robust approach.
 #[pyfunction]
 #[pyo3(name = "estimate_streak_profile_rust")]
-pub fn estimate_streak_profile_py(
-    py: Python<'_>,
-    sinogram: PyReadonlyArray2<f32>,
+pub fn estimate_streak_profile_py<'py>(
+    py: Python<'py>,
+    sinogram: PyReadonlyArray2<'py, f32>,
     sigma_smooth: f32,
     iterations: usize,
-) -> PyResult<Py<PyArray1<f32>>> {
+) -> PyResult<Bound<'py, PyArray1<f32>>> {
     let sinogram_view = sinogram.as_array();
     let result = bm3d_core::estimate_streak_profile_impl(sinogram_view, sigma_smooth, iterations);
-    Ok(PyArray1::from_owned_array(py, result).into())
+    Ok(result.to_pyarray(py))
 }
 
 // ============================================================================
@@ -188,17 +188,17 @@ pub fn estimate_streak_profile_py(
 #[allow(clippy::too_many_arguments)]
 pub fn bm3d_hard_thresholding_f64<'py>(
     py: Python<'py>,
-    input_noisy: PyReadonlyArray2<f64>,
-    input_pilot: PyReadonlyArray2<f64>,
-    sigma_psd: PyReadonlyArray2<f64>,
-    sigma_map: PyReadonlyArray2<f64>,
+    input_noisy: PyReadonlyArray2<'py, f64>,
+    input_pilot: PyReadonlyArray2<'py, f64>,
+    sigma_psd: PyReadonlyArray2<'py, f64>,
+    sigma_map: PyReadonlyArray2<'py, f64>,
     sigma_random: f64,
     threshold: f64,
     patch_size: usize,
     step_size: usize,
     search_window: usize,
     max_matches: usize,
-) -> PyResult<&'py PyArray2<f64>> {
+) -> PyResult<Bound<'py, PyArray2<f64>>> {
     let output = run_bm3d_step(
         input_noisy.as_array(),
         input_pilot.as_array(),
@@ -221,16 +221,16 @@ pub fn bm3d_hard_thresholding_f64<'py>(
 #[allow(clippy::too_many_arguments)]
 pub fn bm3d_wiener_filtering_f64<'py>(
     py: Python<'py>,
-    input_noisy: PyReadonlyArray2<f64>,
-    input_pilot: PyReadonlyArray2<f64>,
-    sigma_psd: PyReadonlyArray2<f64>,
-    sigma_map: PyReadonlyArray2<f64>,
+    input_noisy: PyReadonlyArray2<'py, f64>,
+    input_pilot: PyReadonlyArray2<'py, f64>,
+    sigma_psd: PyReadonlyArray2<'py, f64>,
+    sigma_map: PyReadonlyArray2<'py, f64>,
     sigma_random: f64,
     patch_size: usize,
     step_size: usize,
     search_window: usize,
     max_matches: usize,
-) -> PyResult<&'py PyArray2<f64>> {
+) -> PyResult<Bound<'py, PyArray2<f64>>> {
     let output = run_bm3d_step(
         input_noisy.as_array(),
         input_pilot.as_array(),
@@ -253,17 +253,17 @@ pub fn bm3d_wiener_filtering_f64<'py>(
 #[allow(clippy::too_many_arguments)]
 pub fn bm3d_hard_thresholding_stack_f64<'py>(
     py: Python<'py>,
-    input_noisy: PyReadonlyArray3<f64>,
-    input_pilot: PyReadonlyArray3<f64>,
-    sigma_psd: PyReadonlyArray2<f64>,
-    sigma_map: PyReadonlyArray3<f64>,
+    input_noisy: PyReadonlyArray3<'py, f64>,
+    input_pilot: PyReadonlyArray3<'py, f64>,
+    sigma_psd: PyReadonlyArray2<'py, f64>,
+    sigma_map: PyReadonlyArray3<'py, f64>,
     sigma_random: f64,
     threshold: f64,
     patch_size: usize,
     step_size: usize,
     search_window: usize,
     max_matches: usize,
-) -> PyResult<&'py PyArray3<f64>> {
+) -> PyResult<Bound<'py, PyArray3<f64>>> {
     let output = run_bm3d_step_stack(
         input_noisy.as_array(),
         input_pilot.as_array(),
@@ -286,16 +286,16 @@ pub fn bm3d_hard_thresholding_stack_f64<'py>(
 #[allow(clippy::too_many_arguments)]
 pub fn bm3d_wiener_filtering_stack_f64<'py>(
     py: Python<'py>,
-    input_noisy: PyReadonlyArray3<f64>,
-    input_pilot: PyReadonlyArray3<f64>,
-    sigma_psd: PyReadonlyArray2<f64>,
-    sigma_map: PyReadonlyArray3<f64>,
+    input_noisy: PyReadonlyArray3<'py, f64>,
+    input_pilot: PyReadonlyArray3<'py, f64>,
+    sigma_psd: PyReadonlyArray2<'py, f64>,
+    sigma_map: PyReadonlyArray3<'py, f64>,
     sigma_random: f64,
     patch_size: usize,
     step_size: usize,
     search_window: usize,
     max_matches: usize,
-) -> PyResult<&'py PyArray3<f64>> {
+) -> PyResult<Bound<'py, PyArray3<f64>>> {
     let output = run_bm3d_step_stack(
         input_noisy.as_array(),
         input_pilot.as_array(),
@@ -316,7 +316,7 @@ pub fn bm3d_wiener_filtering_stack_f64<'py>(
 /// Test function for block matching (f64 precision).
 #[pyfunction]
 pub fn test_block_matching_rust_f64(
-    input: PyReadonlyArray2<f64>,
+    input: PyReadonlyArray2<'_, f64>,
     ref_r: usize,
     ref_c: usize,
     patch_size: usize,
@@ -337,15 +337,15 @@ pub fn test_block_matching_rust_f64(
 /// Estimate the static vertical streak profile (f64 precision).
 #[pyfunction]
 #[pyo3(name = "estimate_streak_profile_rust_f64")]
-pub fn estimate_streak_profile_py_f64(
-    py: Python<'_>,
-    sinogram: PyReadonlyArray2<f64>,
+pub fn estimate_streak_profile_py_f64<'py>(
+    py: Python<'py>,
+    sinogram: PyReadonlyArray2<'py, f64>,
     sigma_smooth: f64,
     iterations: usize,
-) -> PyResult<Py<PyArray1<f64>>> {
+) -> PyResult<Bound<'py, PyArray1<f64>>> {
     let sinogram_view = sinogram.as_array();
     let result = bm3d_core::estimate_streak_profile_impl(sinogram_view, sigma_smooth, iterations);
-    Ok(PyArray1::from_owned_array(py, result).into())
+    Ok(result.to_pyarray(py))
 }
 
 // ============================================================================
@@ -413,7 +413,7 @@ pub fn estimate_streak_profile_py_f64(
 #[allow(clippy::too_many_arguments)]
 pub fn bm3d_ring_artifact_removal_2d<'py>(
     py: Python<'py>,
-    sinogram: PyReadonlyArray2<f32>,
+    sinogram: PyReadonlyArray2<'py, f32>,
     mode: &str,
     sigma_random: Option<f32>,
     patch_size: Option<usize>,
@@ -426,7 +426,7 @@ pub fn bm3d_ring_artifact_removal_2d<'py>(
     sigma_map_smoothing: Option<f32>,
     streak_sigma_scale: Option<f32>,
     psd_width: Option<f32>,
-) -> PyResult<&'py PyArray2<f32>> {
+) -> PyResult<Bound<'py, PyArray2<f32>>> {
     // Parse mode
     let ring_mode = match mode.to_lowercase().as_str() {
         "generic" => RingRemovalMode::Generic,
@@ -505,7 +505,7 @@ pub fn bm3d_ring_artifact_removal_2d<'py>(
 #[allow(clippy::too_many_arguments)]
 pub fn bm3d_ring_artifact_removal_2d_f64<'py>(
     py: Python<'py>,
-    sinogram: PyReadonlyArray2<f64>,
+    sinogram: PyReadonlyArray2<'py, f64>,
     mode: &str,
     sigma_random: Option<f64>,
     patch_size: Option<usize>,
@@ -518,7 +518,7 @@ pub fn bm3d_ring_artifact_removal_2d_f64<'py>(
     sigma_map_smoothing: Option<f64>,
     streak_sigma_scale: Option<f64>,
     psd_width: Option<f64>,
-) -> PyResult<&'py PyArray2<f64>> {
+) -> PyResult<Bound<'py, PyArray2<f64>>> {
     // Parse mode
     let ring_mode = match mode.to_lowercase().as_str() {
         "generic" => RingRemovalMode::Generic,
@@ -624,7 +624,7 @@ pub fn bm3d_ring_artifact_removal_2d_f64<'py>(
 #[allow(clippy::too_many_arguments)]
 pub fn multiscale_bm3d_streak_removal_2d<'py>(
     py: Python<'py>,
-    sinogram: PyReadonlyArray2<f32>,
+    sinogram: PyReadonlyArray2<'py, f32>,
     num_scales: Option<usize>,
     filter_strength: Option<f32>,
     threshold: Option<f32>,
@@ -633,7 +633,7 @@ pub fn multiscale_bm3d_streak_removal_2d<'py>(
     step_size: Option<usize>,
     search_window: Option<usize>,
     max_matches: Option<usize>,
-) -> PyResult<&'py PyArray2<f32>> {
+) -> PyResult<Bound<'py, PyArray2<f32>>> {
     // Build config with defaults, using struct init syntax
     let default = MultiscaleConfig::<f32>::default();
     let mut config = MultiscaleConfig {
@@ -686,7 +686,7 @@ pub fn multiscale_bm3d_streak_removal_2d<'py>(
 #[allow(clippy::too_many_arguments)]
 pub fn multiscale_bm3d_streak_removal_2d_f64<'py>(
     py: Python<'py>,
-    sinogram: PyReadonlyArray2<f64>,
+    sinogram: PyReadonlyArray2<'py, f64>,
     num_scales: Option<usize>,
     filter_strength: Option<f64>,
     threshold: Option<f64>,
@@ -695,7 +695,7 @@ pub fn multiscale_bm3d_streak_removal_2d_f64<'py>(
     step_size: Option<usize>,
     search_window: Option<usize>,
     max_matches: Option<usize>,
-) -> PyResult<&'py PyArray2<f64>> {
+) -> PyResult<Bound<'py, PyArray2<f64>>> {
     // Build config with defaults, using struct init syntax
     let default = MultiscaleConfig::<f64>::default();
     let mut config = MultiscaleConfig {
@@ -732,7 +732,7 @@ pub fn multiscale_bm3d_streak_removal_2d_f64<'py>(
 
 /// BM3D Rust accelerator module
 #[pymodule]
-fn bm3d_rust(_py: Python, m: &PyModule) -> PyResult<()> {
+fn bm3d_rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // f32 (single precision) functions
     m.add_function(wrap_pyfunction!(bm3d_hard_thresholding, m)?)?;
     m.add_function(wrap_pyfunction!(bm3d_wiener_filtering, m)?)?;
