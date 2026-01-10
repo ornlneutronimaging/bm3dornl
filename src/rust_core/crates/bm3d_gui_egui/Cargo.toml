@@ -7,6 +7,7 @@ description = "GUI application for BM3D ring artifact removal"
 [[bin]]
 name = "bm3dornl-gui"
 path = "src/main.rs"
+test = false  # GUI binary requires HDF5 runtime; tested manually
 
 [dependencies]
 eframe = "0.29"
