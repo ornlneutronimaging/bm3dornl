@@ -24,8 +24,9 @@ pub enum ProcessingProgress {
 }
 
 /// Processing state for UI.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub enum ProcessingState {
+    #[default]
     Idle,
     Processing {
         current_slice: usize,
@@ -34,12 +35,6 @@ pub enum ProcessingState {
     Completed,
     Cancelled,
     Error(String),
-}
-
-impl Default for ProcessingState {
-    fn default() -> Self {
-        Self::Idle
-    }
 }
 
 /// Manager for background BM3D processing.

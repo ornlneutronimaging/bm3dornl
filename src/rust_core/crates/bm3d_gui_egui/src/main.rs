@@ -1,3 +1,9 @@
+// Allow dead code and unused imports during GUI development
+#![allow(dead_code)]
+#![allow(unused_imports)]
+#![allow(unused_variables)]
+#![allow(clippy::too_many_arguments)]
+
 mod data;
 mod processing;
 mod ui;

@@ -46,18 +46,18 @@ impl SaveFormat {
 }
 
 /// Save progress state
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub enum SaveState {
+    #[default]
     Idle,
-    Saving { progress: f32, message: String },
-    Completed { path: PathBuf },
+    Saving {
+        progress: f32,
+        message: String,
+    },
+    Completed {
+        path: PathBuf,
+    },
     Error(String),
-}
-
-impl Default for SaveState {
-    fn default() -> Self {
-        SaveState::Idle
-    }
 }
 
 /// Save dialog state and UI

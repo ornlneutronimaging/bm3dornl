@@ -623,9 +623,8 @@ impl SliceViewer {
             let num_steps = 256;
             let step_width = rect.width() / num_steps as f32;
 
-            for i in 0..num_steps {
-                let [r, g, b] = lut[i];
-                let color = egui::Color32::from_rgb(r, g, b);
+            for (i, [r, g, b]) in lut.iter().enumerate().take(num_steps) {
+                let color = egui::Color32::from_rgb(*r, *g, *b);
 
                 let x_start = rect.left() + i as f32 * step_width;
                 let step_rect = egui::Rect::from_min_size(

@@ -16,6 +16,7 @@ use bm3d_core::{run_bm3d_step, run_bm3d_step_stack, Bm3dMode};
 
 /// Hard thresholding step of BM3D for a single 2D image.
 #[pyfunction]
+#[allow(clippy::too_many_arguments)]
 pub fn bm3d_hard_thresholding<'py>(
     py: Python<'py>,
     input_noisy: PyReadonlyArray2<f32>,
@@ -42,12 +43,13 @@ pub fn bm3d_hard_thresholding<'py>(
         search_window,
         max_matches,
     )
-    .map_err(|e| pyo3::exceptions::PyValueError::new_err(e))?;
+    .map_err(pyo3::exceptions::PyValueError::new_err)?;
     Ok(output.to_pyarray(py))
 }
 
 /// Wiener filtering step of BM3D for a single 2D image.
 #[pyfunction]
+#[allow(clippy::too_many_arguments)]
 pub fn bm3d_wiener_filtering<'py>(
     py: Python<'py>,
     input_noisy: PyReadonlyArray2<f32>,
@@ -73,12 +75,13 @@ pub fn bm3d_wiener_filtering<'py>(
         search_window,
         max_matches,
     )
-    .map_err(|e| pyo3::exceptions::PyValueError::new_err(e))?;
+    .map_err(pyo3::exceptions::PyValueError::new_err)?;
     Ok(output.to_pyarray(py))
 }
 
 /// Hard thresholding step of BM3D for a 3D stack of images.
 #[pyfunction]
+#[allow(clippy::too_many_arguments)]
 pub fn bm3d_hard_thresholding_stack<'py>(
     py: Python<'py>,
     input_noisy: PyReadonlyArray3<f32>,
@@ -105,12 +108,13 @@ pub fn bm3d_hard_thresholding_stack<'py>(
         search_window,
         max_matches,
     )
-    .map_err(|e| pyo3::exceptions::PyValueError::new_err(e))?;
+    .map_err(pyo3::exceptions::PyValueError::new_err)?;
     Ok(output.to_pyarray(py))
 }
 
 /// Wiener filtering step of BM3D for a 3D stack of images.
 #[pyfunction]
+#[allow(clippy::too_many_arguments)]
 pub fn bm3d_wiener_filtering_stack<'py>(
     py: Python<'py>,
     input_noisy: PyReadonlyArray3<f32>,
@@ -136,7 +140,7 @@ pub fn bm3d_wiener_filtering_stack<'py>(
         search_window,
         max_matches,
     )
-    .map_err(|e| pyo3::exceptions::PyValueError::new_err(e))?;
+    .map_err(pyo3::exceptions::PyValueError::new_err)?;
     Ok(output.to_pyarray(py))
 }
 
@@ -181,6 +185,7 @@ pub fn estimate_streak_profile_py(
 
 /// Hard thresholding step of BM3D for a single 2D image (f64 precision).
 #[pyfunction]
+#[allow(clippy::too_many_arguments)]
 pub fn bm3d_hard_thresholding_f64<'py>(
     py: Python<'py>,
     input_noisy: PyReadonlyArray2<f64>,
@@ -207,12 +212,13 @@ pub fn bm3d_hard_thresholding_f64<'py>(
         search_window,
         max_matches,
     )
-    .map_err(|e| pyo3::exceptions::PyValueError::new_err(e))?;
+    .map_err(pyo3::exceptions::PyValueError::new_err)?;
     Ok(output.to_pyarray(py))
 }
 
 /// Wiener filtering step of BM3D for a single 2D image (f64 precision).
 #[pyfunction]
+#[allow(clippy::too_many_arguments)]
 pub fn bm3d_wiener_filtering_f64<'py>(
     py: Python<'py>,
     input_noisy: PyReadonlyArray2<f64>,
@@ -238,12 +244,13 @@ pub fn bm3d_wiener_filtering_f64<'py>(
         search_window,
         max_matches,
     )
-    .map_err(|e| pyo3::exceptions::PyValueError::new_err(e))?;
+    .map_err(pyo3::exceptions::PyValueError::new_err)?;
     Ok(output.to_pyarray(py))
 }
 
 /// Hard thresholding step of BM3D for a 3D stack of images (f64 precision).
 #[pyfunction]
+#[allow(clippy::too_many_arguments)]
 pub fn bm3d_hard_thresholding_stack_f64<'py>(
     py: Python<'py>,
     input_noisy: PyReadonlyArray3<f64>,
@@ -270,12 +277,13 @@ pub fn bm3d_hard_thresholding_stack_f64<'py>(
         search_window,
         max_matches,
     )
-    .map_err(|e| pyo3::exceptions::PyValueError::new_err(e))?;
+    .map_err(pyo3::exceptions::PyValueError::new_err)?;
     Ok(output.to_pyarray(py))
 }
 
 /// Wiener filtering step of BM3D for a 3D stack of images (f64 precision).
 #[pyfunction]
+#[allow(clippy::too_many_arguments)]
 pub fn bm3d_wiener_filtering_stack_f64<'py>(
     py: Python<'py>,
     input_noisy: PyReadonlyArray3<f64>,
@@ -301,7 +309,7 @@ pub fn bm3d_wiener_filtering_stack_f64<'py>(
         search_window,
         max_matches,
     )
-    .map_err(|e| pyo3::exceptions::PyValueError::new_err(e))?;
+    .map_err(pyo3::exceptions::PyValueError::new_err)?;
     Ok(output.to_pyarray(py))
 }
 
@@ -402,6 +410,7 @@ pub fn estimate_streak_profile_py_f64(
     streak_sigma_scale = None,
     psd_width = None
 ))]
+#[allow(clippy::too_many_arguments)]
 pub fn bm3d_ring_artifact_removal_2d<'py>(
     py: Python<'py>,
     sinogram: PyReadonlyArray2<f32>,
@@ -469,7 +478,7 @@ pub fn bm3d_ring_artifact_removal_2d<'py>(
 
     // Call Rust implementation
     let output = bm3d_ring_artifact_removal(sinogram.as_array(), ring_mode, &config)
-        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e))?;
+        .map_err(pyo3::exceptions::PyValueError::new_err)?;
 
     Ok(output.to_pyarray(py))
 }
@@ -493,6 +502,7 @@ pub fn bm3d_ring_artifact_removal_2d<'py>(
     streak_sigma_scale = None,
     psd_width = None
 ))]
+#[allow(clippy::too_many_arguments)]
 pub fn bm3d_ring_artifact_removal_2d_f64<'py>(
     py: Python<'py>,
     sinogram: PyReadonlyArray2<f64>,
@@ -560,7 +570,7 @@ pub fn bm3d_ring_artifact_removal_2d_f64<'py>(
 
     // Call Rust implementation
     let output = bm3d_ring_artifact_removal(sinogram.as_array(), ring_mode, &config)
-        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e))?;
+        .map_err(pyo3::exceptions::PyValueError::new_err)?;
 
     Ok(output.to_pyarray(py))
 }
@@ -611,6 +621,7 @@ pub fn bm3d_ring_artifact_removal_2d_f64<'py>(
     search_window = None,
     max_matches = None
 ))]
+#[allow(clippy::too_many_arguments)]
 pub fn multiscale_bm3d_streak_removal_2d<'py>(
     py: Python<'py>,
     sinogram: PyReadonlyArray2<f32>,
@@ -623,20 +634,19 @@ pub fn multiscale_bm3d_streak_removal_2d<'py>(
     search_window: Option<usize>,
     max_matches: Option<usize>,
 ) -> PyResult<&'py PyArray2<f32>> {
-    // Build config with defaults
-    let mut config: MultiscaleConfig<f32> = MultiscaleConfig::default();
+    // Build config with defaults, using struct init syntax
+    let default = MultiscaleConfig::<f32>::default();
+    let mut config = MultiscaleConfig {
+        num_scales,
+        filter_strength: filter_strength.unwrap_or(default.filter_strength),
+        threshold: threshold.unwrap_or(default.threshold),
+        debin_iterations: debin_iterations.unwrap_or(default.debin_iterations),
+        bm3d_config: default.bm3d_config,
+    };
 
-    config.num_scales = num_scales;
-    if let Some(v) = filter_strength {
-        config.filter_strength = v;
-    }
+    // Also set inner BM3D threshold if provided
     if let Some(v) = threshold {
-        config.threshold = v;
-        // Also set inner BM3D threshold for num_scales=0 case
         config.bm3d_config.threshold = v;
-    }
-    if let Some(v) = debin_iterations {
-        config.debin_iterations = v;
     }
     if let Some(v) = patch_size {
         config.bm3d_config.patch_size = v;
@@ -653,7 +663,7 @@ pub fn multiscale_bm3d_streak_removal_2d<'py>(
 
     // Call Rust implementation
     let output = multiscale_bm3d_streak_removal(sinogram.as_array(), &config)
-        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e))?;
+        .map_err(pyo3::exceptions::PyValueError::new_err)?;
 
     Ok(output.to_pyarray(py))
 }
@@ -673,6 +683,7 @@ pub fn multiscale_bm3d_streak_removal_2d<'py>(
     search_window = None,
     max_matches = None
 ))]
+#[allow(clippy::too_many_arguments)]
 pub fn multiscale_bm3d_streak_removal_2d_f64<'py>(
     py: Python<'py>,
     sinogram: PyReadonlyArray2<f64>,
@@ -685,20 +696,19 @@ pub fn multiscale_bm3d_streak_removal_2d_f64<'py>(
     search_window: Option<usize>,
     max_matches: Option<usize>,
 ) -> PyResult<&'py PyArray2<f64>> {
-    // Build config with defaults
-    let mut config: MultiscaleConfig<f64> = MultiscaleConfig::default();
+    // Build config with defaults, using struct init syntax
+    let default = MultiscaleConfig::<f64>::default();
+    let mut config = MultiscaleConfig {
+        num_scales,
+        filter_strength: filter_strength.unwrap_or(default.filter_strength),
+        threshold: threshold.unwrap_or(default.threshold),
+        debin_iterations: debin_iterations.unwrap_or(default.debin_iterations),
+        bm3d_config: default.bm3d_config,
+    };
 
-    config.num_scales = num_scales;
-    if let Some(v) = filter_strength {
-        config.filter_strength = v;
-    }
+    // Also set inner BM3D threshold if provided
     if let Some(v) = threshold {
-        config.threshold = v;
-        // Also set inner BM3D threshold for num_scales=0 case
         config.bm3d_config.threshold = v;
-    }
-    if let Some(v) = debin_iterations {
-        config.debin_iterations = v;
     }
     if let Some(v) = patch_size {
         config.bm3d_config.patch_size = v;
@@ -715,7 +725,7 @@ pub fn multiscale_bm3d_streak_removal_2d_f64<'py>(
 
     // Call Rust implementation
     let output = multiscale_bm3d_streak_removal(sinogram.as_array(), &config)
-        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e))?;
+        .map_err(pyo3::exceptions::PyValueError::new_err)?;
 
     Ok(output.to_pyarray(py))
 }

@@ -44,13 +44,15 @@ impl Bm3dParameters {
 
     /// Convert to bm3d_core config.
     pub fn to_config(&self) -> Bm3dConfig<f32> {
-        let mut config = Bm3dConfig::default();
-        config.sigma_random = self.sigma_random;
-        config.patch_size = self.patch_size;
-        config.step_size = self.patch_size / 2; // Standard: half patch size
-        config.search_window = self.search_window;
-        config.max_matches = self.max_matches;
-        config
+        let default = Bm3dConfig::<f32>::default();
+        Bm3dConfig {
+            sigma_random: self.sigma_random,
+            patch_size: self.patch_size,
+            step_size: self.patch_size / 2, // Standard: half patch size
+            search_window: self.search_window,
+            max_matches: self.max_matches,
+            ..default
+        }
     }
 
     /// Show parameter controls. Returns true if any parameter changed.

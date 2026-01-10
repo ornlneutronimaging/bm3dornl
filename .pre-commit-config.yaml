@@ -20,3 +20,10 @@ repos:
       exclude: "tests/cis_tests/.*"
     - id: ruff-format
       exclude: "tests/cis_tests/.*"
+- repo: https://github.com/doublify/pre-commit-rust
+  rev: v1.0
+  hooks:
+    - id: fmt
+      args: [--manifest-path, src/rust_core/Cargo.toml, --all, --, --check]
+    - id: clippy
+      args: [--manifest-path, src/rust_core/Cargo.toml, --workspace, --, -D, warnings]
