@@ -1,6 +1,6 @@
 [project]
 name = "bm3dornl"
-version = "0.5.0"
+version = "0.5.1"
 description = "BM3D for streak artifact removal in neutron imaging"
 requires-python = ">=3.12"
 dependencies = [
