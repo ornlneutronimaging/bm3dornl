@@ -65,6 +65,13 @@ jobs:
         uses: prefix-dev/setup-pixi@v0.9.3
         with:
           pixi-version: v0.62.2
+          run-install: false
+
+      - name: Install dependencies (skip local package)
+        run: pixi install --frozen --skip bm3dornl
+
+      - name: Install local package
+        run: pixi run pip install --no-deps -e .
 
       - name: Build and test
         run: |
