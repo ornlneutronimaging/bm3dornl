@@ -630,13 +630,14 @@ pub fn estimate_sigma_mad<F: Bm3dFloat>(image: ArrayView2<F>) -> F {
 ///
 /// # Example
 ///
-/// ```ignore
-/// use bm3d_core::multiscale::{multiscale_bm3d_streak_removal, MultiscaleConfig};
+/// ```
+/// use bm3d_core::{multiscale_bm3d_streak_removal, MultiscaleConfig};
 /// use ndarray::Array2;
 ///
-/// let sinogram = Array2::<f32>::zeros((256, 512));
+/// let sinogram = Array2::<f32>::zeros((64, 128));
 /// let config = MultiscaleConfig::default();
 /// let result = multiscale_bm3d_streak_removal(sinogram.view(), &config);
+/// assert!(result.is_ok());
 /// ```
 pub fn multiscale_bm3d_streak_removal<F: Bm3dFloat>(
     sinogram: ArrayView2<F>,

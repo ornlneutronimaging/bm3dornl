@@ -279,13 +279,14 @@ fn subtract_streak_profile<F: Bm3dFloat>(
 ///
 /// # Example
 ///
-/// ```ignore
-/// use bm3d_core::orchestration::{bm3d_ring_artifact_removal, RingRemovalMode, Bm3dConfig};
+/// ```
+/// use bm3d_core::{bm3d_ring_artifact_removal, RingRemovalMode, Bm3dConfig};
 /// use ndarray::Array2;
 ///
-/// let sinogram = Array2::<f32>::zeros((256, 512));
+/// let sinogram = Array2::<f32>::zeros((64, 64));
 /// let config = Bm3dConfig::default();
 /// let result = bm3d_ring_artifact_removal(sinogram.view(), RingRemovalMode::Generic, &config);
+/// assert!(result.is_ok());
 /// ```
 pub fn bm3d_ring_artifact_removal<F: Bm3dFloat>(
     sinogram: ArrayView2<F>,
