@@ -3,6 +3,8 @@ name = "bm3d_core"
 version.workspace = true
 edition.workspace = true
 description = "Pure Rust BM3D denoising algorithm core"
+license = "MIT"
+repository = "https://github.com/ornlneutronimaging/bm3dornl"
 
 [lib]
 name = "bm3d_core"

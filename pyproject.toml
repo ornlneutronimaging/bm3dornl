@@ -1,6 +1,6 @@
 [project]
 name = "bm3dornl"
-version = "0.5.2"
+version = "0.5.3"
 description = "BM3D for streak artifact removal in neutron imaging"
 requires-python = ">=3.12"
 dependencies = [
@@ -8,7 +8,8 @@ dependencies = [
   "scipy",
   "scikit-image",
 ]
-license = { text = "MIT" }
+license = "MIT"
+license-files = ["LICENSE"]
 keywords = ["BM3D", "image processing", "neutron imaging", "denoising", "tomography", "ring artifacts", "Rust"]
 readme = "README.md"
 

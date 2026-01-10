@@ -4,11 +4,11 @@ build-backend = "maturin"
 
 [project]
 name = "bm3dornl-gui"
-version = "0.5.2"
+version = "0.5.3"
 description = "GUI application for BM3D ring artifact removal in neutron imaging"
 readme = "README.md"
 requires-python = ">=3.10"
-license = { text = "MIT" }
+license = "MIT"
 keywords = ["BM3D", "image processing", "neutron imaging", "GUI", "ring artifacts"]
 classifiers = [
     "Development Status :: 4 - Beta",

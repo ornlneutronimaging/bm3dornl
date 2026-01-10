@@ -3,6 +3,8 @@ name = "bm3d_python"
 version.workspace = true
 edition.workspace = true
 description = "PyO3 Python bindings for BM3D denoising"
+license = "MIT"
+repository = "https://github.com/ornlneutronimaging/bm3dornl"
 
 [lib]
 name = "bm3d_rust"

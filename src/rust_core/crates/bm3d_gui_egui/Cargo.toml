@@ -3,6 +3,8 @@ name = "bm3d_gui_egui"
 version.workspace = true
 edition.workspace = true
 description = "GUI application for BM3D ring artifact removal"
+license = "MIT"
+repository = "https://github.com/ornlneutronimaging/bm3dornl"
 
 [[bin]]
 name = "bm3dornl-gui"
