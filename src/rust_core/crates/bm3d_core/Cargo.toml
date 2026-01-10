@@ -1,0 +1,24 @@
+[package]
+name = "bm3d_core"
+version.workspace = true
+edition.workspace = true
+description = "Pure Rust BM3D denoising algorithm core"
+
+[lib]
+name = "bm3d_core"
+crate-type = ["rlib"]
+
+[dependencies]
+ndarray = { workspace = true }
+num-traits = "0.2"
+rayon = { workspace = true }
+rustfft = { workspace = true }
+splines = "4.3"
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+rand = "0.8"
+
+[[bench]]
+name = "bm3d_benchmarks"
+harness = false

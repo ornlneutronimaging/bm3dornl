@@ -1,0 +1,34 @@
+[build-system]
+requires = ["maturin>=1.0,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "bm3dornl-gui"
+version = "0.4.2"
+description = "GUI application for BM3D ring artifact removal in neutron imaging"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+keywords = ["BM3D", "image processing", "neutron imaging", "GUI", "ring artifacts"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: X11 Applications",
+    "Environment :: MacOS X :: Cocoa",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS",
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering :: Image Processing",
+]
+
+[project.urls]
+homepage = "https://github.com/ornlneutronimaging/bm3dornl"
+repository = "https://github.com/ornlneutronimaging/bm3dornl"
+documentation = "https://bm3dornl.readthedocs.io/en/latest/"
+
+[tool.maturin]
+bindings = "bin"
+manifest-path = "Cargo.toml"
+strip = true

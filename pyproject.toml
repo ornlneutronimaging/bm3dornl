@@ -1,42 +1,38 @@
 [project]
 name = "bm3dornl"
-description = "BM3D repo"
-dynamic = ["version"]
-requires-python = ">=3.10"
+version = "0.4.1"
+description = "BM3D for streak artifact removal in neutron imaging"
+requires-python = ">=3.12"
 dependencies = [
-  # list all runtime dependencies here
+  "numpy",
+  "scipy",
+  "scikit-image",
 ]
 license = { text = "MIT" }
+keywords = ["BM3D", "image processing", "neutron imaging", "denoising", "tomography", "ring artifacts", "Rust"]
+readme = "README.md"
 
 [project.urls]
-homepage = "https://github.com/neutrons/python_project_template/"  # if no homepage, use repo url
+homepage = "https://github.com/ornlneutronimaging/bm3dornl"
+repository = "https://github.com/ornlneutronimaging/bm3dornl"
+documentation = "https://bm3dornl.readthedocs.io/en/latest/"
+issues = "https://github.com/ornlneutronimaging/bm3dornl/issues"
+
+[project.optional-dependencies]
+gui = ["bm3dornl-gui>=0.4.0"]
 
 [build-system]
-requires = [
-  "setuptools >= 40.6.0",
-  "wheel",
-  "toml",
-  "versioningit"
-]
-build-backend = "setuptools.build_meta"
+requires = ["maturin>=1.0,<2.0"]
+build-backend = "maturin"
+
+[tool.maturin]
+features = ["pyo3/extension-module"]
+module-name = "bm3dornl.bm3d_rust"
+manifest-path = "src/rust_core/crates/bm3d_python/Cargo.toml"
+python-source = "src"
 
 [tool.black]
 line-length = 119
-
-[tool.versioningit.vcs]
-method = "git"
-default-tag = "0.0.1"
-
-[tool.versioningit.next-version]
-method = "minor"
-
-[tool.versioningit.format]
-distance = "{next_version}.dev{distance}"
-dirty = "{version}+d{build_date:%Y%m%d}"
-distance-dirty = "{next_version}.dev{distance}+d{build_date:%Y%m%d%H%M}"
-
-[tool.versioningit.write]
-file = "src/bm3dornl/_version.py"
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -45,12 +41,6 @@ exclude = ["tests*", "scripts*", "docs*", "notebooks*"]
 [tool.setuptools.package-data]
 "*" = ["*.yml","*.yaml","*.ini"]
 
-[project.scripts]
-packagename-cli = "packagenamepy.packagename:main"
-
-[project.gui-scripts]
-packagenamepy = "packagenamepy.packagename:gui"
-
 [tool.pytest.ini_options]
 pythonpath = [
   ".", "src", "scripts"
@@ -58,9 +48,6 @@ pythonpath = [
 testpaths = ["tests"]
 python_files = ["test*.py"]
 norecursedirs = [".git", "tmp*", "_tmp*", "__pycache__", "*dataset*", "*data_set*"]
-markers = [
-    "cuda_required: test requires cuda to run."
-]
 
 [tool.pylint]
 max-line-length = 120
@@ -71,4 +58,36 @@ disable = ["too-many-locals",
            "duplicate-code"
 ]
 
-# Add additional 3rd party tool configuration here as needed
+[tool.pixi.workspace]
+channels = ["conda-forge"]
+platforms = ["osx-arm64", "linux-64"]
+
+[tool.pixi.pypi-dependencies]
+bm3dornl = { path = ".", editable = true }
+
+[tool.pixi.tasks]
+build = "maturin develop --release"
+test-rust = { cmd = "PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 cargo test --workspace", cwd = "src/rust_core" }
+test-python = "pytest"
+test = { depends-on = ["test-rust", "test-python"] }
+bench = "python benchmarks/measure_stack_speed.py"
+bench-rust = { cmd = "cargo bench -p bm3d_core", cwd = "src/rust_core" }
+clean = "cargo clean --manifest-path src/rust_core/Cargo.toml"
+gui = { cmd = "bash -c 'RUSTFLAGS=\"-C link-args=-Wl,-rpath,$HDF5_DIR/lib\" cargo run --release -p bm3d_gui_egui'", cwd = "src/rust_core" }
+gui-debug = { cmd = "bash -c 'RUSTFLAGS=\"-C link-args=-Wl,-rpath,$HDF5_DIR/lib\" cargo run -p bm3d_gui_egui'", cwd = "src/rust_core" }
+
+[tool.pixi.dependencies]
+python = "3.12.*"
+maturin = ">=1.11.2,<2"
+pytest = ">=9.0.2,<10"
+numpy = "1.26.*"
+pip = ">=25.3,<26"
+setuptools = ">=80.9.0,<81"
+h5py = ">=3.15.1,<4"
+matplotlib = ">=3.10.8,<4"
+jupyter = ">=1.1.1,<2"
+hdf5 = ">=1.14.0"
+pkg-config = "*"
+
+[tool.pixi.activation.env]
+HDF5_DIR = "$CONDA_PREFIX"
