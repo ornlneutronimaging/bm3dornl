@@ -2,6 +2,7 @@ import pytest
 import numpy as np
 from bm3dornl import bm3d_ring_artifact_removal
 
+
 @pytest.mark.parametrize("patch_size", [7, 8])
 @pytest.mark.parametrize("is_stack", [True, False])
 def test_rust_backend_execution(patch_size, is_stack):
@@ -30,6 +31,7 @@ def test_rust_backend_execution(patch_size, is_stack):
     # Check that output is not identical to input (denoising happened)
     # Using small epsilon, but random noise should be smoothed.
     assert not np.allclose(output, input_data, atol=1e-6)
+
 
 def test_rust_backend_chunking():
     """Verify chunking does not crash for stack larger than batch size."""

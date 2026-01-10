@@ -7,18 +7,14 @@ These tests verify that:
 3. Numerical correctness is maintained
 """
 
-import pytest
 import numpy as np
 from numpy.testing import assert_allclose
 
 from bm3dornl.bm3d_rust import (
     bm3d_hard_thresholding,
     bm3d_hard_thresholding_f64,
-    bm3d_wiener_filtering,
     bm3d_wiener_filtering_f64,
-    bm3d_hard_thresholding_stack,
     bm3d_hard_thresholding_stack_f64,
-    bm3d_wiener_filtering_stack,
     bm3d_wiener_filtering_stack_f64,
     estimate_streak_profile_rust,
     estimate_streak_profile_rust_f64,
@@ -82,9 +78,16 @@ class TestBm3dHardThresholdingF64:
         sigma_map = np.full((H, W), 0.1, dtype=np.float64)
 
         result = bm3d_hard_thresholding_f64(
-            input_noisy, input_pilot, sigma_psd, sigma_map,
-            sigma_random=0.1, threshold=2.7,
-            patch_size=8, step_size=4, search_window=16, max_matches=16
+            input_noisy,
+            input_pilot,
+            sigma_psd,
+            sigma_map,
+            sigma_random=0.1,
+            threshold=2.7,
+            patch_size=8,
+            step_size=4,
+            search_window=16,
+            max_matches=16,
         )
 
         assert result.dtype == np.float64
@@ -103,14 +106,28 @@ class TestBm3dHardThresholdingF64:
         sigma_map_f32 = np.full((H, W), 0.1, dtype=np.float32)
 
         result_f64 = bm3d_hard_thresholding_f64(
-            input_noisy_f64, input_noisy_f64, sigma_psd_f64, sigma_map_f64,
-            sigma_random=0.1, threshold=2.7,
-            patch_size=8, step_size=4, search_window=16, max_matches=16
+            input_noisy_f64,
+            input_noisy_f64,
+            sigma_psd_f64,
+            sigma_map_f64,
+            sigma_random=0.1,
+            threshold=2.7,
+            patch_size=8,
+            step_size=4,
+            search_window=16,
+            max_matches=16,
         )
         result_f32 = bm3d_hard_thresholding(
-            input_noisy_f32, input_noisy_f32, sigma_psd_f32, sigma_map_f32,
-            sigma_random=0.1, threshold=2.7,
-            patch_size=8, step_size=4, search_window=16, max_matches=16
+            input_noisy_f32,
+            input_noisy_f32,
+            sigma_psd_f32,
+            sigma_map_f32,
+            sigma_random=0.1,
+            threshold=2.7,
+            patch_size=8,
+            step_size=4,
+            search_window=16,
+            max_matches=16,
         )
 
         # Results should be similar (not identical due to precision)
@@ -130,9 +147,15 @@ class TestBm3dWienerFilteringF64:
         sigma_map = np.full((H, W), 0.1, dtype=np.float64)
 
         result = bm3d_wiener_filtering_f64(
-            input_noisy, input_pilot, sigma_psd, sigma_map,
+            input_noisy,
+            input_pilot,
+            sigma_psd,
+            sigma_map,
             sigma_random=0.1,
-            patch_size=8, step_size=4, search_window=16, max_matches=16
+            patch_size=8,
+            step_size=4,
+            search_window=16,
+            max_matches=16,
         )
 
         assert result.dtype == np.float64
@@ -153,9 +176,16 @@ class TestBm3dStackF64:
         sigma_map = np.full((N, H, W), 0.1, dtype=np.float64)
 
         result = bm3d_hard_thresholding_stack_f64(
-            input_noisy, input_pilot, sigma_psd, sigma_map,
-            sigma_random=0.1, threshold=2.7,
-            patch_size=8, step_size=4, search_window=16, max_matches=16
+            input_noisy,
+            input_pilot,
+            sigma_psd,
+            sigma_map,
+            sigma_random=0.1,
+            threshold=2.7,
+            patch_size=8,
+            step_size=4,
+            search_window=16,
+            max_matches=16,
         )
 
         assert result.dtype == np.float64
@@ -172,9 +202,15 @@ class TestBm3dStackF64:
         sigma_map = np.full((N, H, W), 0.1, dtype=np.float64)
 
         result = bm3d_wiener_filtering_stack_f64(
-            input_noisy, input_pilot, sigma_psd, sigma_map,
+            input_noisy,
+            input_pilot,
+            sigma_psd,
+            sigma_map,
             sigma_random=0.1,
-            patch_size=8, step_size=4, search_window=16, max_matches=16
+            patch_size=8,
+            step_size=4,
+            search_window=16,
+            max_matches=16,
         )
 
         assert result.dtype == np.float64

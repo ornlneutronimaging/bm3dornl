@@ -164,4 +164,3 @@ Parameter Reference
 | `max_matches` | `16` | Maximum similar patches per 3D group |
 | `batch_size` | `32` | Batch size for stack processing |
 | `streak_sigma_smooth` | `1.0` | Smoothing for streak mode (streak mode only) |
-

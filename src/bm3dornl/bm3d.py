@@ -8,6 +8,7 @@ from scipy.ndimage import gaussian_filter1d
 from . import bm3d_rust
 from .bm3d_rust import estimate_streak_profile_rust
 
+
 def estimate_streak_profile(sinogram, sigma_smooth=3.0, iterations=3):
     """
     Estimate the static vertical streak profile using an iterative robust approach.
@@ -31,6 +32,7 @@ def estimate_streak_profile(sinogram, sigma_smooth=3.0, iterations=3):
     # Ensure float32 for Rust compatibility
     sinogram_f32 = np.ascontiguousarray(sinogram, dtype=np.float32)
     return estimate_streak_profile_rust(sinogram_f32, sigma_smooth, iterations)
+
 
 def bm3d_ring_artifact_removal(
     sinogram: np.ndarray,
@@ -208,7 +210,9 @@ def bm3d_ring_artifact_removal(
 
     # --- Spatially Adaptive BM3D Setup Helpers ---
     def compute_slice_map(slice_img):
-        streak_profile_rough = estimate_streak_profile(slice_img, sigma_smooth=5.0, iterations=1)
+        streak_profile_rough = estimate_streak_profile(
+            slice_img, sigma_smooth=5.0, iterations=1
+        )
         profile_smooth = gaussian_filter1d(streak_profile_rough, sigma_map_smoothing)
         streak_signal = streak_profile_rough - profile_smooth
         sigma_streak_1d = np.abs(streak_signal).astype(np.float32)
@@ -219,7 +223,7 @@ def bm3d_ring_artifact_removal(
     if mode == "streak" and patch_size > 0:
         sigma_psd = np.zeros((patch_size, patch_size), dtype=np.float32)
         y_coords = np.arange(patch_size)
-        psd_profile = np.exp(-0.5 * (y_coords / psd_width)**2)
+        psd_profile = np.exp(-0.5 * (y_coords / psd_width) ** 2)
         for x in range(patch_size):
             sigma_psd[:, x] = psd_profile
         sigma_psd = sigma_psd.astype(np.float32)
@@ -262,22 +266,38 @@ def bm3d_ring_artifact_removal(
         # 3. Streak Pre-Subtraction
         if mode == "streak":
             for k in range(z_chunk.shape[0]):
-                prof = estimate_streak_profile(z_chunk[k], sigma_smooth=streak_sigma_smooth, iterations=streak_iterations)
+                prof = estimate_streak_profile(
+                    z_chunk[k],
+                    sigma_smooth=streak_sigma_smooth,
+                    iterations=streak_iterations,
+                )
                 corr = np.tile(prof, (z_chunk[k].shape[0], 1))
                 z_chunk[k] -= corr
 
         # 4. Run Rust Stack Processing
         yhat_ht = bm3d_rust.bm3d_hard_thresholding_stack(
-            z_chunk, z_chunk, sigma_psd,
-            chunk_map, sigma_random,
+            z_chunk,
+            z_chunk,
+            sigma_psd,
+            chunk_map,
+            sigma_random,
             threshold,
-            patch_size, step_size, search_window, max_matches
+            patch_size,
+            step_size,
+            search_window,
+            max_matches,
         )
 
         yhat_final_chunk = bm3d_rust.bm3d_wiener_filtering_stack(
-            z_chunk, yhat_ht, sigma_psd,
-            chunk_map, sigma_random,
-            patch_size, step_size, search_window, max_matches
+            z_chunk,
+            yhat_ht,
+            sigma_psd,
+            chunk_map,
+            sigma_random,
+            patch_size,
+            step_size,
+            search_window,
+            max_matches,
         )
 
         # 5. Denormalize and Store
