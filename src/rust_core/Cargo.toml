@@ -1,0 +1,18 @@
+[workspace]
+members = ["crates/bm3d_core", "crates/bm3d_python", "crates/bm3d_gui_egui"]
+resolver = "2"
+
+[workspace.package]
+version = "0.4.1"
+edition = "2021"
+
+[workspace.dependencies]
+ndarray = "0.15"
+rayon = "1.8"
+rustfft = "6.2"
+
+# Release profile with maximum optimizations
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1

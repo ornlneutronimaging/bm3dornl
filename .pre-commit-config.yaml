@@ -1,6 +1,6 @@
 repos:
 - repo: https://github.com/pre-commit/pre-commit-hooks
-  rev: v4.6.0
+  rev: v6.0.0
   hooks:
     - id: check-added-large-files
       args: [--maxkb=8192]
@@ -13,10 +13,17 @@ repos:
     - id: trailing-whitespace
       exclude: "tests/cis_tests/.*"
 - repo: https://github.com/astral-sh/ruff-pre-commit
-  rev: v0.4.10
+  rev: v0.14.10
   hooks:
     - id: ruff
       args: [--fix, --exit-non-zero-on-fix]
       exclude: "tests/cis_tests/.*"
     - id: ruff-format
       exclude: "tests/cis_tests/.*"
+- repo: https://github.com/doublify/pre-commit-rust
+  rev: v1.0
+  hooks:
+    - id: fmt
+      args: [--manifest-path, src/rust_core/Cargo.toml, --all, --, --check]
+    - id: clippy
+      args: [--manifest-path, src/rust_core/Cargo.toml, --workspace, --, -D, warnings]
