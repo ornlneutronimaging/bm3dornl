@@ -547,7 +547,7 @@ dependencies = [
 
 [[package]]
 name = "bm3d_core"
-version = "0.5.3"
+version = "0.6.0"
 dependencies = [
  "criterion",
  "ndarray",
@@ -560,7 +560,7 @@ dependencies = [
 
 [[package]]
 name = "bm3d_gui_egui"
-version = "0.5.3"
+version = "0.6.0"
 dependencies = [
  "bm3d_core",
  "eframe",
@@ -574,7 +574,7 @@ dependencies = [
 
 [[package]]
 name = "bm3d_python"
-version = "0.5.3"
+version = "0.6.0"
 dependencies = [
  "bm3d_core",
  "ndarray",
