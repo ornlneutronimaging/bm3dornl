@@ -9,18 +9,20 @@ Main API
    :undoc-members:
    :show-inheritance:
 
-Utility Functions
------------------
+Phantom Generation
+------------------
 
-.. automodule:: bm3dornl.utils
+Utilities for generating synthetic test data with realistic ring artifacts.
+
+.. automodule:: bm3dornl.phantom
    :members:
    :undoc-members:
    :show-inheritance:
 
-Phantom Generation
+Plotting Utilities
 ------------------
 
-.. automodule:: bm3dornl.phantom
+.. automodule:: bm3dornl.plot
    :members:
    :undoc-members:
    :show-inheritance:
