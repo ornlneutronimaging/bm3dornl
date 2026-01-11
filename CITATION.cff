@@ -1,0 +1,40 @@
+# This CITATION.cff file was generated for JOSS submission.
+# https://citation-file-format.github.io/
+
+cff-version: 1.2.0
+title: "BM3DORNL: High-Performance BM3D Denoising for Neutron Imaging"
+message: "If you use this software, please cite it as below."
+type: software
+version: 0.6.0
+license: MIT
+repository-code: "https://github.com/ornlneutronimaging/bm3dornl"
+url: "https://bm3dornl.readthedocs.io"
+abstract: >-
+  A high-performance BM3D denoising library for neutron imaging,
+  optimized for streak/ring artifact removal from sinograms.
+  Provides a Python API with a Rust backend for efficient,
+  parallel processing of tomography data.
+keywords:
+  - BM3D
+  - denoising
+  - neutron imaging
+  - tomography
+  - ring artifacts
+  - image processing
+  - Python
+  - Rust
+authors:
+  - family-names: Zhang
+    given-names: Chen
+    email: zhangc@ornl.gov
+    affiliation: "Oak Ridge National Laboratory"
+    orcid: "https://orcid.org/0000-0001-8374-4467"
+  - family-names: Ganyushin
+    given-names: Dmitry
+    email: ganyushindi@ornl.gov
+    affiliation: "Oak Ridge National Laboratory"
+  - family-names: Peterson
+    given-names: Pete
+    affiliation: "Oak Ridge National Laboratory"
+    orcid: "https://orcid.org/0000-0002-1353-0348"
+date-released: "2024-04-29"
