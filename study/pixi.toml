@@ -1,0 +1,24 @@
+[workspace]
+name = "bm3dornl-joss-study"
+version = "0.1.0"
+description = "Benchmark comparison study for bm3dornl JOSS paper"
+authors = ["bm3dornl contributors"]
+channels = ["conda-forge"]
+platforms = ["osx-arm64", "linux-64"]
+
+[dependencies]
+python = "3.12.*"
+numpy = "1.26.*"
+scipy = ">=1.11"
+scikit-image = ">=0.22"
+matplotlib = ">=3.8"
+pandas = ">=2.0"
+tomopy = ">=1.15"
+
+[pypi-dependencies]
+bm3dornl = { path = "..", editable = true }
+# bm3d-streak-removal tested separately in bm3d_streak_test/ subfolder
+# due to scipy version incompatibility (requires scipy <1.11)
+
+[tasks]
+benchmark = "python joss_comparison.py"
