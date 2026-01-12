@@ -27,14 +27,18 @@ authors:
   - family-names: Zhang
     given-names: Chen
     email: zhangc@ornl.gov
-    affiliation: "Oak Ridge National Laboratory"
+    affiliation: "Computing and Computational Sciences Directorate, Oak Ridge National Laboratory"
     orcid: "https://orcid.org/0000-0001-8374-4467"
+  - family-names: Bilheux
+    given-names: Jean-Christophe
+    affiliation: "Neutron Sciences Directorate, Oak Ridge National Laboratory"
+    orcid: "https://orcid.org/0000-0003-2172-6487"
   - family-names: Ganyushin
     given-names: Dmitry
     email: ganyushindi@ornl.gov
-    affiliation: "Oak Ridge National Laboratory"
+    affiliation: "Computing and Computational Sciences Directorate, Oak Ridge National Laboratory"
   - family-names: Peterson
     given-names: Pete
-    affiliation: "Oak Ridge National Laboratory"
+    affiliation: "Computing and Computational Sciences Directorate, Oak Ridge National Laboratory"
     orcid: "https://orcid.org/0000-0002-1353-0348"
 date-released: "2024-04-29"
