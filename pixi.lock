@@ -760,8 +760,8 @@ packages:
   timestamp: 1763589981639
 - pypi: ./
   name: bm3dornl
-  version: 0.6.0
-  sha256: be2e30aa9c09faeca659f6d435e855ea6dc208e50759cdf93fa5de336b2e8331
+  version: 0.6.1
+  sha256: c19292f1e8fd5cbbce640114b49749b653100695bafcf230ec405bb132117b7e
   requires_dist:
   - numpy
   - scipy
