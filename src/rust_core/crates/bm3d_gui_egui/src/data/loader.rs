@@ -1,12 +1,74 @@
 use hdf5_metno::File as H5File;
 use ndarray::Array3;
-use std::fs::File;
+use std::fs::{self, File};
 use std::io::BufReader;
 use std::path::Path;
 use tiff::decoder::{Decoder, DecodingResult};
 use tiff::ColorType;
 
 use super::Volume3D;
+
+/// Extract numeric chunks from a string for natural sorting.
+/// Returns a vector of (is_numeric, value) pairs where value is either
+/// the numeric value or the lowercase string chunk.
+fn natural_sort_key(s: &str) -> Vec<(bool, i64, String)> {
+    let mut result = Vec::new();
+    let mut current_chunk = String::new();
+    let mut is_numeric = false;
+
+    for c in s.chars() {
+        let c_is_digit = c.is_ascii_digit();
+        if current_chunk.is_empty() {
+            is_numeric = c_is_digit;
+            current_chunk.push(c);
+        } else if c_is_digit == is_numeric {
+            current_chunk.push(c);
+        } else {
+            // Transition between numeric and non-numeric
+            if is_numeric {
+                let num: i64 = current_chunk.parse().unwrap_or(0);
+                result.push((true, num, String::new()));
+            } else {
+                result.push((false, 0, current_chunk.to_lowercase()));
+            }
+            current_chunk = c.to_string();
+            is_numeric = c_is_digit;
+        }
+    }
+
+    // Don't forget the last chunk
+    if !current_chunk.is_empty() {
+        if is_numeric {
+            let num: i64 = current_chunk.parse().unwrap_or(0);
+            result.push((true, num, String::new()));
+        } else {
+            result.push((false, 0, current_chunk.to_lowercase()));
+        }
+    }
+
+    result
+}
+
+/// Compare two strings using natural sort order.
+/// Numbers are compared numerically, text is compared lexicographically.
+fn natural_compare(a: &str, b: &str) -> std::cmp::Ordering {
+    let key_a = natural_sort_key(a);
+    let key_b = natural_sort_key(b);
+
+    for (chunk_a, chunk_b) in key_a.iter().zip(key_b.iter()) {
+        let ord = match (chunk_a.0, chunk_b.0) {
+            (true, true) => chunk_a.1.cmp(&chunk_b.1),
+            (false, false) => chunk_a.2.cmp(&chunk_b.2),
+            (true, false) => std::cmp::Ordering::Less, // Numbers before text
+            (false, true) => std::cmp::Ordering::Greater,
+        };
+        if ord != std::cmp::Ordering::Equal {
+            return ord;
+        }
+    }
+
+    key_a.len().cmp(&key_b.len())
+}
 
 #[derive(Debug)]
 pub enum DataLoadError {
@@ -162,6 +224,135 @@ pub fn load_tiff_stack(path: &Path) -> Result<Volume3D, DataLoadError> {
     Ok(Volume3D::new(data))
 }
 
+/// Load a sequence of TIFF files from a folder as a 3D volume.
+/// Files are sorted using natural sort order (img_1, img_2, img_10, not img_1, img_10, img_2).
+/// Only .tif and .tiff files are included; other files are silently ignored.
+/// Shape will be [num_files, height, width].
+pub fn load_tiff_sequence(folder: &Path) -> Result<Volume3D, DataLoadError> {
+    // Read directory and collect TIFF files
+    let entries = fs::read_dir(folder).map_err(|e| DataLoadError::IoError(e.to_string()))?;
+
+    let mut tiff_paths: Vec<_> = entries
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| {
+            p.extension()
+                .and_then(|ext| ext.to_str())
+                .map(|ext| {
+                    let lower = ext.to_lowercase();
+                    lower == "tif" || lower == "tiff"
+                })
+                .unwrap_or(false)
+        })
+        .collect();
+
+    if tiff_paths.is_empty() {
+        return Err(DataLoadError::TiffError(
+            "No TIFF files found in folder".to_string(),
+        ));
+    }
+
+    // Sort using natural sort order
+    tiff_paths.sort_by(|a, b| {
+        let name_a = a.file_name().and_then(|n| n.to_str()).unwrap_or("");
+        let name_b = b.file_name().and_then(|n| n.to_str()).unwrap_or("");
+        natural_compare(name_a, name_b)
+    });
+
+    // Load each TIFF file
+    let mut images: Vec<Vec<f32>> = Vec::new();
+    let mut width = 0usize;
+    let mut height = 0usize;
+
+    for (idx, path) in tiff_paths.iter().enumerate() {
+        let file = File::open(path).map_err(|e| {
+            DataLoadError::IoError(format!("Failed to open {:?}: {}", path.file_name(), e))
+        })?;
+        let reader = BufReader::new(file);
+        let mut decoder = Decoder::new(reader).map_err(|e| {
+            DataLoadError::TiffError(format!("Failed to decode {:?}: {}", path.file_name(), e))
+        })?;
+
+        let (w, h) = decoder.dimensions().map_err(|e| {
+            DataLoadError::TiffError(format!(
+                "Failed to get dimensions of {:?}: {}",
+                path.file_name(),
+                e
+            ))
+        })?;
+
+        let color_type = decoder.colortype().map_err(|e| {
+            DataLoadError::TiffError(format!(
+                "Failed to get color type of {:?}: {}",
+                path.file_name(),
+                e
+            ))
+        })?;
+
+        // Only support grayscale
+        if !matches!(
+            color_type,
+            ColorType::Gray(8) | ColorType::Gray(16) | ColorType::Gray(32)
+        ) {
+            return Err(DataLoadError::UnsupportedDataType(format!(
+                "Unsupported TIFF color type in {:?}: {:?}. Only grayscale supported.",
+                path.file_name(),
+                color_type
+            )));
+        }
+
+        // Check dimensions consistency
+        if idx == 0 {
+            width = w as usize;
+            height = h as usize;
+        } else if w as usize != width || h as usize != height {
+            return Err(DataLoadError::InvalidDimensions(format!(
+                "TIFF {:?} has dimensions {}x{}, expected {}x{} (based on first file)",
+                path.file_name(),
+                w,
+                h,
+                width,
+                height
+            )));
+        }
+
+        let image_data = decoder.read_image().map_err(|e| {
+            DataLoadError::TiffError(format!("Failed to read {:?}: {}", path.file_name(), e))
+        })?;
+
+        let image_f32: Vec<f32> = match image_data {
+            DecodingResult::U8(data) => data.into_iter().map(|v| v as f32).collect(),
+            DecodingResult::U16(data) => data.into_iter().map(|v| v as f32).collect(),
+            DecodingResult::U32(data) => data.into_iter().map(|v| v as f32).collect(),
+            DecodingResult::U64(data) => data.into_iter().map(|v| v as f32).collect(),
+            DecodingResult::I8(data) => data.into_iter().map(|v| v as f32).collect(),
+            DecodingResult::I16(data) => data.into_iter().map(|v| v as f32).collect(),
+            DecodingResult::I32(data) => data.into_iter().map(|v| v as f32).collect(),
+            DecodingResult::I64(data) => data.into_iter().map(|v| v as f32).collect(),
+            DecodingResult::F32(data) => data,
+            DecodingResult::F64(data) => data.into_iter().map(|v| v as f32).collect(),
+        };
+
+        images.push(image_f32);
+    }
+
+    let num_images = images.len();
+
+    // Create 3D array [num_images, height, width]
+    let mut data = Array3::<f32>::zeros((num_images, height, width));
+    for (img_idx, img_data) in images.into_iter().enumerate() {
+        for (pixel_idx, val) in img_data.into_iter().enumerate() {
+            let y = pixel_idx / width;
+            let x = pixel_idx % width;
+            if y < height && x < width {
+                data[[img_idx, y, x]] = val;
+            }
+        }
+    }
+
+    Ok(Volume3D::new(data))
+}
+
 /// Information about an HDF5 entry for tree display.
 #[derive(Debug, Clone)]
 pub enum Hdf5Entry {
@@ -240,4 +431,57 @@ fn build_group_tree(
     }
 
     Ok(entries)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_natural_sort_simple() {
+        let mut files = vec!["img_2.tif", "img_10.tif", "img_1.tif"];
+        files.sort_by(|a, b| natural_compare(a, b));
+        assert_eq!(files, vec!["img_1.tif", "img_2.tif", "img_10.tif"]);
+    }
+
+    #[test]
+    fn test_natural_sort_complex() {
+        let mut files = vec![
+            "img_1.tif",
+            "img_10.tif",
+            "img_11.tif",
+            "img_2.tif",
+            "img_20.tif",
+            "img_3.tif",
+        ];
+        files.sort_by(|a, b| natural_compare(a, b));
+        assert_eq!(
+            files,
+            vec![
+                "img_1.tif",
+                "img_2.tif",
+                "img_3.tif",
+                "img_10.tif",
+                "img_11.tif",
+                "img_20.tif"
+            ]
+        );
+    }
+
+    #[test]
+    fn test_natural_sort_zero_padded() {
+        let mut files = vec!["slice_0010.tif", "slice_0001.tif", "slice_0002.tif"];
+        files.sort_by(|a, b| natural_compare(a, b));
+        assert_eq!(
+            files,
+            vec!["slice_0001.tif", "slice_0002.tif", "slice_0010.tif"]
+        );
+    }
+
+    #[test]
+    fn test_natural_sort_mixed_case() {
+        let mut files = vec!["IMG_2.tif", "img_1.tif", "Img_10.tif"];
+        files.sort_by(|a, b| natural_compare(a, b));
+        assert_eq!(files, vec!["img_1.tif", "IMG_2.tif", "Img_10.tif"]);
+    }
 }

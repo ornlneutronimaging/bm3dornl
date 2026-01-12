@@ -8,7 +8,7 @@ mod data;
 mod processing;
 mod ui;
 
-use data::{build_hdf5_tree, load_hdf5_dataset, load_tiff_stack, Volume3D};
+use data::{build_hdf5_tree, load_hdf5_dataset, load_tiff_sequence, load_tiff_stack, Volume3D};
 use eframe::egui;
 use processing::{ProcessingManager, ProcessingState};
 use std::path::PathBuf;
@@ -118,6 +118,43 @@ impl App {
             .pick_file()
         {
             self.load_file(path);
+        }
+    }
+
+    fn open_tiff_sequence_dialog(&mut self) {
+        if let Some(folder) = rfd::FileDialog::new()
+            .set_title("Select folder containing TIFF sequence")
+            .pick_folder()
+        {
+            self.load_tiff_sequence(folder);
+        }
+    }
+
+    fn load_tiff_sequence(&mut self, folder: PathBuf) {
+        // Reset state
+        self.error_message = None;
+        self.volume = None;
+        self.processed_volume = None;
+        self.hdf5_tree = None;
+        self.pending_hdf5_path = None;
+        self.axis_mapping_widget = None;
+        self.slice_viewer.reset();
+        self.compare_view.reset();
+        self.single_histogram.reset();
+        self.compare_histogram.reset();
+        self.window_level = WindowLevel::new();
+        self.processing_manager.reset();
+        self.view_mode = ViewMode::Original;
+        self.display_mode = DisplayMode::Single;
+
+        match load_tiff_sequence(&folder) {
+            Ok(vol) => {
+                self.setup_volume(vol);
+                self.file_path = Some(folder);
+            }
+            Err(e) => {
+                self.error_message = Some(format!("Failed to load TIFF sequence: {}", e));
+            }
         }
     }
 
@@ -498,13 +535,25 @@ impl eframe::App for App {
                 ui.heading("BM3D Volume Viewer");
                 ui.separator();
 
-                if ui
-                    .button("📂 Open File")
-                    .on_hover_text("Load TIFF stack or HDF5 file")
-                    .clicked()
-                {
-                    self.open_file_dialog();
-                }
+                // Dropdown menu for file opening options
+                egui::menu::menu_button(ui, "📂 Open ▾", |ui| {
+                    if ui
+                        .button("Open File...")
+                        .on_hover_text("Load a single TIFF stack or HDF5 file")
+                        .clicked()
+                    {
+                        ui.close_menu();
+                        self.open_file_dialog();
+                    }
+                    if ui
+                        .button("Import TIFF Sequence...")
+                        .on_hover_text("Load a folder of individual TIFF files as a 3D stack")
+                        .clicked()
+                    {
+                        ui.close_menu();
+                        self.open_tiff_sequence_dialog();
+                    }
+                });
 
                 if let Some(path) = &self.file_path {
                     ui.separator();
@@ -747,10 +796,11 @@ impl eframe::App for App {
                     ui.add_space(100.0);
                     ui.heading("No volume loaded");
                     ui.add_space(20.0);
-                    ui.label("Click 'Open File' to load a TIFF stack or HDF5 file");
+                    ui.label("Click 'Open' menu to load data:");
                     ui.add_space(10.0);
                     ui.label("Supported formats:");
                     ui.label("• Multi-page TIFF (.tif, .tiff)");
+                    ui.label("• TIFF sequence (folder of individual TIFFs)");
                     ui.label("• HDF5 (.h5, .hdf5, .nxs)");
                     ui.add_space(20.0);
                     ui.label("Controls:");
