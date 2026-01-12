@@ -1,6 +1,6 @@
 Method,Time (s),PSNR (dB),SSIM
-bm3dornl (streak),0.266 ± 0.012,32.63,0.6160
-bm3dornl (generic),0.228 ± 0.008,32.93,0.5760
-TomoPy FW (Münch),0.350 ± 0.000,20.61,0.5831
-TomoPy SF (Vo),0.257 ± 0.000,34.50,0.9591
-TomoPy BSD (sort),0.322 ± 0.000,34.69,0.9333
+bm3dornl (streak),0.256 ± 0.009,32.63,0.6160
+bm3dornl (generic),0.219 ± 0.002,32.93,0.5760
+TomoPy FW (Münch),0.318 ± 0.008,20.61,0.5831
+TomoPy SF (Vo),0.278 ± 0.008,34.50,0.9591
+TomoPy BSD (sort),0.349 ± 0.009,34.69,0.9333

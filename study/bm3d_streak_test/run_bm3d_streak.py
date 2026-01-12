@@ -18,6 +18,9 @@ from skimage.metrics import peak_signal_noise_ratio, structural_similarity
 # bm3d-streak-removal imports
 from bm3d_streak_removal import multiscale_streak_removal, extreme_streak_attenuation
 
+# Timing configuration - must match joss_comparison.py for scientific rigor
+NUM_TIMING_RUNS = 30
+
 # Paths
 STUDY_DIR = Path(__file__).parent.parent
 DATA_DIR = STUDY_DIR / "results" / "linux_x86_64" / "data"
@@ -94,16 +97,26 @@ def main():
         print("  cd .. && pixi run benchmark")
         return {"success": False, "error": str(e)}
 
-    print("\nRunning bm3d-streak-removal...")
-    start = time.perf_counter()
+    print(f"\nRunning bm3d-streak-removal ({NUM_TIMING_RUNS} timing runs)...")
 
     try:
-        result = run_bm3d_streak_removal(sinogram_rings)
-        elapsed = time.perf_counter() - start
+        # Timing runs
+        times = []
+        result = None
+        for i in range(NUM_TIMING_RUNS):
+            print(f"  Run {i+1}/{NUM_TIMING_RUNS}...", end=" ", flush=True)
+            start = time.perf_counter()
+            result = run_bm3d_streak_removal(sinogram_rings)
+            elapsed = time.perf_counter() - start
+            times.append(elapsed)
+            print(f"{elapsed:.3f}s")
+
+        time_mean = np.mean(times)
+        time_std = np.std(times)
 
         psnr, ssim = compute_metrics(result, ground_truth)
 
-        print(f"  Time: {elapsed:.3f} s")
+        print(f"\n  Time: {time_mean:.3f} ± {time_std:.3f} s")
         print(f"  PSNR: {psnr:.2f} dB")
         print(f"  SSIM: {ssim:.4f}")
         print(f"  Output shape: {result.shape}")
@@ -120,8 +133,8 @@ def main():
             writer.writerow(["method", "time_mean", "time_std", "psnr", "ssim"])
             writer.writerow([
                 "bm3d-streak-removal",
-                f"{elapsed:.3f}",
-                "0.000",
+                f"{time_mean:.3f}",
+                f"{time_std:.3f}",
                 f"{psnr:.2f}",
                 f"{ssim:.4f}",
             ])
@@ -133,7 +146,7 @@ def main():
         print("\nNext step: Generate unified visualization:")
         print("  cd .. && pixi run visualize")
 
-        return {"time": elapsed, "psnr": psnr, "ssim": ssim, "success": True}
+        return {"time_mean": time_mean, "time_std": time_std, "psnr": psnr, "ssim": ssim, "success": True}
 
     except Exception as e:
         elapsed = time.perf_counter() - start

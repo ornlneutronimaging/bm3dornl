@@ -78,21 +78,21 @@ Synthetic data generated with bm3dornl's phantom module:
 
 ## Linux x86_64 Results (Consolidated)
 
-All 6 methods compared on identical test data (512x512 phantom, 720x725 sinogram):
+All 6 methods compared on identical test data (512x512 phantom, 720x725 sinogram), n=30 timing runs each:
 
 | Method | Time (s) | PSNR (dB) | SSIM |
 |--------|----------|-----------|------|
-| bm3dornl (streak) | 0.266 | 32.63 | 0.6160 |
-| bm3dornl (generic) | 0.228 | 32.93 | 0.5760 |
-| TomoPy FW (Münch) | 0.350 | 20.61 | 0.5831 |
-| TomoPy SF (Vo) | 0.257 | 34.50 | 0.9591 |
-| TomoPy BSD (sort) | 0.322 | 34.69 | 0.9333 |
-| bm3d-streak-removal | 41.116 | 36.34 | 0.8697 |
+| bm3dornl (streak) | 0.256 ± 0.009 | 32.63 | 0.6160 |
+| bm3dornl (generic) | 0.219 ± 0.002 | 32.93 | 0.5760 |
+| TomoPy FW (Münch) | 0.318 ± 0.008 | 20.61 | 0.5831 |
+| TomoPy SF (Vo) | 0.278 ± 0.008 | 34.50 | 0.9591 |
+| TomoPy BSD (sort) | 0.349 ± 0.009 | 34.69 | 0.9333 |
+| bm3d-streak-removal | 41.033 ± 0.139 | 36.34 | 0.8697 |
 
 ### Key Findings
 
 **Speed comparison:**
-- bm3dornl is **~155x faster** than bm3d-streak-removal
+- bm3dornl is **~160x faster** than bm3d-streak-removal (0.256s vs 41.033s)
 - bm3dornl and TomoPy methods have comparable speed (~0.2-0.4s)
 
 **Quality analysis (from diff images):**
@@ -130,16 +130,16 @@ Note: bm3d-streak-removal is not available on Apple Silicon (no arm64 binary).
 
 | Method | Linux x86_64 (s) | Apple Silicon (s) | Speedup |
 |--------|------------------|-------------------|---------|
-| bm3dornl (streak) | 0.266 | 0.191 | 1.39x faster |
-| bm3dornl (generic) | 0.228 | 0.184 | 1.24x faster |
-| TomoPy FW (Münch) | 0.350 | 2.104 | 6.01x slower |
-| TomoPy SF (Vo) | 0.257 | 2.062 | 8.02x slower |
-| TomoPy BSD (sort) | 0.322 | 2.133 | 6.62x slower |
+| bm3dornl (streak) | 0.256 | 0.191 | 1.34x faster |
+| bm3dornl (generic) | 0.219 | 0.184 | 1.19x faster |
+| TomoPy FW (Münch) | 0.318 | 2.104 | 6.62x slower |
+| TomoPy SF (Vo) | 0.278 | 2.062 | 7.42x slower |
+| TomoPy BSD (sort) | 0.349 | 2.133 | 6.11x slower |
 
 **Key observations:**
 
-- **bm3dornl performs ~25-40% faster on Apple Silicon** compared to Linux x86_64
-- **TomoPy methods are 6-8x slower on Apple Silicon** - likely due to lack of native arm64 optimization
+- **bm3dornl performs ~20-35% faster on Apple Silicon** compared to Linux x86_64
+- **TomoPy methods are 6-7x slower on Apple Silicon** - likely due to lack of native arm64 optimization
 - **Quality metrics (PSNR, SSIM) are identical** across platforms (same algorithm, same random seed)
 - bm3dornl's Rust-based implementation benefits from Apple Silicon's architecture
 
