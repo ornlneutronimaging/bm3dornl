@@ -1,0 +1,2 @@
+method,time_mean,time_std,psnr,ssim,phantom_size,notes
+bm3d-streak-removal,30.965,0.000,48.51,0.9896,512,Tested with 512x512 phantom (larger than main benchmark 256x256) due to BM4D block size requirements

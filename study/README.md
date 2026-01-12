@@ -2,17 +2,6 @@
 
 This directory contains an isolated benchmark environment for comparing bm3dornl against existing ring artifact removal methods. The results support the "State of the Field" section in the JOSS paper.
 
-## Multi-Platform Benchmark Strategy
-
-Due to platform-specific compatibility issues with some packages, benchmarks are run on multiple platforms:
-
-| Platform | bm3dornl | TomoPy | bm3d-streak-removal |
-|----------|----------|--------|---------------------|
-| macOS Apple Silicon | Yes | Yes | No (bm4d x86_64 only) |
-| Linux x86_64 | Yes | Yes | Yes |
-
-Results are stored separately and consolidated for the paper.
-
 ## Methods Compared
 
 **bm3dornl (this package):**
@@ -26,9 +15,18 @@ Results are stored separately and consolidated for the paper.
 - **remove_stripe_sf** - Sorting-fitting method (Vo et al.)
 - **remove_stripe_based_sorting** - Sorting-based stripe removal
 
-**bm3d-streak-removal (Linux only):**
+**bm3d-streak-removal:**
 
 - Mäkinen et al., 2021 - Multiscale BM3D for streak noise
+
+## Platform Support
+
+| Feature | bm3dornl | bm3d-streak-removal | TomoPy |
+|---------|----------|---------------------|--------|
+| Apple Silicon | Yes | No | Yes |
+| Linux x86_64 | Yes | Yes | Yes |
+| Python 3.12+ | Yes | No | Yes |
+| Active maintenance | Yes | No | Yes |
 
 ## Setup
 
@@ -39,73 +37,100 @@ pixi install
 
 ## Running Benchmarks
 
+### Full benchmark (Linux x86_64)
+
 ```bash
+# Step 1: Run main benchmark (bm3dornl + TomoPy)
 pixi run benchmark
+
+# Step 2: Run bm3d-streak-removal in isolated environment
+cd bm3d_streak_test && pixi run run && cd ..
+
+# Step 3: Generate unified visualization with all 6 methods
+pixi run visualize
 ```
 
-The script auto-detects the platform and saves results to the appropriate subfolder:
+### Apple Silicon (macOS arm64)
 
-- `results/apple_silicon/` - macOS arm64 results
-- `results/linux_x86_64/` - Linux x86_64 results
+```bash
+pixi run benchmark  # bm3d-streak-removal not available
+```
+
+## Test Environment
+
+### Hardware (Linux x86_64)
+
+| Component | Specification |
+|-----------|---------------|
+| OS | Red Hat Enterprise Linux 9.7 |
+| CPU | AMD Ryzen Threadripper PRO 5975WX 32-Cores |
+| Threads | 64 (32 cores × 2 threads) |
+| RAM | 995 GB |
+| Architecture | x86_64 |
+
+### Test Data
+
+Synthetic data generated with bm3dornl's phantom module:
+
+1. Shepp-Logan phantom (512x512)
+2. Radon transform to generate sinogram (720x725)
+3. Simulated detector gain errors (ring artifacts)
+
+## Linux x86_64 Results (Consolidated)
+
+All 6 methods compared on identical test data (512x512 phantom, 720x725 sinogram):
+
+| Method | Time (s) | PSNR (dB) | SSIM |
+|--------|----------|-----------|------|
+| bm3dornl (streak) | 0.266 | 32.63 | 0.6160 |
+| bm3dornl (generic) | 0.228 | 32.93 | 0.5760 |
+| TomoPy FW (Münch) | 0.350 | 20.61 | 0.5831 |
+| TomoPy SF (Vo) | 0.257 | 34.50 | 0.9591 |
+| TomoPy BSD (sort) | 0.322 | 34.69 | 0.9333 |
+| bm3d-streak-removal | 41.116 | 36.34 | 0.8697 |
+
+### Key Findings
+
+**Speed comparison:**
+- bm3dornl is **~155x faster** than bm3d-streak-removal
+- bm3dornl and TomoPy methods have comparable speed (~0.2-0.4s)
+
+**Quality analysis (from diff images):**
+- **bm3dornl (both modes):** Diff shows vertical stripe patterns indicating successful ring artifact removal with minimal sample information loss
+- **TomoPy FW (Münch):** Large red/blue regions in diff indicate significant alteration of sample structure - method fails on this data
+- **TomoPy SF/BSD:** Visible vertical stripes in diff showing artifacts not fully removed
+- **bm3d-streak-removal:** Clean diff but extremely slow
+
+**Conclusion:** bm3dornl provides the best balance of speed and artifact removal quality.
 
 ## Results Structure
 
 ```
 study/
 ├── results/
-│   ├── apple_silicon/
-│   │   ├── results.csv
-│   │   └── figures/
-│   │       ├── comparison_grid.png
-│   │       ├── timing_comparison.png
-│   │       └── quality_metrics.png
 │   └── linux_x86_64/
-│       └── .gitkeep  (placeholder until Linux benchmarks run)
+│       ├── data/
+│       │   ├── sinogram_clean.npy
+│       │   ├── sinogram_rings.npy
+│       │   ├── result_*.npy
+│       │   └── metrics.csv
+│       ├── figures/
+│       │   ├── unified_comparison.png  # All 6 methods + diff images
+│       │   ├── unified_timing.png
+│       │   ├── unified_quality.png
+│       │   ├── comparison_grid.png
+│       │   ├── timing_comparison.png
+│       │   └── quality_metrics.png
+│       ├── results.csv
+│       └── consolidated_results.csv
+├── bm3d_streak_test/
+│   ├── pixi.toml
+│   └── run_bm3d_streak.py
 ├── joss_comparison.py
+├── unified_visualization.py
 ├── pixi.toml
 └── README.md
 ```
-
-## Test Data
-
-Synthetic data generated with bm3dornl's phantom module:
-
-1. Shepp-Logan phantom (256x256)
-2. Radon transform to generate sinogram (720x363)
-3. Simulated detector gain errors (ring artifacts)
-
-## Apple Silicon Results (Complete)
-
-| Method | Time (s) | PSNR (dB) | SSIM | Visual Quality |
-|--------|----------|-----------|------|----------------|
-| bm3dornl (streak) | 0.135 | 30.43 | 0.5955 | Stripes removed |
-| bm3dornl (generic) | 0.143 | 32.17 | 0.5724 | Stripes removed |
-| TomoPy FW (Münch) | 2.049 | 16.03 | 0.5293 | Failed |
-| TomoPy SF (Vo) | 1.994 | 36.58 | 0.9521 | Stripes visible |
-| TomoPy BSD (sort) | 2.020 | 34.88 | 0.9349 | Stripes visible |
-
-**Key observations:**
-
-- bm3dornl is ~15x faster than TomoPy methods
-- PSNR/SSIM metrics can be misleading - TomoPy methods show higher metrics but visual inspection reveals stripes remain
-- bm3dornl effectively removes ring artifacts while TomoPy methods largely fail on this synthetic data
-
-## Running on Linux
-
-On a Linux x86_64 system:
-
-```bash
-git pull
-cd study
-pixi install
-pixi run benchmark
-```
-
-The benchmark will automatically:
-
-1. Detect Linux x86_64 platform
-2. Include bm3d-streak-removal in the comparison
-3. Save results to `results/linux_x86_64/`
 
 ## bm3d-streak-removal Compatibility Notes
 
@@ -115,11 +140,7 @@ The `bm3d-streak-removal` package has several compatibility constraints:
 2. **Architecture**: bm4d library only provides x86_64 binaries
 3. **Maintenance**: No releases since 2022
 
-These issues are handled by:
-
-- Separate pixi environment in `bm3d_streak_test/` for isolated testing
-- Platform detection in main benchmark script
-- Graceful fallback when package unavailable
+These issues are handled by running bm3d-streak-removal in an isolated Python 3.10 environment (`bm3d_streak_test/`).
 
 ## Parameters Used
 

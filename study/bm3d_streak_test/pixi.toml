@@ -1,7 +1,7 @@
 [workspace]
 name = "bm3d-streak-removal-test"
 version = "0.1.0"
-description = "Isolated test environment for bm3d-streak-removal package"
+description = "Isolated environment for bm3d-streak-removal (requires Python 3.10, scipy <1.11)"
 channels = ["conda-forge"]
 platforms = ["osx-arm64", "linux-64"]
 
@@ -14,8 +14,7 @@ matplotlib = ">=3.5"
 
 [pypi-dependencies]
 bm3d-streak-removal = ">=0.2.0"
-# Note: bm3dornl requires Python 3.12+, incompatible with bm3d-streak-removal
-# Test data will be generated using scikit-image phantom instead
 
 [tasks]
 test = "python test_bm3d_streak.py"
+run = "python run_bm3d_streak.py"

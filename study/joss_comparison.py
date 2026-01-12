@@ -2,11 +2,17 @@
 """
 JOSS Paper Benchmark Comparison Study
 
-Compares bm3dornl ring artifact removal against TomoPy methods.
-On Linux x86_64, also includes bm3d-streak-removal (Mäkinen et al., 2021).
+Unified comparison of ring artifact removal methods:
+- bm3dornl (streak and generic modes)
+- TomoPy methods (FW, SF, BSD)
+- bm3d-streak-removal (run separately in isolated environment)
+
+Uses 512x512 phantom to accommodate bm3d-streak-removal's size requirements.
 
 Usage:
-    pixi run python joss_comparison.py
+    pixi run benchmark  # Run main benchmark (bm3dornl + TomoPy)
+    cd bm3d_streak_test && pixi run run  # Run bm3d-streak-removal
+    pixi run visualize  # Generate unified comparison figures
 """
 
 import platform
@@ -55,34 +61,20 @@ PLATFORM_NAME, CAN_USE_BM3D_STREAK = get_platform_info()
 STUDY_DIR = Path(__file__).parent
 RESULTS_DIR = STUDY_DIR / "results" / PLATFORM_NAME
 FIGURE_DIR = RESULTS_DIR / "figures"
+DATA_DIR = RESULTS_DIR / "data"
 FIGURE_DIR.mkdir(parents=True, exist_ok=True)
+DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 # Reproducibility
 np.random.seed(42)
 
-# Test parameters
-PHANTOM_SIZE = 256
+# Test parameters - 512x512 for bm3d-streak-removal compatibility
+PHANTOM_SIZE = 512
 SCAN_STEP = 0.5  # degrees
 NUM_TIMING_RUNS_FAST = 3  # For bm3dornl (fast methods)
-NUM_TIMING_RUNS_SLOW = 1  # For TomoPy and bm3d-streak-removal (slower methods)
+NUM_TIMING_RUNS_SLOW = 1  # For TomoPy (slower methods)
 DETECTOR_GAIN_RANGE = (0.95, 1.05)
 DETECTOR_GAIN_ERROR = 0.02
-
-# Try to import bm3d-streak-removal on Linux x86_64
-BM3D_STREAK_AVAILABLE = False
-if CAN_USE_BM3D_STREAK:
-    try:
-        # Fix scipy.signal.gaussian import for bm3d-streak-removal compatibility
-        import scipy.signal
-        from scipy.signal import windows
-        if not hasattr(scipy.signal, 'gaussian'):
-            scipy.signal.gaussian = windows.gaussian
-
-        from bm3d_streak_removal import multiscale_streak_removal, extreme_streak_attenuation
-        BM3D_STREAK_AVAILABLE = True
-        print("bm3d-streak-removal: Available")
-    except ImportError as e:
-        print(f"bm3d-streak-removal: Not available ({e})")
 
 
 def generate_test_data():
@@ -128,16 +120,18 @@ def time_function(func, *args, num_runs=NUM_TIMING_RUNS_FAST, **kwargs):
         times.append(elapsed)
         if num_runs > 1:
             print(f"{elapsed:.3f}s")
-    return result, np.mean(times), np.std(times)
+
+    mean_time = np.mean(times)
+    std_time = np.std(times) if len(times) > 1 else 0.0
+    return result, mean_time, std_time
 
 
 def compute_metrics(result, ground_truth):
-    """Compute PSNR and SSIM against ground truth."""
-    # Ensure same dtype and range
+    """Compute PSNR and SSIM between result and ground truth."""
     result = np.asarray(result, dtype=np.float64)
     ground_truth = np.asarray(ground_truth, dtype=np.float64)
 
-    # Normalize to [0, 1] for consistent metrics
+    # Normalize to [0, 1] for metric computation
     result_norm = (result - result.min()) / (result.max() - result.min() + 1e-10)
     gt_norm = (ground_truth - ground_truth.min()) / (
         ground_truth.max() - ground_truth.min() + 1e-10
@@ -145,14 +139,14 @@ def compute_metrics(result, ground_truth):
 
     psnr = peak_signal_noise_ratio(gt_norm, result_norm, data_range=1.0)
     ssim = structural_similarity(gt_norm, result_norm, data_range=1.0)
-
     return psnr, ssim
 
 
+# Method implementations
 def run_bm3dornl_streak(sinogram):
     """Apply bm3dornl in streak mode."""
     return bm3d_ring_artifact_removal(
-        sinogram.astype(np.float32),
+        sinogram,
         mode="streak",
         sigma_random=0.05,
         patch_size=8,
@@ -165,7 +159,7 @@ def run_bm3dornl_streak(sinogram):
 def run_bm3dornl_generic(sinogram):
     """Apply bm3dornl in generic mode."""
     return bm3d_ring_artifact_removal(
-        sinogram.astype(np.float32),
+        sinogram,
         mode="generic",
         sigma_random=0.05,
         patch_size=8,
@@ -175,19 +169,8 @@ def run_bm3dornl_generic(sinogram):
     )
 
 
-def run_bm3d_streak_removal(sinogram):
-    """Apply bm3d-streak-removal (Mäkinen et al., 2021)."""
-    sino_3d = sinogram.astype(np.float64)[np.newaxis, :, :]
-    sino_log = np.log1p(sino_3d)
-    sino_attenuated = extreme_streak_attenuation(sino_log)
-    sino_denoised = multiscale_streak_removal(sino_attenuated)
-    result = np.expm1(sino_denoised)
-    return result[0]
-
-
 def run_tomopy_fw(sinogram):
     """Apply TomoPy wavelet-Fourier stripe removal (Münch et al.)."""
-    # TomoPy expects 3D array (nslices, nrows, ncols)
     sino_3d = sinogram[np.newaxis, :, :]
     result = tomopy.remove_stripe_fw(sino_3d, level=7, wname="db5", sigma=2, pad=True)
     return result[0]
@@ -200,41 +183,48 @@ def run_tomopy_sf(sinogram):
     return result[0]
 
 
-def run_tomopy_based(sinogram):
-    """Apply TomoPy ring removal based on Fourier-wavelet approach."""
+def run_tomopy_bsd(sinogram):
+    """Apply TomoPy sorting-based stripe removal."""
     sino_3d = sinogram[np.newaxis, :, :]
-    result = tomopy.remove_stripe_based_sorting(sino_3d, size=5, dim=1)
+    result = tomopy.remove_stripe_based_sorting(sino_3d, size=5)
     return result[0]
 
 
 def run_benchmarks(data):
-    """Run all benchmark methods and collect results."""
+    """Run all benchmark methods."""
     sinogram = data["sinogram_rings"]
     ground_truth = data["sinogram_clean"]
 
-    # Methods: (name, function, do_timing, num_runs)
+    # Define methods to test
     methods = [
-        ("Input (with rings)", lambda x: x, False, 1),
         ("bm3dornl (streak)", run_bm3dornl_streak, True, NUM_TIMING_RUNS_FAST),
         ("bm3dornl (generic)", run_bm3dornl_generic, True, NUM_TIMING_RUNS_FAST),
         ("TomoPy FW (Münch)", run_tomopy_fw, True, NUM_TIMING_RUNS_SLOW),
         ("TomoPy SF (Vo)", run_tomopy_sf, True, NUM_TIMING_RUNS_SLOW),
-        ("TomoPy BSD (sort)", run_tomopy_based, True, NUM_TIMING_RUNS_SLOW),
+        ("TomoPy BSD (sort)", run_tomopy_bsd, True, NUM_TIMING_RUNS_SLOW),
     ]
 
-    # Add bm3d-streak-removal if available (Linux x86_64 only)
-    if BM3D_STREAK_AVAILABLE:
-        methods.append(
-            ("bm3d-streak-removal", run_bm3d_streak_removal, True, NUM_TIMING_RUNS_SLOW)
-        )
-
     results = []
+
+    # Add input (with rings) as reference
+    results.append(
+        {
+            "method": "Input (with rings)",
+            "output": sinogram,
+            "time_mean": 0.0,
+            "time_std": 0.0,
+            "psnr": 0.0,
+            "ssim": 0.0,
+        }
+    )
 
     for name, method, do_timing, num_runs in methods:
         print(f"\nRunning: {name}...")
 
         if do_timing:
-            output, mean_time, std_time = time_function(method, sinogram, num_runs=num_runs)
+            output, mean_time, std_time = time_function(
+                method, sinogram, num_runs=num_runs
+            )
             psnr, ssim = compute_metrics(output, ground_truth)
             print(f"  Time: {mean_time:.3f} ± {std_time:.3f} s")
             print(f"  PSNR: {psnr:.2f} dB")
@@ -258,35 +248,110 @@ def run_benchmarks(data):
     return results
 
 
-def create_comparison_grid(data, results):
-    """Create visual comparison grid."""
-    print("\nGenerating comparison grid figure...")
+def save_data_for_bm3d_streak(data, results):
+    """Save test data and results for bm3d-streak-removal processing."""
+    print("\nSaving test data for bm3d-streak-removal...")
 
-    n_methods = len(results)
-    # Determine grid size based on number of methods
-    if n_methods <= 6:
-        nrows, ncols = 2, 3
-    else:
-        nrows, ncols = 2, 4
+    # Save test data
+    np.save(DATA_DIR / "sinogram_clean.npy", data["sinogram_clean"])
+    np.save(DATA_DIR / "sinogram_rings.npy", data["sinogram_rings"])
+    print(f"  Saved test data to: {DATA_DIR}")
 
-    fig, axes = plt.subplots(nrows, ncols, figsize=(4 * ncols, 4 * nrows))
-    axes = axes.flatten()
+    # Save method results
+    for r in results:
+        if r["method"] != "Input (with rings)":
+            safe_name = r["method"].replace(" ", "_").replace("(", "").replace(")", "")
+            np.save(DATA_DIR / f"result_{safe_name}.npy", r["output"])
 
-    # Determine common color scale from clean sinogram
-    vmin = data["sinogram_clean"].min()
-    vmax = data["sinogram_clean"].max()
+    # Save metrics
+    metrics = []
+    for r in results:
+        if r["time_mean"] > 0:
+            metrics.append({
+                "method": r["method"],
+                "time_mean": r["time_mean"],
+                "time_std": r["time_std"],
+                "psnr": r["psnr"],
+                "ssim": r["ssim"],
+            })
+    pd.DataFrame(metrics).to_csv(DATA_DIR / "metrics.csv", index=False)
+    print(f"  Saved metrics to: {DATA_DIR / 'metrics.csv'}")
 
-    for i, ax in enumerate(axes):
-        if i < n_methods:
-            res = results[i]
-            ax.imshow(res["output"], cmap="gray", vmin=vmin, vmax=vmax, aspect="auto")
-            title = res["method"]
-            if res["time_mean"] > 0:
-                title += f"\n({res['time_mean']:.2f}s, PSNR={res['psnr']:.1f})"
-            ax.set_title(title, fontsize=10)
+
+def create_comparison_grid_with_diff(data, results):
+    """Create visual comparison grid with diff images.
+
+    Layout:
+    Row 1: Input (noisy) | Clean (ground truth)
+    Row 2: Method results (6 methods)
+    Row 3: Diff images (result - clean) with diverging colormap
+    """
+    print("\nGenerating comparison grid with diff images...")
+
+    ground_truth = data["sinogram_clean"]
+    sinogram_rings = data["sinogram_rings"]
+
+    # Filter to only actual methods (not input)
+    method_results = [r for r in results if r["time_mean"] > 0]
+
+    n_methods = len(method_results)
+    ncols = max(n_methods, 2)  # At least 2 columns for row 1
+
+    fig = plt.figure(figsize=(3 * ncols, 10))
+
+    # Common color scale for sinograms
+    vmin = ground_truth.min()
+    vmax = ground_truth.max()
+
+    # Row 1: Input and Clean reference (centered)
+    ax1 = fig.add_subplot(3, ncols, 1)
+    ax1.imshow(sinogram_rings, cmap="gray", vmin=vmin, vmax=vmax, aspect="auto")
+    ax1.set_title("Input (with rings)", fontsize=10)
+    ax1.axis("off")
+
+    ax2 = fig.add_subplot(3, ncols, 2)
+    ax2.imshow(ground_truth, cmap="gray", vmin=vmin, vmax=vmax, aspect="auto")
+    ax2.set_title("Clean (ground truth)", fontsize=10)
+    ax2.axis("off")
+
+    # Hide unused axes in row 1
+    for i in range(2, ncols):
+        ax = fig.add_subplot(3, ncols, i + 1)
         ax.axis("off")
 
-    plt.tight_layout()
+    # Row 2: Method results
+    for i, r in enumerate(method_results):
+        ax = fig.add_subplot(3, ncols, ncols + i + 1)
+        ax.imshow(r["output"], cmap="gray", vmin=vmin, vmax=vmax, aspect="auto")
+        title = r["method"]
+        if r["time_mean"] > 0:
+            title += f"\n{r['time_mean']:.2f}s | PSNR={r['psnr']:.1f}"
+        ax.set_title(title, fontsize=9)
+        ax.axis("off")
+
+    # Row 3: Diff images (result - clean)
+    # First, compute all diffs to find common scale
+    diffs = []
+    for r in method_results:
+        diff = r["output"] - ground_truth
+        diffs.append(diff)
+
+    # Zero-centered diverging colormap
+    max_abs_diff = max(np.abs(d).max() for d in diffs)
+    diff_vmin, diff_vmax = -max_abs_diff, max_abs_diff
+
+    for i, (r, diff) in enumerate(zip(method_results, diffs)):
+        ax = fig.add_subplot(3, ncols, 2 * ncols + i + 1)
+        im = ax.imshow(diff, cmap="RdBu_r", vmin=diff_vmin, vmax=diff_vmax, aspect="auto")
+        ax.set_title("Diff", fontsize=9)
+        ax.axis("off")
+
+    # Add colorbar for diff images
+    cbar_ax = fig.add_axes([0.92, 0.05, 0.02, 0.25])
+    cbar = fig.colorbar(im, cax=cbar_ax)
+    cbar.set_label("Result - Ground Truth", fontsize=9)
+
+    plt.tight_layout(rect=[0, 0, 0.9, 1])
     fig.savefig(FIGURE_DIR / "comparison_grid.png", dpi=150, bbox_inches="tight")
     plt.close(fig)
     print(f"  Saved: {FIGURE_DIR / 'comparison_grid.png'}")
@@ -318,7 +383,7 @@ def create_timing_chart(results):
     bars = ax.bar(methods, times, yerr=errors, color=colors, capsize=5)
 
     ax.set_ylabel("Processing Time (seconds)")
-    ax.set_title(f"Ring Artifact Removal - Processing Time ({PHANTOM_SIZE}×{PHANTOM_SIZE} sinogram)\nPlatform: {PLATFORM_NAME}")
+    ax.set_title(f"Ring Artifact Removal - Processing Time ({PHANTOM_SIZE}x{PHANTOM_SIZE} sinogram)\nPlatform: {PLATFORM_NAME}")
     ax.tick_params(axis="x", rotation=20)
 
     # Add value labels on bars
@@ -443,8 +508,12 @@ def main():
     print("bm3dornl JOSS Paper - Benchmark Comparison Study")
     print("=" * 70)
     print(f"Platform: {PLATFORM_NAME}")
+    print(f"Phantom size: {PHANTOM_SIZE}x{PHANTOM_SIZE}")
     print(f"Results directory: {RESULTS_DIR}")
-    print(f"bm3d-streak-removal available: {BM3D_STREAK_AVAILABLE}")
+
+    if CAN_USE_BM3D_STREAK:
+        print("\nNote: bm3d-streak-removal available on this platform.")
+        print("Run separately: cd bm3d_streak_test && pixi run run")
 
     # Generate test data
     data = generate_test_data()
@@ -452,25 +521,35 @@ def main():
     # Run benchmarks
     results = run_benchmarks(data)
 
+    # Save data for bm3d-streak-removal
+    save_data_for_bm3d_streak(data, results)
+
     # Generate figures
-    create_comparison_grid(data, results)
+    create_comparison_grid_with_diff(data, results)
     create_timing_chart(results)
     create_quality_chart(results)
 
-    # Save results
-    df = save_results_csv(results)
+    # Save CSV
+    save_results_csv(results)
 
     print("\n" + "=" * 70)
     print("STUDY COMPLETE")
     print("=" * 70)
     print(f"Results saved to: {RESULTS_DIR}/")
     print("Files generated:")
+    print("  - data/sinogram_clean.npy")
+    print("  - data/sinogram_rings.npy")
+    print("  - data/metrics.csv")
     print("  - figures/comparison_grid.png")
     print("  - figures/timing_comparison.png")
     print("  - figures/quality_metrics.png")
     print("  - results.csv")
 
-    return results
+    if CAN_USE_BM3D_STREAK:
+        print("\nNext step: Run bm3d-streak-removal in isolated environment:")
+        print("  cd bm3d_streak_test && pixi run run")
+        print("Then generate unified visualization:")
+        print("  pixi run visualize")
 
 
 if __name__ == "__main__":

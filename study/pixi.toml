@@ -22,3 +22,4 @@ bm3dornl = { path = "..", editable = true }
 
 [tasks]
 benchmark = "python joss_comparison.py"
+visualize = "python unified_visualization.py"

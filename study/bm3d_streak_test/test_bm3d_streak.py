@@ -18,13 +18,20 @@ from skimage.transform import radon
 # bm3d-streak-removal imports
 from bm3d_streak_removal import multiscale_streak_removal, extreme_streak_attenuation
 
-# Test parameters
-PHANTOM_SIZE = 256
+# Test parameters - use larger size for bm3d-streak-removal compatibility
+# bm3d-streak-removal requires sufficient image size for BM4D block matching
+PHANTOM_SIZE = 512
+SCAN_STEP = 0.5  # Degrees per projection
 np.random.seed(42)
 
 
 def generate_test_data():
-    """Generate synthetic sinogram with ring artifacts using scikit-image."""
+    """Generate synthetic sinogram with ring artifacts using scikit-image.
+
+    Uses 512x512 phantom (larger than main benchmark's 256x256) to ensure
+    sufficient detector pixels for bm3d-streak-removal's BM4D block matching.
+    Sinogram shape: 720x729 (theta x detector).
+    """
     print("Generating synthetic test data...")
 
     # Create Shepp-Logan phantom
@@ -34,7 +41,8 @@ def generate_test_data():
     phantom = resize(phantom, (PHANTOM_SIZE, PHANTOM_SIZE), anti_aliasing=True)
 
     # Generate sinogram via Radon transform
-    theta = np.linspace(0., 180., PHANTOM_SIZE, endpoint=False)
+    # Use 360 degrees with 0.5 degree step = 720 projections (matches main benchmark)
+    theta = np.arange(-180, 180, SCAN_STEP)  # 720 projections
     sinogram = radon(phantom, theta=theta)
 
     # Normalize to [0, 1]
@@ -60,13 +68,24 @@ def generate_test_data():
 
 
 def run_bm3d_streak_removal(sinogram):
-    """Apply bm3d-streak-removal."""
-    sino_3d = sinogram.astype(np.float64)[np.newaxis, :, :]
-    sino_log = np.log1p(sino_3d)
+    """Apply bm3d-streak-removal.
+
+    Uses the standard pipeline with data scaled to appropriate range.
+    Expected input shape for multiscale_streak_removal: (angle, sinogram_idx, detector)
+    So single sinogram of shape (N_angles, N_detectors) becomes (N_angles, 1, N_detectors).
+    """
+    # sinogram is (theta, detector) = (720, 512)
+    # Expected shape: (angle, sino_idx, detector) = (720, 1, 512)
+    sino_3d = sinogram.astype(np.float64)[:, np.newaxis, :]
+    print(f"  Input shape for bm3d-streak: {sino_3d.shape}")
+    # Scale to [0.1, 1.1] to avoid log(0) issues
+    sino_scaled = sino_3d + 0.1
+    sino_log = np.log(sino_scaled)
     sino_attenuated = extreme_streak_attenuation(sino_log)
+    # Use default parameters for fair comparison
     sino_denoised = multiscale_streak_removal(sino_attenuated)
-    result = np.expm1(sino_denoised)
-    return result[0]
+    result = np.exp(sino_denoised) - 0.1
+    return result[:, 0, :]
 
 
 def compute_metrics(result, ground_truth):
@@ -85,6 +104,10 @@ def compute_metrics(result, ground_truth):
 
 
 def main():
+    import os
+    import csv
+    from pathlib import Path
+
     print("=" * 60)
     print("bm3d-streak-removal Isolated Test")
     print("=" * 60)
@@ -109,6 +132,25 @@ def main():
         np.save("bm3d_streak_input.npy", sinogram_rings)
         np.save("bm3d_streak_ground_truth.npy", ground_truth)
         print("\n  Results saved to .npy files")
+
+        # Save results to linux_x86_64 folder for integration
+        results_dir = Path(__file__).parent.parent / "results" / "linux_x86_64"
+        results_dir.mkdir(parents=True, exist_ok=True)
+
+        bm3d_streak_csv = results_dir / "bm3d_streak_results.csv"
+        with open(bm3d_streak_csv, "w", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow(["method", "time_mean", "time_std", "psnr", "ssim", "phantom_size", "notes"])
+            writer.writerow([
+                "bm3d-streak-removal",
+                f"{elapsed:.3f}",
+                "0.000",  # Single run
+                f"{psnr:.2f}",
+                f"{ssim:.4f}",
+                PHANTOM_SIZE,
+                "Tested with 512x512 phantom (larger than main benchmark 256x256) due to BM4D block size requirements"
+            ])
+        print(f"  CSV saved to: {bm3d_streak_csv}")
 
         return {"time": elapsed, "psnr": psnr, "ssim": ssim, "success": True}
 
