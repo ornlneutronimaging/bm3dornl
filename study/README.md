@@ -103,11 +103,66 @@ All 6 methods compared on identical test data (512x512 phantom, 720x725 sinogram
 
 **Conclusion:** bm3dornl provides the best balance of speed and artifact removal quality.
 
+## Apple Silicon Results
+
+### Hardware
+
+| Component | Specification |
+|-----------|---------------|
+| Model | MacBook Pro |
+| Chip | Apple M4 Max |
+| RAM | 128 GB |
+| Architecture | arm64 |
+
+### Benchmark Results (5 methods, n=30 runs each)
+
+| Method | Time (s) | PSNR (dB) | SSIM |
+|--------|----------|-----------|------|
+| bm3dornl (streak) | 0.191 ± 0.006 | 32.63 | 0.6160 |
+| bm3dornl (generic) | 0.184 ± 0.007 | 32.93 | 0.5760 |
+| TomoPy FW (Münch) | 2.104 ± 0.048 | 20.61 | 0.5831 |
+| TomoPy SF (Vo) | 2.062 ± 0.038 | 34.50 | 0.9591 |
+| TomoPy BSD (sort) | 2.133 ± 0.040 | 34.69 | 0.9333 |
+
+Note: bm3d-streak-removal is not available on Apple Silicon (no arm64 binary).
+
+### Cross-Platform Comparison
+
+| Method | Linux x86_64 (s) | Apple Silicon (s) | Speedup |
+|--------|------------------|-------------------|---------|
+| bm3dornl (streak) | 0.266 | 0.191 | 1.39x faster |
+| bm3dornl (generic) | 0.228 | 0.184 | 1.24x faster |
+| TomoPy FW (Münch) | 0.350 | 2.104 | 6.01x slower |
+| TomoPy SF (Vo) | 0.257 | 2.062 | 8.02x slower |
+| TomoPy BSD (sort) | 0.322 | 2.133 | 6.62x slower |
+
+**Key observations:**
+
+- **bm3dornl performs ~25-40% faster on Apple Silicon** compared to Linux x86_64
+- **TomoPy methods are 6-8x slower on Apple Silicon** - likely due to lack of native arm64 optimization
+- **Quality metrics (PSNR, SSIM) are identical** across platforms (same algorithm, same random seed)
+- bm3dornl's Rust-based implementation benefits from Apple Silicon's architecture
+
 ## Results Structure
 
 ```
 study/
 ├── results/
+│   ├── apple_silicon/
+│   │   ├── data/
+│   │   │   ├── sinogram_clean.npy
+│   │   │   ├── sinogram_rings.npy
+│   │   │   ├── result_*.npy
+│   │   │   └── metrics.csv
+│   │   ├── figures/
+│   │   │   ├── unified_comparison.png
+│   │   │   ├── unified_timing.png
+│   │   │   ├── unified_quality.png
+│   │   │   ├── comparison_grid.png
+│   │   │   ├── timing_comparison.png
+│   │   │   └── quality_metrics.png
+│   │   ├── results.csv
+│   │   └── consolidated_results.csv
 │   └── linux_x86_64/
 │       ├── data/
 │       │   ├── sinogram_clean.npy

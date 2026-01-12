@@ -71,8 +71,7 @@ np.random.seed(42)
 # Test parameters - 512x512 for bm3d-streak-removal compatibility
 PHANTOM_SIZE = 512
 SCAN_STEP = 0.5  # degrees
-NUM_TIMING_RUNS_FAST = 3  # For bm3dornl (fast methods)
-NUM_TIMING_RUNS_SLOW = 1  # For TomoPy (slower methods)
+NUM_TIMING_RUNS = 30  # All methods use identical number of runs for scientific rigor
 DETECTOR_GAIN_RANGE = (0.95, 1.05)
 DETECTOR_GAIN_ERROR = 0.02
 
@@ -107,7 +106,7 @@ def generate_test_data():
     }
 
 
-def time_function(func, *args, num_runs=NUM_TIMING_RUNS_FAST, **kwargs):
+def time_function(func, *args, num_runs=NUM_TIMING_RUNS, **kwargs):
     """Time a function over multiple runs, return mean time."""
     times = []
     result = None
@@ -195,13 +194,13 @@ def run_benchmarks(data):
     sinogram = data["sinogram_rings"]
     ground_truth = data["sinogram_clean"]
 
-    # Define methods to test
+    # Define methods to test - all use identical NUM_TIMING_RUNS for scientific rigor
     methods = [
-        ("bm3dornl (streak)", run_bm3dornl_streak, True, NUM_TIMING_RUNS_FAST),
-        ("bm3dornl (generic)", run_bm3dornl_generic, True, NUM_TIMING_RUNS_FAST),
-        ("TomoPy FW (Münch)", run_tomopy_fw, True, NUM_TIMING_RUNS_SLOW),
-        ("TomoPy SF (Vo)", run_tomopy_sf, True, NUM_TIMING_RUNS_SLOW),
-        ("TomoPy BSD (sort)", run_tomopy_bsd, True, NUM_TIMING_RUNS_SLOW),
+        ("bm3dornl (streak)", run_bm3dornl_streak, True, NUM_TIMING_RUNS),
+        ("bm3dornl (generic)", run_bm3dornl_generic, True, NUM_TIMING_RUNS),
+        ("TomoPy FW (Münch)", run_tomopy_fw, True, NUM_TIMING_RUNS),
+        ("TomoPy SF (Vo)", run_tomopy_sf, True, NUM_TIMING_RUNS),
+        ("TomoPy BSD (sort)", run_tomopy_bsd, True, NUM_TIMING_RUNS),
     ]
 
     results = []
