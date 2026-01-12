@@ -13,13 +13,16 @@ authors:
     orcid: 0000-0001-8374-4467
     affiliation: 1
     corresponding: true
+  - name: Jean-Christophe Bilheux
+    orcid: 0000-0003-2172-6487
+    affiliation: 1
   - name: Dmitry Ganyushin
     affiliation: 1
   - name: Pete Peterson
     orcid: 0000-0002-1353-0348
     affiliation: 1
 affiliations:
-  - name: Oak Ridge National Laboratory, Oak Ridge, TN, USA
+  - name: Neutron Sciences Directorate, Oak Ridge National Laboratory, Oak Ridge, TN, USA
     index: 1
 date: 11 January 2026
 bibliography: paper.bib
