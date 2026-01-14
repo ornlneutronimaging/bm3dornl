@@ -259,40 +259,15 @@ fn subtract_streak_profile<F: Bm3dFloat>(
 // Main Entry Point
 // =============================================================================
 
-/// Unified BM3D ring artifact removal for 2D sinograms.
+/// Unified BM3D ring artifact removal with pre-computed plans (Internal/Advanced).
 ///
-/// This function performs the complete BM3D denoising pipeline:
-/// 1. Normalizes input to [0, 1] range
-/// 2. Computes spatially adaptive sigma map
-/// 3. (Streak mode) Subtracts estimated streak profile
-/// 4. Runs two-pass BM3D: Hard Threshold → Wiener
-/// 5. Denormalizes output to original range
-///
-/// # Arguments
-///
-/// * `sinogram` - Input 2D sinogram (H × W)
-/// * `mode` - Processing mode (Generic or Streak)
-/// * `config` - Configuration parameters
-///
-/// # Returns
-///
-/// Denoised sinogram with same shape as input, or error if parameters invalid.
-///
-/// # Example
-///
-/// ```
-/// use bm3d_core::{bm3d_ring_artifact_removal, RingRemovalMode, Bm3dConfig};
-/// use ndarray::Array2;
-///
-/// let sinogram = Array2::<f32>::zeros((64, 64));
-/// let config = Bm3dConfig::default();
-/// let result = bm3d_ring_artifact_removal(sinogram.view(), RingRemovalMode::Generic, &config);
-/// assert!(result.is_ok());
-/// ```
-pub fn bm3d_ring_artifact_removal<F: Bm3dFloat>(
+/// This is the core implementation that takes pre-computed FFT plans.
+/// See `bm3d_ring_artifact_removal` for the public API.
+pub fn bm3d_ring_artifact_removal_with_plans<F: Bm3dFloat>(
     sinogram: ArrayView2<F>,
     mode: RingRemovalMode,
     config: &Bm3dConfig<F>,
+    plans: &crate::pipeline::Bm3dPlans<F>,
 ) -> Result<Array2<F>, String> {
     // Validate configuration
     config.validate()?;
@@ -380,6 +355,7 @@ pub fn bm3d_ring_artifact_removal<F: Bm3dFloat>(
         config.step_size,
         config.search_window,
         config.max_matches,
+        plans,
     )?;
 
     // Step 7: BM3D Pass 2 - Wiener Filtering
@@ -395,17 +371,58 @@ pub fn bm3d_ring_artifact_removal<F: Bm3dFloat>(
         config.step_size,
         config.search_window,
         config.max_matches,
+        plans,
     )?;
 
     // Step 8: Denormalize to original range
     let output = if range > eps {
         yhat_final.mapv(|x| x * range + d_min)
     } else {
-        // Return original constant value
-        Array2::from_elem((rows, cols), d_min)
+        // Constant image - restore original mean/min
+        Array2::from_elem(yhat_final.raw_dim(), d_min)
     };
 
     Ok(output)
+}
+
+/// Unified BM3D ring artifact removal for 2D sinograms.
+///
+/// This function performs the complete BM3D denoising pipeline:
+/// 1. Normalizes input to [0, 1] range
+/// 2. Computes spatially adaptive sigma map
+/// 3. (Streak mode) Subtracts estimated streak profile
+/// 4. Runs two-pass BM3D: Hard Threshold → Wiener
+/// 5. Denormalizes output to original range
+///
+/// # Arguments
+///
+/// * `sinogram` - Input 2D sinogram (H × W)
+/// * `mode` - Processing mode (Generic or Streak)
+/// * `config` - Configuration parameters
+///
+/// # Returns
+///
+/// Denoised sinogram with same shape as input, or error if parameters invalid.
+///
+/// # Example
+///
+/// ```
+/// use bm3d_core::{bm3d_ring_artifact_removal, RingRemovalMode, Bm3dConfig};
+/// use ndarray::Array2;
+///
+/// let sinogram = Array2::<f32>::zeros((64, 64));
+/// let config = Bm3dConfig::default();
+/// let result = bm3d_ring_artifact_removal(sinogram.view(), RingRemovalMode::Generic, &config);
+/// assert!(result.is_ok());
+/// ```
+pub fn bm3d_ring_artifact_removal<F: Bm3dFloat>(
+    sinogram: ArrayView2<F>,
+    mode: RingRemovalMode,
+    config: &Bm3dConfig<F>,
+) -> Result<Array2<F>, String> {
+    // Create plans locally
+    let plans = crate::pipeline::Bm3dPlans::new(config.patch_size, config.max_matches);
+    bm3d_ring_artifact_removal_with_plans(sinogram, mode, config, &plans)
 }
 
 // =============================================================================

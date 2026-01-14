@@ -14,10 +14,12 @@
 //! This enables handling of wide streaks that single-scale BM3D cannot capture.
 
 use ndarray::{s, Array1, Array2, ArrayView1, ArrayView2};
-use splines::{Interpolation, Key, Spline};
+// use splines::{Interpolation, Key, Spline}; // Removed for optimization
 
 use crate::float_trait::Bm3dFloat;
-use crate::orchestration::{bm3d_ring_artifact_removal, Bm3dConfig, RingRemovalMode};
+use crate::orchestration::{
+    bm3d_ring_artifact_removal, bm3d_ring_artifact_removal_with_plans, Bm3dConfig, RingRemovalMode,
+};
 
 // =============================================================================
 // Constants
@@ -30,7 +32,7 @@ const MIN_SCALE_WIDTH: usize = 40;
 const BINNING_FACTOR: usize = 2;
 
 /// Default number of debinning iterations
-const DEFAULT_DEBIN_ITERATIONS: usize = 30;
+const DEFAULT_DEBIN_ITERATIONS: usize = 10;
 
 /// Default filter strength for multi-scale (reference uses 1.0)
 const DEFAULT_MULTISCALE_FILTER_STRENGTH: f64 = 1.0;
@@ -245,34 +247,81 @@ fn compute_bin_weights<F: Bm3dFloat>(target_width: usize, factor: usize) -> Arra
 
 /// Cubic spline interpolation for a single row.
 /// Uses Catmull-Rom spline which approximates natural cubic spline behavior.
+/// Optimized Catmull-Rom spline interpolation for a single row.
+/// Avoids allocating a 'Key' vector by performing direct calculation.
+/// Assumes x_coords are sorted and implicitly defined by the binning structure,
+/// but since we pass explicit x_coords here, we will use binary search or direct index if possible.
+/// However, to keep it drop-in compatible and fast, we'll use the fact that input is sorted.
 fn cubic_spline_interpolate_row<F: Bm3dFloat>(
     x_coords: &[f64],
     y_values: ArrayView1<F>,
     target_x: &[f64],
-) -> Vec<F> {
-    // Build spline keys
-    // Note: to_f64() from num_traits::Float returns Option<f64>, but f32/f64 always convert successfully
-    let keys: Vec<Key<f64, f64>> = x_coords
-        .iter()
-        .zip(y_values.iter())
-        .map(|(&x, &y)| {
-            let y_f64 = y.to_f64().unwrap_or(0.0);
-            Key::new(x, y_f64, Interpolation::CatmullRom)
-        })
-        .collect();
+    output: &mut [F],
+) {
+    let len = x_coords.len();
+    if len < 2 {
+        output.fill(F::zero());
+        return;
+    }
 
-    let spline = Spline::from_vec(keys);
+    // Optimization: Assume x_coords acts as a Lookup Table?
+    // In debinning, x_coords are NOT uniform 0,1,2... they are bin centers.
+    // But they ARE sorted.
+    // Since target_x is also sorted (1, 2, ...), we can iterate linearly (two pointers).
+    // But typical Catmull-Rom requires 4 points (p0, p1, p2, p3).
 
-    // Sample at target positions
-    target_x
-        .iter()
-        .map(|&x| {
-            // Handle extrapolation at boundaries
-            let clamped_x = x.clamp(x_coords[0], x_coords[x_coords.len() - 1]);
-            let val = spline.sample(clamped_x).unwrap_or(0.0);
-            F::from_f64_c(val)
-        })
-        .collect()
+    // Helper for Catmull-Rom calculation
+    // t is between 0 and 1 (distance between p1 and p2)
+    let catmull_rom = |p0: f64, p1: f64, p2: f64, p3: f64, t: f64| -> f64 {
+        let t2 = t * t;
+        let t3 = t2 * t;
+        0.5 * ((2.0 * p1)
+            + (-p0 + p2) * t
+            + (2.0 * p0 - 5.0 * p1 + 4.0 * p2 - p3) * t2
+            + (-p0 + 3.0 * p1 - 3.0 * p2 + p3) * t3)
+    };
+
+    // For each target x, find the interval [x_i, x_{i+1}]
+    // We can use binary search or caching since target_x is sorted.
+    let mut last_idx = 0;
+
+    for (out_val, &tx) in output.iter_mut().zip(target_x.iter()) {
+        // Clamp tx to range
+        let tx = tx.clamp(x_coords[0], x_coords[len - 1]);
+
+        // Find index i such that x_coords[i] <= tx < x_coords[i+1]
+        // Search forward from last_idx
+        while last_idx < len - 2 && x_coords[last_idx + 1] <= tx {
+            last_idx += 1;
+        }
+        let i = last_idx;
+
+        // Points indices: i-1, i, i+1, i+2
+        // Clamp indices to [0, len-1]
+        let p1_idx = i;
+        let p2_idx = (i + 1).min(len - 1);
+        let p0_idx = i.saturating_sub(1);
+        let p3_idx = (i + 2).min(len - 1);
+
+        let x1 = x_coords[p1_idx];
+        let x2 = x_coords[p2_idx];
+        let dist = x2 - x1;
+
+        let val = if dist.abs() < 1e-6 {
+            y_values[p1_idx].to_f64().unwrap_or(0.0)
+        } else {
+            let t = (tx - x1) / dist;
+
+            let y0 = y_values[p0_idx].to_f64().unwrap_or(0.0);
+            let y1 = y_values[p1_idx].to_f64().unwrap_or(0.0);
+            let y2 = y_values[p2_idx].to_f64().unwrap_or(0.0);
+            let y3 = y_values[p3_idx].to_f64().unwrap_or(0.0);
+
+            catmull_rom(y0, y1, y2, y3, t)
+        };
+
+        *out_val = F::from_f64_c(val);
+    }
 }
 
 /// Debin a 2D array horizontally using iterative cubic spline interpolation.
@@ -314,6 +363,9 @@ pub fn debin_horizontal<F: Bm3dFloat>(
     // Iterative refinement
     let mut y_j = Array2::zeros((rows, target_width));
 
+    // Scratch buffer for row interpolation to avoid re-allocation
+    let mut row_buffer = vec![F::zero(); target_width];
+
     for iter in 0..iterations.max(1) {
         // Compute residual
         let r_j = if iter > 0 {
@@ -350,9 +402,11 @@ pub fn debin_horizontal<F: Bm3dFloat>(
             for r in 0..rows {
                 let row_values = normalized.row(r);
                 let row_slice = row_values.slice(s![..x1_trimmed.len()]);
-                let interpolated = cubic_spline_interpolate_row(&x1_trimmed, row_slice, &ix1);
 
-                for (c, &val) in interpolated.iter().enumerate() {
+                // Interpolate into reused buffer
+                cubic_spline_interpolate_row(&x1_trimmed, row_slice, &ix1, &mut row_buffer);
+
+                for (c, &val) in row_buffer.iter().enumerate() {
                     if c < target_width {
                         y_j[[r, c]] += val;
                     }
@@ -532,10 +586,10 @@ fn gaussian_filter_1d_vertical_internal<F: Bm3dFloat>(
     for c in 0..cols {
         for r in 0..rows {
             let mut sum = F::zero();
-            for k in 0..k_len {
+            for (k, &k_val) in kernel.iter().enumerate() {
                 let k_idx = k as isize - radius as isize;
                 let src_r = (r as isize + k_idx).clamp(0, (rows - 1) as isize);
-                sum += data[[src_r as usize, c]] * kernel[k];
+                sum += data[[src_r as usize, c]] * k_val;
             }
             output[[r, c]] = sum;
         }
@@ -552,10 +606,10 @@ fn convolve_1d_horizontal_internal<F: Bm3dFloat>(data: ArrayView2<F>, kernel: &[
     for r in 0..rows {
         for c in 0..cols {
             let mut sum = F::zero();
-            for k in 0..k_len {
+            for (k, &k_val) in kernel.iter().enumerate() {
                 let k_idx = k as isize - radius as isize;
                 let src_c = (c as isize + k_idx).clamp(0, (cols - 1) as isize);
-                sum += data[[r, src_c as usize]] * kernel[k];
+                sum += data[[r, src_c as usize]] * k_val;
             }
             output[[r, c]] = sum;
         }
@@ -568,7 +622,7 @@ fn compute_1d_median_filter<F: Bm3dFloat>(data: &[F], window: usize) -> Vec<F> {
     let mut result = vec![F::zero(); n];
     let half = window / 2;
 
-    for i in 0..n {
+    for (i, val) in result.iter_mut().enumerate() {
         let start = i.saturating_sub(half);
         let end = (i + half + 1).min(n);
         let mut slice = data[start..end].to_vec();
@@ -576,7 +630,7 @@ fn compute_1d_median_filter<F: Bm3dFloat>(data: &[F], window: usize) -> Vec<F> {
         slice.select_nth_unstable_by(mid, |a, b| {
             a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)
         });
-        result[i] = slice[mid];
+        *val = slice[mid];
     }
     result
 }
@@ -665,8 +719,8 @@ pub fn multiscale_bm3d_streak_removal<F: Bm3dFloat>(
     let (rows, cols) = sinogram.dim();
 
     // === GLOBAL VARIANCE MAP & NOISE ESTIMATION (SCALE 0 TRUTH) ===
-    // Estimate sigma from the original input to establish a reliable noise floor.
     let estimated_global = estimate_noise_sigma_robust(sinogram);
+
     let sigma_global = if config.bm3d_config.sigma_random > F::from_f64_c(1e-6) {
         config.bm3d_config.sigma_random
     } else {
@@ -753,6 +807,14 @@ pub fn multiscale_bm3d_streak_removal<F: Bm3dFloat>(
     // Normalization is ONLY applied immediately before/after BM3D call.
     let mut denoised: Option<Array2<F>> = None;
 
+    // Create FFT plans once used for all scales
+    // Since patch_size and max_matches don't change across scales, we can reuse this.
+    // This removes the ~30-40ms overhead per scale.
+    let plans = crate::pipeline::Bm3dPlans::new(
+        config.bm3d_config.patch_size,
+        config.bm3d_config.max_matches,
+    );
+
     for scale in (0..=num_scales).rev() {
         // Get working image at this scale (in original scaled space)
         let img = pyramid_work[scale].clone();
@@ -796,6 +858,7 @@ pub fn multiscale_bm3d_streak_removal<F: Bm3dFloat>(
                 // Add residual to finer scale's original (both now in same space)
                 pyramid_work[scale - 1] = &pyramid_orig[scale - 1] + &adjusted_residual;
             }
+
             denoised = Some(img);
             continue;
         }
@@ -806,13 +869,17 @@ pub fn multiscale_bm3d_streak_removal<F: Bm3dFloat>(
         let mut scale_config = config.bm3d_config.clone();
         scale_config.threshold = config.threshold * config.filter_strength;
 
+        // Optimization: Scale down search window for coarse levels
+        // A fixed 24px window is huge on a 64px wide image.
+        // We scale it roughly by 2^scale, but keep a safety floor of 8.
+        let scaled_window = (config.bm3d_config.search_window >> scale).max(8);
+        scale_config.search_window = scaled_window;
+
         // === NORMALIZE only for BM3D call ===
         let img_normalized = img.mapv(|x| x / norm_factor);
 
         // === ADAPTIVE SIGMA ESTIMATION ===
         // Revert to per-scale robust estimation.
-        // Even if this estimates high sigma, our Residual Filtering (below)
-        // prevents structural damage from propagating.
         let estimated_sigma = estimate_noise_sigma_robust(img_normalized.view());
 
         // Use estimated sigma for BM3D, with a minimum to avoid numerical issues
@@ -823,10 +890,11 @@ pub fn multiscale_bm3d_streak_removal<F: Bm3dFloat>(
         }
 
         // Denoise normalized image
-        let den_normalized = bm3d_ring_artifact_removal(
+        let den_normalized = bm3d_ring_artifact_removal_with_plans(
             img_normalized.view(),
             RingRemovalMode::Streak,
             &scale_config,
+            &plans,
         )?;
 
         // === DENORMALIZE immediately after BM3D ===
@@ -881,9 +949,9 @@ pub fn multiscale_bm3d_streak_removal<F: Bm3dFloat>(
                 let start_idx = c * bin_size;
                 let end_idx = (start_idx + bin_size).min(cols);
                 let mut max_fine_var = F::zero();
-                for i in start_idx..end_idx {
-                    if fine_col_vars[i] > max_fine_var {
-                        max_fine_var = fine_col_vars[i];
+                for &val in &fine_col_vars[start_idx..end_idx] {
+                    if val > max_fine_var {
+                        max_fine_var = val;
                     }
                 }
 
@@ -933,6 +1001,7 @@ pub fn multiscale_bm3d_streak_removal<F: Bm3dFloat>(
 
             pyramid_work[scale - 1] = &pyramid_orig[scale - 1] + &adjusted_residual;
         }
+
         denoised = Some(den);
     }
 
@@ -995,9 +1064,8 @@ pub fn multiscale_bm3d_streak_removal<F: Bm3dFloat>(
             // Structural walls produce clusters > 40px.
             if width > 20 && peak_mag > mag_threshold_wall {
                 // It is a Wall. Zero out the correction.
-                for i in start..end {
-                    diff_profile[i] = F::zero();
-                }
+                // It is a Wall. Zero out the correction.
+                diff_profile[start..end].fill(F::zero());
             }
 
             c = end;
@@ -1230,7 +1298,7 @@ mod tests {
         assert!(config.num_scales.is_none());
         assert!(approx_eq(config.filter_strength, 1.0, 1e-6));
         assert!(approx_eq(config.threshold, 3.5, 1e-6));
-        assert_eq!(config.debin_iterations, 30);
+        assert_eq!(config.debin_iterations, 10);
     }
 
     #[test]

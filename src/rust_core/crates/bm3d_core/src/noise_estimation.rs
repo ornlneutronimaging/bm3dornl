@@ -75,10 +75,10 @@ fn gaussian_filter_1d_vertical<F: Bm3dFloat>(data: ArrayView2<F>, kernel: &[F]) 
     for c in 0..cols {
         for r in 0..rows {
             let mut sum = F::zero();
-            for k in 0..k_len {
+            for (k, &k_val) in kernel.iter().enumerate() {
                 let k_idx = k as isize - radius as isize;
                 let src_r = (r as isize + k_idx).clamp(0, (rows - 1) as isize);
-                sum += data[[src_r as usize, c]] * kernel[k];
+                sum += data[[src_r as usize, c]] * k_val;
             }
             output[[r, c]] = sum;
         }
@@ -95,10 +95,10 @@ fn convolve_1d_horizontal<F: Bm3dFloat>(data: ArrayView2<F>, kernel: &[F]) -> Ar
     for r in 0..rows {
         for c in 0..cols {
             let mut sum = F::zero();
-            for k in 0..k_len {
+            for (k, &k_val) in kernel.iter().enumerate() {
                 let k_idx = k as isize - radius as isize;
                 let src_c = (c as isize + k_idx).clamp(0, (cols - 1) as isize);
-                sum += data[[r, src_c as usize]] * kernel[k];
+                sum += data[[r, src_c as usize]] * k_val;
             }
             output[[r, c]] = sum;
         }

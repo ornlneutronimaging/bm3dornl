@@ -30,6 +30,7 @@ pub fn bm3d_hard_thresholding<'py>(
     search_window: usize,
     max_matches: usize,
 ) -> PyResult<Bound<'py, PyArray2<f32>>> {
+    let plans = bm3d_core::pipeline::Bm3dPlans::new(patch_size, max_matches);
     let output = run_bm3d_step(
         input_noisy.as_array(),
         input_pilot.as_array(),
@@ -42,6 +43,7 @@ pub fn bm3d_hard_thresholding<'py>(
         step_size,
         search_window,
         max_matches,
+        &plans,
     )
     .map_err(pyo3::exceptions::PyValueError::new_err)?;
     Ok(output.to_pyarray(py))
@@ -62,6 +64,7 @@ pub fn bm3d_wiener_filtering<'py>(
     search_window: usize,
     max_matches: usize,
 ) -> PyResult<Bound<'py, PyArray2<f32>>> {
+    let plans = bm3d_core::pipeline::Bm3dPlans::new(patch_size, max_matches);
     let output = run_bm3d_step(
         input_noisy.as_array(),
         input_pilot.as_array(),
@@ -74,6 +77,7 @@ pub fn bm3d_wiener_filtering<'py>(
         step_size,
         search_window,
         max_matches,
+        &plans,
     )
     .map_err(pyo3::exceptions::PyValueError::new_err)?;
     Ok(output.to_pyarray(py))
@@ -95,6 +99,7 @@ pub fn bm3d_hard_thresholding_stack<'py>(
     search_window: usize,
     max_matches: usize,
 ) -> PyResult<Bound<'py, PyArray3<f32>>> {
+    let plans = bm3d_core::pipeline::Bm3dPlans::new(patch_size, max_matches);
     let output = run_bm3d_step_stack(
         input_noisy.as_array(),
         input_pilot.as_array(),
@@ -107,6 +112,7 @@ pub fn bm3d_hard_thresholding_stack<'py>(
         step_size,
         search_window,
         max_matches,
+        &plans,
     )
     .map_err(pyo3::exceptions::PyValueError::new_err)?;
     Ok(output.to_pyarray(py))
@@ -127,6 +133,7 @@ pub fn bm3d_wiener_filtering_stack<'py>(
     search_window: usize,
     max_matches: usize,
 ) -> PyResult<Bound<'py, PyArray3<f32>>> {
+    let plans = bm3d_core::pipeline::Bm3dPlans::new(patch_size, max_matches);
     let output = run_bm3d_step_stack(
         input_noisy.as_array(),
         input_pilot.as_array(),
@@ -139,6 +146,7 @@ pub fn bm3d_wiener_filtering_stack<'py>(
         step_size,
         search_window,
         max_matches,
+        &plans,
     )
     .map_err(pyo3::exceptions::PyValueError::new_err)?;
     Ok(output.to_pyarray(py))
@@ -199,6 +207,7 @@ pub fn bm3d_hard_thresholding_f64<'py>(
     search_window: usize,
     max_matches: usize,
 ) -> PyResult<Bound<'py, PyArray2<f64>>> {
+    let plans = bm3d_core::pipeline::Bm3dPlans::new(patch_size, max_matches);
     let output = run_bm3d_step(
         input_noisy.as_array(),
         input_pilot.as_array(),
@@ -211,6 +220,7 @@ pub fn bm3d_hard_thresholding_f64<'py>(
         step_size,
         search_window,
         max_matches,
+        &plans,
     )
     .map_err(pyo3::exceptions::PyValueError::new_err)?;
     Ok(output.to_pyarray(py))
@@ -231,6 +241,7 @@ pub fn bm3d_wiener_filtering_f64<'py>(
     search_window: usize,
     max_matches: usize,
 ) -> PyResult<Bound<'py, PyArray2<f64>>> {
+    let plans = bm3d_core::pipeline::Bm3dPlans::new(patch_size, max_matches);
     let output = run_bm3d_step(
         input_noisy.as_array(),
         input_pilot.as_array(),
@@ -243,6 +254,7 @@ pub fn bm3d_wiener_filtering_f64<'py>(
         step_size,
         search_window,
         max_matches,
+        &plans,
     )
     .map_err(pyo3::exceptions::PyValueError::new_err)?;
     Ok(output.to_pyarray(py))
@@ -264,6 +276,7 @@ pub fn bm3d_hard_thresholding_stack_f64<'py>(
     search_window: usize,
     max_matches: usize,
 ) -> PyResult<Bound<'py, PyArray3<f64>>> {
+    let plans = bm3d_core::pipeline::Bm3dPlans::new(patch_size, max_matches);
     let output = run_bm3d_step_stack(
         input_noisy.as_array(),
         input_pilot.as_array(),
@@ -276,6 +289,7 @@ pub fn bm3d_hard_thresholding_stack_f64<'py>(
         step_size,
         search_window,
         max_matches,
+        &plans,
     )
     .map_err(pyo3::exceptions::PyValueError::new_err)?;
     Ok(output.to_pyarray(py))
@@ -296,6 +310,7 @@ pub fn bm3d_wiener_filtering_stack_f64<'py>(
     search_window: usize,
     max_matches: usize,
 ) -> PyResult<Bound<'py, PyArray3<f64>>> {
+    let plans = bm3d_core::pipeline::Bm3dPlans::new(patch_size, max_matches);
     let output = run_bm3d_step_stack(
         input_noisy.as_array(),
         input_pilot.as_array(),
@@ -308,6 +323,7 @@ pub fn bm3d_wiener_filtering_stack_f64<'py>(
         step_size,
         search_window,
         max_matches,
+        &plans,
     )
     .map_err(pyo3::exceptions::PyValueError::new_err)?;
     Ok(output.to_pyarray(py))

@@ -28,7 +28,7 @@ const AGGREGATION_EPSILON: f64 = 1e-6;
 
 /// Minimum chunk length for Rayon parallel iteration.
 /// Tuned for good load balancing on typical workloads.
-const RAYON_MIN_CHUNK_LEN: usize = 2048;
+const RAYON_MIN_CHUNK_LEN: usize = 64;
 
 /// Patch size that triggers the fast Hadamard transform path.
 /// Walsh-Hadamard Transform is only implemented for 8x8 patches.
@@ -538,6 +538,7 @@ pub fn run_bm3d_step<F: Bm3dFloat>(
     step_size: usize,
     search_window: usize,
     max_matches: usize,
+    plans: &Bm3dPlans<F>,
 ) -> Result<Array2<F>, String> {
     if input_pilot.dim() != input_noisy.dim() {
         return Err(format!(
@@ -554,7 +555,6 @@ pub fn run_bm3d_step<F: Bm3dFloat>(
         ));
     }
 
-    let plans = Bm3dPlans::new(patch_size, max_matches);
     Ok(run_bm3d_kernel(
         input_noisy,
         input_pilot,
@@ -567,7 +567,7 @@ pub fn run_bm3d_step<F: Bm3dFloat>(
         step_size,
         search_window,
         max_matches,
-        &plans,
+        plans,
     ))
 }
 
@@ -585,6 +585,7 @@ pub fn run_bm3d_step_stack<F: Bm3dFloat>(
     step_size: usize,
     search_window: usize,
     max_matches: usize,
+    plans: &Bm3dPlans<F>,
 ) -> Result<Array3<F>, String> {
     let (n, rows, cols) = input_noisy.dim();
     if input_pilot.dim() != (n, rows, cols) {
@@ -601,8 +602,6 @@ pub fn run_bm3d_step_stack<F: Bm3dFloat>(
             sigma_map.dim()
         ));
     }
-
-    let plans = Bm3dPlans::new(patch_size, max_matches);
 
     let results: Vec<Array2<F>> = (0..n)
         .into_par_iter()
@@ -627,7 +626,7 @@ pub fn run_bm3d_step_stack<F: Bm3dFloat>(
                 step_size,
                 search_window,
                 max_matches,
-                &plans,
+                plans,
             )
         })
         .collect();
@@ -772,6 +771,7 @@ mod tests {
         let image = random_matrix(32, 32, 12345);
         let sigma_psd = dummy_sigma_psd();
         let sigma_map = dummy_sigma_map_2d();
+        let plans = Bm3dPlans::new(TEST_PATCH_SIZE, TEST_MAX_MATCHES);
 
         let output = run_bm3d_step(
             image.view(),
@@ -785,6 +785,7 @@ mod tests {
             TEST_STEP_SIZE,
             TEST_SEARCH_WINDOW,
             TEST_MAX_MATCHES,
+            &plans,
         )
         .unwrap();
 
@@ -801,6 +802,7 @@ mod tests {
         let image = random_matrix(32, 32, 54321);
         let sigma_psd = dummy_sigma_psd();
         let sigma_map = dummy_sigma_map_2d();
+        let plans = Bm3dPlans::new(TEST_PATCH_SIZE, TEST_MAX_MATCHES);
 
         let output = run_bm3d_step(
             image.view(),
@@ -814,6 +816,7 @@ mod tests {
             TEST_STEP_SIZE,
             TEST_SEARCH_WINDOW,
             TEST_MAX_MATCHES,
+            &plans,
         )
         .unwrap();
 
@@ -829,6 +832,7 @@ mod tests {
         let stack = random_stack(4, 32, 32, 11111);
         let sigma_psd = dummy_sigma_psd();
         let sigma_map = dummy_sigma_map_3d();
+        let plans = Bm3dPlans::new(TEST_PATCH_SIZE, TEST_MAX_MATCHES);
 
         let output = run_bm3d_step_stack(
             stack.view(),
@@ -842,6 +846,7 @@ mod tests {
             TEST_STEP_SIZE,
             TEST_SEARCH_WINDOW,
             TEST_MAX_MATCHES,
+            &plans,
         )
         .unwrap();
 
@@ -857,6 +862,7 @@ mod tests {
         let stack = random_stack(4, 32, 32, 22222);
         let sigma_psd = dummy_sigma_psd();
         let sigma_map = dummy_sigma_map_3d();
+        let plans = Bm3dPlans::new(TEST_PATCH_SIZE, TEST_MAX_MATCHES);
 
         let output = run_bm3d_step_stack(
             stack.view(),
@@ -870,6 +876,7 @@ mod tests {
             TEST_STEP_SIZE,
             TEST_SEARCH_WINDOW,
             TEST_MAX_MATCHES,
+            &plans,
         )
         .unwrap();
 
@@ -888,6 +895,7 @@ mod tests {
             let image = random_matrix(rows, cols, (rows * 100 + cols) as u64);
             let sigma_psd = dummy_sigma_psd();
             let sigma_map = dummy_sigma_map_2d();
+            let plans = Bm3dPlans::new(TEST_PATCH_SIZE, TEST_MAX_MATCHES);
 
             let output = run_bm3d_step(
                 image.view(),
@@ -901,6 +909,7 @@ mod tests {
                 TEST_STEP_SIZE,
                 TEST_SEARCH_WINDOW,
                 TEST_MAX_MATCHES,
+                &plans,
             )
             .unwrap();
 
@@ -919,6 +928,7 @@ mod tests {
         let image = random_matrix(40, 56, 33333);
         let sigma_psd = dummy_sigma_psd();
         let sigma_map = dummy_sigma_map_2d();
+        let plans = Bm3dPlans::new(TEST_PATCH_SIZE, TEST_MAX_MATCHES);
 
         let output = run_bm3d_step(
             image.view(),
@@ -932,6 +942,7 @@ mod tests {
             TEST_STEP_SIZE,
             TEST_SEARCH_WINDOW,
             TEST_MAX_MATCHES,
+            &plans,
         )
         .unwrap();
 
@@ -943,6 +954,7 @@ mod tests {
         let stack = random_stack(5, 40, 48, 44444);
         let sigma_psd = dummy_sigma_psd();
         let sigma_map = dummy_sigma_map_3d();
+        let plans = Bm3dPlans::new(TEST_PATCH_SIZE, TEST_MAX_MATCHES);
 
         let output = run_bm3d_step_stack(
             stack.view(),
@@ -956,6 +968,7 @@ mod tests {
             TEST_STEP_SIZE,
             TEST_SEARCH_WINDOW,
             TEST_MAX_MATCHES,
+            &plans,
         )
         .unwrap();
 
@@ -970,6 +983,7 @@ mod tests {
         let noisy = add_gaussian_noise(&clean, 0.1, 66666);
         let sigma_psd = dummy_sigma_psd();
         let sigma_map = dummy_sigma_map_2d();
+        let plans = Bm3dPlans::new(TEST_PATCH_SIZE, TEST_MAX_MATCHES);
 
         let output = run_bm3d_step(
             noisy.view(),
@@ -983,6 +997,7 @@ mod tests {
             TEST_STEP_SIZE,
             TEST_SEARCH_WINDOW,
             TEST_MAX_MATCHES,
+            &plans,
         )
         .unwrap();
 
@@ -1006,6 +1021,7 @@ mod tests {
         let noisy = add_gaussian_noise(&clean, 0.1, 88888);
         let sigma_psd = dummy_sigma_psd();
         let sigma_map = dummy_sigma_map_2d();
+        let plans = Bm3dPlans::new(8, 16);
 
         let output = run_bm3d_step(
             noisy.view(),
@@ -1019,6 +1035,7 @@ mod tests {
             2,   // smaller step for better coverage
             24,  // larger search window
             16,  // more matches
+            &plans,
         )
         .unwrap();
 
@@ -1042,6 +1059,7 @@ mod tests {
         let image = Array2::<f32>::from_elem((32, 32), constant_val);
         let sigma_psd = dummy_sigma_psd();
         let sigma_map = dummy_sigma_map_2d();
+        let plans = Bm3dPlans::new(TEST_PATCH_SIZE, TEST_MAX_MATCHES);
 
         let output = run_bm3d_step(
             image.view(),
@@ -1055,6 +1073,7 @@ mod tests {
             TEST_STEP_SIZE,
             TEST_SEARCH_WINDOW,
             TEST_MAX_MATCHES,
+            &plans,
         )
         .unwrap();
 
@@ -1077,6 +1096,7 @@ mod tests {
         let image = random_matrix(32, 32, 99999);
         let sigma_psd = dummy_sigma_psd();
         let sigma_map = dummy_sigma_map_2d();
+        let plans = Bm3dPlans::new(TEST_PATCH_SIZE, TEST_MAX_MATCHES);
 
         let output = run_bm3d_step(
             image.view(),
@@ -1090,6 +1110,7 @@ mod tests {
             TEST_STEP_SIZE,
             TEST_SEARCH_WINDOW,
             TEST_MAX_MATCHES,
+            &plans,
         )
         .unwrap();
 
@@ -1113,6 +1134,7 @@ mod tests {
         let noisy = add_gaussian_noise_stack(&clean, 0.1, 33344);
         let sigma_psd = dummy_sigma_psd();
         let sigma_map = dummy_sigma_map_3d();
+        let plans = Bm3dPlans::new(8, 16);
 
         let output = run_bm3d_step_stack(
             noisy.view(),
@@ -1126,6 +1148,7 @@ mod tests {
             2,
             24,
             16,
+            &plans,
         )
         .unwrap();
 
@@ -1150,6 +1173,7 @@ mod tests {
             let image = random_matrix(32, 32, (patch_size * 1000) as u64);
             let sigma_psd = dummy_sigma_psd();
             let sigma_map = dummy_sigma_map_2d();
+            let plans = Bm3dPlans::new(patch_size, TEST_MAX_MATCHES);
 
             let output = run_bm3d_step(
                 image.view(),
@@ -1163,6 +1187,7 @@ mod tests {
                 patch_size / 2, // step = patch/2
                 TEST_SEARCH_WINDOW,
                 TEST_MAX_MATCHES,
+                &plans,
             )
             .unwrap();
 
@@ -1187,6 +1212,8 @@ mod tests {
         let sigma_map = dummy_sigma_map_2d();
 
         for search_window in [8, 16, 24] {
+            let plans = Bm3dPlans::new(TEST_PATCH_SIZE, TEST_MAX_MATCHES);
+
             let output = run_bm3d_step(
                 image.view(),
                 image.view(),
@@ -1199,6 +1226,7 @@ mod tests {
                 TEST_STEP_SIZE,
                 search_window,
                 TEST_MAX_MATCHES,
+                &plans,
             )
             .unwrap();
 
@@ -1218,6 +1246,8 @@ mod tests {
         let sigma_map = dummy_sigma_map_2d();
 
         for max_matches in [4, 8, 16] {
+            let plans = Bm3dPlans::new(TEST_PATCH_SIZE, max_matches);
+
             let output = run_bm3d_step(
                 image.view(),
                 image.view(),
@@ -1230,6 +1260,7 @@ mod tests {
                 TEST_STEP_SIZE,
                 TEST_SEARCH_WINDOW,
                 max_matches,
+                &plans,
             )
             .unwrap();
 
@@ -1251,6 +1282,7 @@ mod tests {
         let image = random_matrix(min_size, min_size, 99911);
         let sigma_psd = dummy_sigma_psd();
         let sigma_map = dummy_sigma_map_2d();
+        let plans = Bm3dPlans::new(TEST_PATCH_SIZE, 4);
 
         let output = run_bm3d_step(
             image.view(),
@@ -1264,6 +1296,7 @@ mod tests {
             1,               // step=1 for small image
             TEST_PATCH_SIZE, // small search window
             4,               // fewer matches
+            &plans,
         )
         .unwrap();
 
@@ -1276,6 +1309,7 @@ mod tests {
         let stack = random_stack(1, 32, 32, 88899);
         let sigma_psd = dummy_sigma_psd();
         let sigma_map = dummy_sigma_map_3d();
+        let plans = Bm3dPlans::new(TEST_PATCH_SIZE, TEST_MAX_MATCHES);
 
         let output = run_bm3d_step_stack(
             stack.view(),
@@ -1289,6 +1323,7 @@ mod tests {
             TEST_STEP_SIZE,
             TEST_SEARCH_WINDOW,
             TEST_MAX_MATCHES,
+            &plans,
         )
         .unwrap();
 
@@ -1302,6 +1337,7 @@ mod tests {
         let image = random_matrix(32, 64, 12399);
         let sigma_psd = dummy_sigma_psd();
         let sigma_map = dummy_sigma_map_2d();
+        let plans = Bm3dPlans::new(TEST_PATCH_SIZE, TEST_MAX_MATCHES);
 
         let output = run_bm3d_step(
             image.view(),
@@ -1315,6 +1351,7 @@ mod tests {
             TEST_STEP_SIZE,
             TEST_SEARCH_WINDOW,
             TEST_MAX_MATCHES,
+            &plans,
         )
         .unwrap();
 
@@ -1332,6 +1369,8 @@ mod tests {
         let sigma_psd = dummy_sigma_psd();
         let sigma_map = dummy_sigma_map_2d();
 
+        let plans = Bm3dPlans::new(8, 16);
+
         // First pass: HT to get pilot estimate
         let pilot = run_bm3d_step(
             noisy.view(),
@@ -1345,6 +1384,7 @@ mod tests {
             2,
             24,
             16,
+            &plans,
         )
         .unwrap();
 
@@ -1361,6 +1401,7 @@ mod tests {
             2,
             24,
             16,
+            &plans,
         )
         .unwrap();
 
@@ -1390,6 +1431,8 @@ mod tests {
         let sigma_map = dummy_sigma_map_2d();
 
         for step_size in [1, 2, 4, 8] {
+            let plans = Bm3dPlans::new(TEST_PATCH_SIZE, TEST_MAX_MATCHES);
+
             let output = run_bm3d_step(
                 image.view(),
                 image.view(),
@@ -1402,6 +1445,7 @@ mod tests {
                 step_size,
                 TEST_SEARCH_WINDOW,
                 TEST_MAX_MATCHES,
+                &plans,
             )
             .unwrap();
 

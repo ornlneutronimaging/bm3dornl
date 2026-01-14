@@ -132,9 +132,7 @@ def bm3d_ring_artifact_removal(
     """
     # Validate multiscale + mode combination
     if multiscale and mode != "streak":
-        raise ValueError(
-            f"multiscale=True only supports mode='streak', got mode='{mode}'"
-        )
+        raise ValueError(f"multiscale=True only supports mode='streak', got mode='{mode}'")
 
     # Emit experimental warning for multiscale mode
     if multiscale:
@@ -218,9 +216,7 @@ def bm3d_ring_artifact_removal(
 
     # --- Spatially Adaptive BM3D Setup Helpers ---
     def compute_slice_map(slice_img):
-        streak_profile_rough = estimate_streak_profile(
-            slice_img, sigma_smooth=5.0, iterations=1
-        )
+        streak_profile_rough = estimate_streak_profile(slice_img, sigma_smooth=5.0, iterations=1)
         profile_smooth = gaussian_filter1d(streak_profile_rough, sigma_map_smoothing)
         streak_signal = streak_profile_rough - profile_smooth
         sigma_streak_1d = np.abs(streak_signal).astype(np.float32)
