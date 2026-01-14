@@ -89,6 +89,7 @@ matplotlib = ">=3.10.8,<4"
 jupyter = ">=1.1.1,<2"
 hdf5 = ">=1.14.0"
 pkg-config = "*"
+scipy = ">=1.17.0,<2"
 
 [tool.pixi.activation.env]
 HDF5_DIR = "$CONDA_PREFIX"

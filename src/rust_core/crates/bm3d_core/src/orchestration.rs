@@ -15,6 +15,7 @@
 use ndarray::{Array1, Array2, ArrayView2};
 
 use crate::float_trait::Bm3dFloat;
+use crate::noise_estimation::estimate_noise_sigma;
 use crate::pipeline::{run_bm3d_step, Bm3dMode};
 use crate::streak::{estimate_streak_profile_impl, gaussian_blur_1d};
 
@@ -22,8 +23,8 @@ use crate::streak::{estimate_streak_profile_impl, gaussian_blur_1d};
 // Constants
 // =============================================================================
 
-/// Default random noise standard deviation
-const DEFAULT_SIGMA_RANDOM: f64 = 0.1;
+/// Default random noise standard deviation (0.0 = auto-estimate)
+const DEFAULT_SIGMA_RANDOM: f64 = 0.0;
 
 /// Default patch size for block matching
 const DEFAULT_PATCH_SIZE: usize = 8;
@@ -355,6 +356,17 @@ pub fn bm3d_ring_artifact_removal<F: Bm3dFloat>(
         );
     }
 
+    // Step 5b: Auto-estimate sigma if not provided
+    // If sigma_random is effectively 0, estimate from data.
+    let sigma_random = if config.sigma_random <= F::from_f64_c(1e-6) {
+        // Use z_norm for estimation (it has streaks removed if in Streak mode)
+        // Note: If in Streak mode, we estimate noise AFTER streak subtraction,
+        // which is correct as we want the residual noise level.
+        estimate_noise_sigma(z_norm.view())
+    } else {
+        config.sigma_random
+    };
+
     // Step 6: BM3D Pass 1 - Hard Thresholding
     let yhat_ht = run_bm3d_step(
         z_norm.view(),
@@ -362,7 +374,7 @@ pub fn bm3d_ring_artifact_removal<F: Bm3dFloat>(
         Bm3dMode::HardThreshold,
         sigma_psd.view(),
         sigma_map.view(),
-        config.sigma_random,
+        sigma_random,
         config.threshold,
         config.patch_size,
         config.step_size,
@@ -377,7 +389,7 @@ pub fn bm3d_ring_artifact_removal<F: Bm3dFloat>(
         Bm3dMode::Wiener,
         sigma_psd.view(),
         sigma_map.view(),
-        config.sigma_random,
+        sigma_random,
         F::zero(), // threshold not used for Wiener
         config.patch_size,
         config.step_size,
@@ -441,7 +453,7 @@ mod tests {
     fn test_default_config_matches_spec() {
         let config: Bm3dConfig<f32> = Bm3dConfig::default();
 
-        assert!(approx_eq(config.sigma_random, 0.1, 1e-6));
+        assert!(approx_eq(config.sigma_random, 0.0, 1e-6));
         assert_eq!(config.patch_size, 8);
         assert_eq!(config.step_size, 4);
         assert_eq!(config.search_window, 24);
@@ -837,5 +849,33 @@ mod tests {
 
             assert!(result.is_ok(), "Failed for sigma={}", sigma);
         }
+    }
+    #[test]
+    fn test_auto_sigma_estimation() {
+        // Create a noisy image
+        let mut rng = SimpleLcg::new(999);
+        let image = Array2::from_shape_fn((64, 64), |_| rng.next_f32());
+
+        // Config with sigma=0.0 to trigger auto-estimation
+        let mut config = Bm3dConfig::default();
+        config.sigma_random = 0.0;
+
+        let result = bm3d_ring_artifact_removal(image.view(), RingRemovalMode::Generic, &config);
+
+        assert!(result.is_ok(), "Auto-estimation should succeed");
+        let output = result.unwrap();
+        assert_eq!(output.dim(), image.dim());
+
+        // Ensure processed image isn't identical to input (denoising occurred)
+        let diff: f32 = output
+            .iter()
+            .zip(image.iter())
+            .map(|(a, b)| (a - b).abs())
+            .sum();
+        assert!(
+            diff > 0.1,
+            "Denoising should have occurred (diff: {})",
+            diff
+        );
     }
 }

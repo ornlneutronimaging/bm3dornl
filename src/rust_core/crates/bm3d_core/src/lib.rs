@@ -13,6 +13,7 @@ pub mod block_matching;
 pub mod filtering;
 pub mod float_trait;
 pub mod multiscale;
+pub mod noise_estimation;
 pub mod orchestration;
 pub mod pipeline;
 pub mod streak;

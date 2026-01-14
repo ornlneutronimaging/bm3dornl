@@ -368,7 +368,7 @@ pub fn estimate_streak_profile_py_f64<'py>(
 /// mode : str
 ///     Processing mode: "generic" or "streak".
 /// sigma_random : float, optional
-///     Random noise std dev. Default: 0.1
+///     Random noise std dev. Default: 0.0 (auto-estimate)
 /// patch_size : int, optional
 ///     Block matching patch size. Default: 8
 /// step_size : int, optional
