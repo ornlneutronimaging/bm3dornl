@@ -280,15 +280,21 @@ impl App {
         if let Some(vol) = &self.volume {
             let raw_data = vol.raw_data().to_owned();
             let mode = self.bm3d_params.mode;
-            let config = self.bm3d_params.to_config();
+            let config = self.bm3d_params.to_multiscale_config();
+            let use_multiscale = self.bm3d_params.multiscale;
 
             // Use the processing axis from parameters (configurable in Advanced).
             // Default is axis 1 (Y) for standard tomography data [angles, Y, X].
             // Each slice perpendicular to this axis is processed as a sinogram.
             let processing_axis = self.bm3d_params.processing_axis;
 
-            self.processing_manager
-                .start_processing(raw_data, mode, config, processing_axis);
+            self.processing_manager.start_processing(
+                raw_data,
+                mode,
+                config,
+                use_multiscale,
+                processing_axis,
+            );
         }
     }
 

@@ -166,3 +166,7 @@ dev*.ipynb
 # pixi environments
 .pixi/*
 !.pixi/config.toml
+# ignore experiments
+experiments/*
+# ignore reserach (local only)
+research/*
