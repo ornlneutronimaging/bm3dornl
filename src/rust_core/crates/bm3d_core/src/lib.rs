@@ -17,7 +17,9 @@ pub mod noise_estimation;
 pub mod orchestration;
 pub mod pipeline;
 pub mod streak;
+pub mod svdmg;
 pub mod transforms;
+pub mod utils;
 
 // Re-export commonly used types at the crate root
 pub use block_matching::PatchMatch;

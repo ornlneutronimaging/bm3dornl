@@ -81,6 +81,9 @@ pub enum RingRemovalMode {
     /// Streak pre-subtraction + anisotropic PSD.
     /// Designed for ring artifact removal in sinograms.
     Streak,
+    /// SVD-Median-Gated algorithm.
+    /// Uses low-rank approximation to identify and remove vertical streaks.
+    SvdMg,
 }
 
 /// Configuration for BM3D ring artifact removal.
@@ -319,6 +322,10 @@ pub fn bm3d_ring_artifact_removal_with_plans<F: Bm3dFloat>(
         RingRemovalMode::Streak => {
             // Anisotropic PSD for streak mode
             construct_psd(config.patch_size, config.psd_width)
+        }
+        RingRemovalMode::SvdMg => {
+            // SVD-MG: No PSD needed (handing off to separate logic externally or default behavior)
+            Array2::zeros((1, 1))
         }
     };
 

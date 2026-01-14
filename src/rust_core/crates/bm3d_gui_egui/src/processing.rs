@@ -1,6 +1,6 @@
 use bm3d_core::{
-    bm3d_ring_artifact_removal, multiscale_bm3d_streak_removal, Bm3dConfig, MultiscaleConfig,
-    RingRemovalMode,
+    bm3d_ring_artifact_removal, multiscale_bm3d_streak_removal, svdmg::svd_mg_removal, Bm3dConfig,
+    MultiscaleConfig, RingRemovalMode,
 };
 use ndarray::{Array2, Array3, Axis};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -263,6 +263,13 @@ fn process_volume_worker(
                 } else {
                     bm3d_ring_artifact_removal(slice_owned.view(), mode, &config.bm3d_config)
                 }
+            }
+            RingRemovalMode::SvdMg => {
+                // SVD-MG requires f64 for precision
+                let slice_f64 = slice_owned.mapv(|x| x as f64);
+                let result_f64 = svd_mg_removal(slice_f64.view());
+                // Convert back to f32
+                Ok(result_f64.mapv(|x| x as f32))
             }
         };
 

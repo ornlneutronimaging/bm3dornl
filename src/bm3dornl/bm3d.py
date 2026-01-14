@@ -108,10 +108,6 @@ def bm3d_ring_artifact_removal(
         Number of debinning iterations (default 30).
 
 
-        .. warning::
-            This feature is experimental. It works well for wide ring artifacts
-            (>39 pixels) but may over-process regular sinograms. For most use
-            cases, the default single-scale mode (multiscale=False) is recommended.
     num_scales : int | None, optional
         Override automatic scale calculation for multi-scale mode.
         If None, uses floor(log2(width/40)). By default None.
@@ -134,16 +130,7 @@ def bm3d_ring_artifact_removal(
     if multiscale and mode != "streak":
         raise ValueError(f"multiscale=True only supports mode='streak', got mode='{mode}'")
 
-    # Emit experimental warning for multiscale mode
-    if multiscale:
-        warnings.warn(
-            "multiscale=True is experimental. It works well for wide ring "
-            "artifacts (>39 pixels) but may over-process regular sinograms. "
-            "For most use cases, the default single-scale mode "
-            "(multiscale=False) is recommended.",
-            UserWarning,
-            stacklevel=2,
-        )
+
 
     # Check Dimension
     is_stack = sinogram.ndim == 3

@@ -169,4 +169,4 @@ dev*.ipynb
 # ignore experiments
 experiments/*
 # ignore reserach (local only)
-research/*
+research*/**

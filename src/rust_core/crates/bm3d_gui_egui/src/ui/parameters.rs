@@ -97,12 +97,13 @@ impl Bm3dParameters {
         // Tier 1 - Simple parameters (always visible)
         ui.horizontal(|ui| {
             ui.label("Mode:")
-                .on_hover_text("Generic: Standard denoising for white noise\nStreak: Optimized for ring artifact removal in sinograms");
+                .on_hover_text("Generic: Standard denoising for white noise\nStreak: Optimized for ring artifact removal\nSVD-MG: Fast SVD-based destriping for subtle artifacts");
 
             egui::ComboBox::from_id_salt("bm3d_mode")
                 .selected_text(match self.mode {
                     RingRemovalMode::Generic => "Generic",
                     RingRemovalMode::Streak => "Streak",
+                    RingRemovalMode::SvdMg => "SVD-MG",
                 })
                 .show_ui(ui, |ui| {
                     if ui
@@ -117,10 +118,18 @@ impl Bm3dParameters {
                     {
                         changed = true;
                     }
+                    if ui
+                        .selectable_value(&mut self.mode, RingRemovalMode::SvdMg, "SVD-MG")
+                        .changed()
+                    {
+                        changed = true;
+                    }
                 });
         });
 
-        ui.horizontal(|ui| {
+        // Only show BM3D parameters if not in SVD-MG mode
+        if self.mode != RingRemovalMode::SvdMg {
+            ui.horizontal(|ui| {
             ui.label("Sigma:")
                 .on_hover_text("Noise level estimate (sigma_random). Higher values = stronger denoising.\nTypical range: 0.001 - 0.5\nSupports scientific notation (e.g., 5e-3)");
 
@@ -146,21 +155,21 @@ impl Bm3dParameters {
             });
         });
 
-        ui.add_space(5.0);
+            ui.add_space(5.0);
 
-        // Tier 2 - Advanced parameters (behind toggle)
-        ui.horizontal(|ui| {
-            if ui
-                .selectable_label(self.show_advanced, "⚙ Advanced")
-                .on_hover_text("Show advanced parameters for fine-tuning BM3D algorithm")
-                .clicked()
-            {
-                self.show_advanced = !self.show_advanced;
-            }
-        });
+            // Tier 2 - Advanced parameters (behind toggle)
+            ui.horizontal(|ui| {
+                if ui
+                    .selectable_label(self.show_advanced, "⚙ Advanced")
+                    .on_hover_text("Show advanced parameters for fine-tuning BM3D algorithm")
+                    .clicked()
+                {
+                    self.show_advanced = !self.show_advanced;
+                }
+            });
 
-        if self.show_advanced {
-            ui.indent("advanced_params", |ui| {
+            if self.show_advanced {
+                ui.indent("advanced_params", |ui| {
                 // Multi-scale toggle
                 ui.horizontal(|ui| {
                      ui.label("Multi-Scale:")
@@ -263,7 +272,8 @@ impl Bm3dParameters {
                     changed = true;
                 }
             });
-        }
+            }
+        } // End of !SvdMg check
 
         changed
     }

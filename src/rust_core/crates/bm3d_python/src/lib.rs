@@ -800,5 +800,40 @@ fn bm3d_rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(estimate_streak_profile_py_f64, m)?)?;
     m.add_function(wrap_pyfunction!(bm3d_ring_artifact_removal_2d_f64, m)?)?;
     m.add_function(wrap_pyfunction!(multiscale_bm3d_streak_removal_2d_f64, m)?)?;
+
+    // SVD-MG
+    m.add_function(wrap_pyfunction!(svd_mg_removal_py, m)?)?;
+    m.add_function(wrap_pyfunction!(svd_mg_removal_py_f64, m)?)?;
+
     Ok(())
+}
+
+// ============================================================================
+// SVD-Median-Gated Bindings
+// ============================================================================
+
+/// SVD-Median-Gated streak removal (f32).
+#[pyfunction]
+#[pyo3(name = "svd_mg_removal_rust")]
+pub fn svd_mg_removal_py<'py>(
+    py: Python<'py>,
+    sinogram: PyReadonlyArray2<'py, f32>,
+) -> PyResult<Bound<'py, PyArray2<f32>>> {
+    // Convert to f64 for high-precision SVD
+    let sinogram_f64 = sinogram.as_array().mapv(|x| x as f64);
+    let result_f64 = bm3d_core::svdmg::svd_mg_removal(sinogram_f64.view());
+    // Convert back to f32
+    let result_f32 = result_f64.mapv(|x| x as f32);
+    Ok(result_f32.to_pyarray(py))
+}
+
+/// SVD-Median-Gated streak removal (f64).
+#[pyfunction]
+#[pyo3(name = "svd_mg_removal_rust_f64")]
+pub fn svd_mg_removal_py_f64<'py>(
+    py: Python<'py>,
+    sinogram: PyReadonlyArray2<'py, f64>,
+) -> PyResult<Bound<'py, PyArray2<f64>>> {
+    let result = bm3d_core::svdmg::svd_mg_removal(sinogram.as_array());
+    Ok(result.to_pyarray(py))
 }

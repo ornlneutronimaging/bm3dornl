@@ -13,6 +13,7 @@
 //!
 //! This enables handling of wide streaks that single-scale BM3D cannot capture.
 
+use crate::utils::compute_1d_median_filter;
 use ndarray::{s, Array1, Array2, ArrayView1, ArrayView2};
 // use splines::{Interpolation, Key, Spline}; // Removed for optimization
 
@@ -617,23 +618,7 @@ fn convolve_1d_horizontal_internal<F: Bm3dFloat>(data: ArrayView2<F>, kernel: &[
     output
 }
 
-fn compute_1d_median_filter<F: Bm3dFloat>(data: &[F], window: usize) -> Vec<F> {
-    let n = data.len();
-    let mut result = vec![F::zero(); n];
-    let half = window / 2;
-
-    for (i, val) in result.iter_mut().enumerate() {
-        let start = i.saturating_sub(half);
-        let end = (i + half + 1).min(n);
-        let mut slice = data[start..end].to_vec();
-        let mid = slice.len() / 2;
-        slice.select_nth_unstable_by(mid, |a, b| {
-            a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)
-        });
-        *val = slice[mid];
-    }
-    result
-}
+// compute_1d_median_filter moved to utils.rs
 
 fn compute_mad_internal<F: Bm3dFloat>(data: ArrayView2<F>) -> F {
     let mut flat_data: Vec<F> = data.iter().cloned().collect();
