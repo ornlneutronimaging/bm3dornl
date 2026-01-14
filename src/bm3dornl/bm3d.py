@@ -99,8 +99,14 @@ def bm3d_ring_artifact_removal(
     sigma_map : np.ndarray | None, optional
         Optional pre-computed sigma map (3D processing only), by default None.
     multiscale : bool, optional
-        **[EXPERIMENTAL]** If True, use multi-scale BM3D for handling wide streaks.
-        Only supported with mode="streak". By default False.
+        Enable multi-scale processing for handling wide streaks (default False).
+    num_scales : int | None, optional
+        Number of scales for multi-scale pyramid. If None, automatic.
+    filter_strength : float, optional
+        Filtering strength multiplier for multi-scale mode (default 1.0).
+    debin_iterations : int, optional
+        Number of debinning iterations (default 30).
+
 
         .. warning::
             This feature is experimental. It works well for wide ring artifacts
@@ -162,6 +168,7 @@ def bm3d_ring_artifact_removal(
                 step_size=step_size,
                 search_window=search_window,
                 max_matches=max_matches,
+                sigma_random=float(sigma_random),
             )
         else:
             # Single-scale BM3D
@@ -201,6 +208,7 @@ def bm3d_ring_artifact_removal(
                 step_size=step_size,
                 search_window=search_window,
                 max_matches=max_matches,
+                sigma_random=float(sigma_random),
             )
         return output_result
 

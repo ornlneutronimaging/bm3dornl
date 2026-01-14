@@ -619,7 +619,13 @@ pub fn bm3d_ring_artifact_removal_2d_f64<'py>(
     patch_size = None,
     step_size = None,
     search_window = None,
-    max_matches = None
+    max_matches = None,
+    sigma_random = None,
+    streak_sigma_smooth = None,
+    streak_iterations = None,
+    sigma_map_smoothing = None,
+    streak_sigma_scale = None,
+    psd_width = None
 ))]
 #[allow(clippy::too_many_arguments)]
 pub fn multiscale_bm3d_streak_removal_2d<'py>(
@@ -633,6 +639,12 @@ pub fn multiscale_bm3d_streak_removal_2d<'py>(
     step_size: Option<usize>,
     search_window: Option<usize>,
     max_matches: Option<usize>,
+    sigma_random: Option<f32>,
+    streak_sigma_smooth: Option<f32>,
+    streak_iterations: Option<usize>,
+    sigma_map_smoothing: Option<f32>,
+    streak_sigma_scale: Option<f32>,
+    psd_width: Option<f32>,
 ) -> PyResult<Bound<'py, PyArray2<f32>>> {
     // Build config with defaults, using struct init syntax
     let default = MultiscaleConfig::<f32>::default();
@@ -648,6 +660,8 @@ pub fn multiscale_bm3d_streak_removal_2d<'py>(
     if let Some(v) = threshold {
         config.bm3d_config.threshold = v;
     }
+
+    // Propagate standard BM3D config
     if let Some(v) = patch_size {
         config.bm3d_config.patch_size = v;
     }
@@ -659,6 +673,24 @@ pub fn multiscale_bm3d_streak_removal_2d<'py>(
     }
     if let Some(v) = max_matches {
         config.bm3d_config.max_matches = v;
+    }
+    if let Some(v) = sigma_random {
+        config.bm3d_config.sigma_random = v;
+    }
+    if let Some(v) = streak_sigma_smooth {
+        config.bm3d_config.streak_sigma_smooth = v;
+    }
+    if let Some(v) = streak_iterations {
+        config.bm3d_config.streak_iterations = v;
+    }
+    if let Some(v) = sigma_map_smoothing {
+        config.bm3d_config.sigma_map_smoothing = v;
+    }
+    if let Some(v) = streak_sigma_scale {
+        config.bm3d_config.streak_sigma_scale = v;
+    }
+    if let Some(v) = psd_width {
+        config.bm3d_config.psd_width = v;
     }
 
     // Call Rust implementation
