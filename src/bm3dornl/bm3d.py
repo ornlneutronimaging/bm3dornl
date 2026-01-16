@@ -1,8 +1,6 @@
 #!/usr/bin/env python3
 """Denoising functions using Rust backend."""
 
-import warnings
-
 import numpy as np
 from scipy.ndimage import gaussian_filter1d
 from . import bm3d_rust
@@ -106,15 +104,6 @@ def bm3d_ring_artifact_removal(
         Filtering strength multiplier for multi-scale mode (default 1.0).
     debin_iterations : int, optional
         Number of debinning iterations (default 30).
-
-
-    num_scales : int | None, optional
-        Override automatic scale calculation for multi-scale mode.
-        If None, uses floor(log2(width/40)). By default None.
-    filter_strength : float, optional
-        Multiplier for BM3D filtering intensity (multi-scale only). By default 1.0.
-    debin_iterations : int, optional
-        Iterations for cubic spline debinning (multi-scale only). By default 30.
 
     Returns
     -------
