@@ -122,7 +122,7 @@ fn compute_vertical_energy_profile<F: Bm3dFloat>(
             // Combined weight: Keep Vertical AND Keep High Freq X
             let w_val = y_weight * x_weights[c];
             let w_complex = Complex::new(w_val, F::zero());
-            filtered_freq[[r, c]] = filtered_freq[[r, c]] * w_complex;
+            filtered_freq[[r, c]] *= w_complex;
         }
     }
 
@@ -136,7 +136,7 @@ fn compute_vertical_energy_profile<F: Bm3dFloat>(
     for c in 0..cols {
         let mut sum_abs = F::zero();
         for r in 0..rows {
-            sum_abs = sum_abs + spatial_filtered[[r, c]].abs();
+            sum_abs += spatial_filtered[[r, c]].abs();
         }
         energy_profile[c] = sum_abs * rows_f_inv;
     }
@@ -248,7 +248,7 @@ pub fn svd_mg_removal<F: Bm3dFloat>(
         let u_val = scaled_u[r];
         for c in 0..cols {
             let streak_val = u_val * v_streak[c];
-            corrected[[r, c]] = corrected[[r, c]] - streak_val;
+            corrected[[r, c]] -= streak_val;
         }
     }
 

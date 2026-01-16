@@ -1552,6 +1552,7 @@ fn compute_residual_kernel_shift<F: Bm3dFloat>(shift: usize) -> Vec<f64> {
 }
 
 #[cfg(test)]
+#[allow(clippy::print_stdout)]
 mod kernel_tests {
     use super::*;
 

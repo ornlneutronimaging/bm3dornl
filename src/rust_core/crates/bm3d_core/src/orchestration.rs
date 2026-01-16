@@ -65,9 +65,6 @@ const SIGMA_MAP_STREAK_SIGMA: f64 = 5.0;
 /// Fixed iterations for streak profile estimation when computing sigma map
 const SIGMA_MAP_STREAK_ITERATIONS: usize = 1;
 
-/// Small epsilon to avoid division by zero during normalization
-/// Default vertical energy profile smoothing sigma
-
 /// Default FFT alpha (trust factor). 0.0 = disabled, 1.0 = standard boost.
 const DEFAULT_FFT_ALPHA: f64 = 1.0;
 
