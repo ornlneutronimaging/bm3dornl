@@ -646,6 +646,44 @@ pub fn svd_mg_removal_py_f64<'py>(
 }
 
 // ============================================================================
+// Noise Estimation
+// ============================================================================
+
+/// Estimate noise standard deviation using MAD-based robust estimation (f32).
+///
+/// This implements sigma estimation from Mäkinen et al. (2021), optimized for
+/// detecting vertical streak noise in sinograms. The image is filtered to isolate
+/// vertical streaks (vertical Gaussian + horizontal High-pass), then MAD (Median
+/// Absolute Deviation) is computed and scaled.
+///
+/// This is primarily a diagnostic tool for advanced users who want to understand
+/// the noise characteristics of their data or tune denoising parameters.
+///
+/// Parameters
+/// ----------
+/// sinogram : numpy.ndarray
+///     Input 2D sinogram (H × W), dtype float32.
+///
+/// Returns
+/// -------
+/// float
+///     Estimated noise standard deviation (sigma).
+#[pyfunction]
+#[pyo3(name = "estimate_noise_sigma_rust")]
+pub fn estimate_noise_sigma_py(sinogram: PyReadonlyArray2<'_, f32>) -> PyResult<f32> {
+    Ok(bm3d_core::estimate_noise_sigma(sinogram.as_array()))
+}
+
+/// Estimate noise standard deviation using MAD-based robust estimation (f64).
+///
+/// See `estimate_noise_sigma_rust` for full documentation.
+#[pyfunction]
+#[pyo3(name = "estimate_noise_sigma_rust_f64")]
+pub fn estimate_noise_sigma_py_f64(sinogram: PyReadonlyArray2<'_, f64>) -> PyResult<f64> {
+    Ok(bm3d_core::estimate_noise_sigma(sinogram.as_array()))
+}
+
+// ============================================================================
 // Multi-Scale BM3D Streak Removal
 // ============================================================================
 
@@ -783,7 +821,13 @@ pub fn multiscale_bm3d_streak_removal_2d<'py>(
     patch_size = None,
     step_size = None,
     search_window = None,
-    max_matches = None
+    max_matches = None,
+    sigma_random = None,
+    streak_sigma_smooth = None,
+    streak_iterations = None,
+    sigma_map_smoothing = None,
+    streak_sigma_scale = None,
+    psd_width = None
 ))]
 #[allow(clippy::too_many_arguments)]
 pub fn multiscale_bm3d_streak_removal_2d_f64<'py>(
@@ -797,6 +841,12 @@ pub fn multiscale_bm3d_streak_removal_2d_f64<'py>(
     step_size: Option<usize>,
     search_window: Option<usize>,
     max_matches: Option<usize>,
+    sigma_random: Option<f64>,
+    streak_sigma_smooth: Option<f64>,
+    streak_iterations: Option<usize>,
+    sigma_map_smoothing: Option<f64>,
+    streak_sigma_scale: Option<f64>,
+    psd_width: Option<f64>,
 ) -> PyResult<Bound<'py, PyArray2<f64>>> {
     // Build config with defaults, using struct init syntax
     let default = MultiscaleConfig::<f64>::default();
@@ -824,6 +874,24 @@ pub fn multiscale_bm3d_streak_removal_2d_f64<'py>(
     if let Some(v) = max_matches {
         config.bm3d_config.max_matches = v;
     }
+    if let Some(v) = sigma_random {
+        config.bm3d_config.sigma_random = v;
+    }
+    if let Some(v) = streak_sigma_smooth {
+        config.bm3d_config.streak_sigma_smooth = v;
+    }
+    if let Some(v) = streak_iterations {
+        config.bm3d_config.streak_iterations = v;
+    }
+    if let Some(v) = sigma_map_smoothing {
+        config.bm3d_config.sigma_map_smoothing = v;
+    }
+    if let Some(v) = streak_sigma_scale {
+        config.bm3d_config.streak_sigma_scale = v;
+    }
+    if let Some(v) = psd_width {
+        config.bm3d_config.psd_width = v;
+    }
 
     // Call Rust implementation
     let output = multiscale_bm3d_streak_removal(sinogram.as_array(), &config)
@@ -845,6 +913,7 @@ fn bm3d_rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(bm3d_ring_artifact_removal_2d, m)?)?;
     m.add_function(wrap_pyfunction!(multiscale_bm3d_streak_removal_2d, m)?)?;
     m.add_function(wrap_pyfunction!(svd_mg_removal_py, m)?)?;
+    m.add_function(wrap_pyfunction!(estimate_noise_sigma_py, m)?)?;
 
     // f64 (double precision) functions
     m.add_function(wrap_pyfunction!(bm3d_hard_thresholding_f64, m)?)?;
@@ -856,6 +925,7 @@ fn bm3d_rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(bm3d_ring_artifact_removal_2d_f64, m)?)?;
     m.add_function(wrap_pyfunction!(multiscale_bm3d_streak_removal_2d_f64, m)?)?;
     m.add_function(wrap_pyfunction!(svd_mg_removal_py_f64, m)?)?;
+    m.add_function(wrap_pyfunction!(estimate_noise_sigma_py_f64, m)?)?;
 
     Ok(())
 }
