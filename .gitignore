@@ -172,3 +172,4 @@ experiments/*
 research*/**
 # ignore prototypes (local only)
 prototyping*/**
+.DS_Store
