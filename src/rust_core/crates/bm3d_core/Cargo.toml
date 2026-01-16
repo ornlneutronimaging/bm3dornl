@@ -15,7 +15,6 @@ ndarray = { workspace = true }
 num-traits = "0.2"
 rayon = { workspace = true }
 rustfft = { workspace = true }
-splines = "4.3"
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }

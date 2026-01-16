@@ -15,7 +15,6 @@
 
 use crate::utils::compute_1d_median_filter;
 use ndarray::{s, Array1, Array2, ArrayView1, ArrayView2};
-// use splines::{Interpolation, Key, Spline}; // Removed for optimization
 
 use crate::float_trait::Bm3dFloat;
 use crate::orchestration::{
