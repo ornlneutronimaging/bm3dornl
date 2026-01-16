@@ -66,6 +66,15 @@ const SIGMA_MAP_STREAK_SIGMA: f64 = 5.0;
 const SIGMA_MAP_STREAK_ITERATIONS: usize = 1;
 
 /// Small epsilon to avoid division by zero during normalization
+/// Default vertical energy profile smoothing sigma
+
+/// Default FFT alpha (trust factor). 0.0 = disabled, 1.0 = standard boost.
+const DEFAULT_FFT_ALPHA: f64 = 1.0;
+
+/// Default Gaussian notch width for vertical energy detection
+const DEFAULT_NOTCH_WIDTH: f64 = 2.0;
+
+/// Small epsilon to avoid division by zero during normalization
 const NORMALIZATION_EPSILON: f64 = 1e-10;
 
 // =============================================================================
@@ -116,6 +125,10 @@ pub struct Bm3dConfig<F: Bm3dFloat> {
     pub psd_width: F,
     /// Filter strength multiplier (affects BM3D thresholding). Default: 1.0
     pub filter_strength: F,
+    /// FFT-Guided SVD: Trust factor (Alpha). Default: 1.0
+    pub fft_alpha: F,
+    /// FFT-Guided SVD: Gaussian notch width. Default: 2.0
+    pub notch_width: F,
 }
 
 impl<F: Bm3dFloat> Default for Bm3dConfig<F> {
@@ -133,6 +146,8 @@ impl<F: Bm3dFloat> Default for Bm3dConfig<F> {
             streak_sigma_scale: F::from_f64_c(DEFAULT_STREAK_SIGMA_SCALE),
             psd_width: F::from_f64_c(DEFAULT_PSD_WIDTH),
             filter_strength: F::from_f64_c(DEFAULT_FILTER_STRENGTH),
+            fft_alpha: F::from_f64_c(DEFAULT_FFT_ALPHA),
+            notch_width: F::from_f64_c(DEFAULT_NOTCH_WIDTH),
         }
     }
 }
@@ -165,6 +180,12 @@ impl<F: Bm3dFloat> Bm3dConfig<F> {
         }
         if self.filter_strength <= F::zero() {
             return Err("filter_strength must be > 0".to_string());
+        }
+        if self.fft_alpha < F::zero() {
+            return Err("fft_alpha must be >= 0".to_string());
+        }
+        if self.notch_width <= F::zero() {
+            return Err("notch_width must be > 0".to_string());
         }
         Ok(())
     }
@@ -329,21 +350,23 @@ pub fn bm3d_ring_artifact_removal_with_plans<F: Bm3dFloat>(
         }
     };
 
-    // Step 5: Streak pre-subtraction (streak mode only)
+    // Step 5: Streak pre-subtraction (streak mode only) or SVD-MG
     if mode == RingRemovalMode::Streak {
         subtract_streak_profile(
             &mut z_norm,
             config.streak_sigma_smooth,
             config.streak_iterations,
         );
+    } else if mode == RingRemovalMode::SvdMg {
+        // SVD-Median-Gated Streak Removal
+        // We replace z_norm with the result of SVD-MG
+        z_norm = crate::svdmg::svd_mg_removal(z_norm.view(), config.fft_alpha, config.notch_width);
     }
 
     // Step 5b: Auto-estimate sigma if not provided
     // If sigma_random is effectively 0, estimate from data.
     let sigma_random = if config.sigma_random <= F::from_f64_c(1e-6) {
-        // Use z_norm for estimation (it has streaks removed if in Streak mode)
-        // Note: If in Streak mode, we estimate noise AFTER streak subtraction,
-        // which is correct as we want the residual noise level.
+        // Use z_norm for estimation (it has streaks removed if in Streak/SvdMg mode)
         estimate_noise_sigma(z_norm.view())
     } else {
         config.sigma_random

@@ -267,7 +267,9 @@ fn process_volume_worker(
             RingRemovalMode::SvdMg => {
                 // SVD-MG requires f64 for precision
                 let slice_f64 = slice_owned.mapv(|x| x as f64);
-                let result_f64 = svd_mg_removal(slice_f64.view());
+                let fft_alpha = config.bm3d_config.fft_alpha as f64;
+                let notch_width = config.bm3d_config.notch_width as f64;
+                let result_f64 = svd_mg_removal(slice_f64.view(), fft_alpha, notch_width);
                 // Convert back to f32
                 Ok(result_f64.mapv(|x| x as f32))
             }

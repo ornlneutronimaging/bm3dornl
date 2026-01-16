@@ -170,3 +170,5 @@ dev*.ipynb
 experiments/*
 # ignore reserach (local only)
 research*/**
+# ignore prototypes (local only)
+prototyping*/**

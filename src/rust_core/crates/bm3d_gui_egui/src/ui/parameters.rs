@@ -18,6 +18,10 @@ pub struct Bm3dParameters {
     /// Default is 1 (Y axis) for standard tomography data [angles, Y, X].
     pub processing_axis: usize,
 
+    // SVD-MG parameters
+    pub fft_alpha: f32,
+    pub notch_width: f32,
+
     // Multi-scale parameters
     pub multiscale: bool,
     pub num_scales: usize, // 0 = auto
@@ -39,6 +43,8 @@ impl Default for Bm3dParameters {
             search_window: 24,
             max_matches: 32,
             processing_axis: 1, // Default: Y axis (middle dimension)
+            fft_alpha: 1.0,
+            notch_width: 2.0,
             multiscale: false,
             num_scales: 0,
             show_advanced: false,
@@ -68,6 +74,8 @@ impl Bm3dParameters {
             step_size: self.patch_size / 2, // Standard: half patch size
             search_window: self.search_window,
             max_matches: self.max_matches,
+            fft_alpha: self.fft_alpha,
+            notch_width: self.notch_width,
             ..default
         }
     }
@@ -127,9 +135,31 @@ impl Bm3dParameters {
                 });
         });
 
-        // Only show BM3D parameters if not in SVD-MG mode
-        if self.mode != RingRemovalMode::SvdMg {
+        // Show SVD-MG specific parameters
+        if self.mode == RingRemovalMode::SvdMg {
             ui.horizontal(|ui| {
+                ui.label("FFT Alpha:")
+                    .on_hover_text("FFT Trust Factor (0.0 - 5.0). 1.0 = standard.");
+                if ui
+                    .add(egui::Slider::new(&mut self.fft_alpha, 0.0..=5.0).step_by(0.1))
+                    .changed()
+                {
+                    changed = true;
+                }
+            });
+            ui.horizontal(|ui| {
+                ui.label("Notch Width:")
+                    .on_hover_text("Selectivity of vertical frequency notch filter.");
+                if ui
+                    .add(egui::Slider::new(&mut self.notch_width, 0.5..=5.0).step_by(0.1))
+                    .changed()
+                {
+                    changed = true;
+                }
+            });
+        }
+
+        ui.horizontal(|ui| {
             ui.label("Sigma:")
                 .on_hover_text("Noise level estimate (sigma_random). Higher values = stronger denoising.\nTypical range: 0.001 - 0.5\nSupports scientific notation (e.g., 5e-3)");
 
@@ -155,24 +185,24 @@ impl Bm3dParameters {
             });
         });
 
-            ui.add_space(5.0);
+        ui.add_space(5.0);
 
-            // Tier 2 - Advanced parameters (behind toggle)
-            ui.horizontal(|ui| {
-                if ui
-                    .selectable_label(self.show_advanced, "⚙ Advanced")
-                    .on_hover_text("Show advanced parameters for fine-tuning BM3D algorithm")
-                    .clicked()
-                {
-                    self.show_advanced = !self.show_advanced;
-                }
-            });
+        // Tier 2 - Advanced parameters (behind toggle)
+        ui.horizontal(|ui| {
+            if ui
+                .selectable_label(self.show_advanced, "⚙ Advanced")
+                .on_hover_text("Show advanced parameters for fine-tuning BM3D algorithm")
+                .clicked()
+            {
+                self.show_advanced = !self.show_advanced;
+            }
+        });
 
-            if self.show_advanced {
-                ui.indent("advanced_params", |ui| {
+        if self.show_advanced {
+            ui.indent("advanced_params", |ui| {
                 // Multi-scale toggle
                 ui.horizontal(|ui| {
-                     ui.label("Multi-Scale:")
+                        ui.label("Multi-Scale:")
                         .on_hover_text("Use multi-scale algorithm to remove wide streaks.");
                     if ui.checkbox(&mut self.multiscale, "Enable").changed() {
                         changed = true;
@@ -272,8 +302,7 @@ impl Bm3dParameters {
                     changed = true;
                 }
             });
-            }
-        } // End of !SvdMg check
+        }
 
         changed
     }
