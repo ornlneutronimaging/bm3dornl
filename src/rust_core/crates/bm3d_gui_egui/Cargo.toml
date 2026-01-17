@@ -11,6 +11,21 @@ name = "bm3dornl-gui"
 path = "src/main.rs"
 test = false  # GUI binary requires HDF5 runtime; tested manually
 
+# macOS app bundle configuration for cargo-bundle
+[package.metadata.bundle]
+name = "bm3dornl"
+identifier = "com.ornl.bm3dornl"
+icon = ["../../../../resources/bm3dornl.icns"]
+version = "0.6.4"
+short_description = "BM3D Ring Artifact Removal for Neutron Imaging"
+long_description = """
+bm3dornl is a high-performance tool for removing ring artifacts from
+neutron and X-ray computed tomography sinograms using BM3D-based
+algorithms including multiscale streak removal and Fourier-SVD methods.
+"""
+category = "public.app-category.graphics-design"
+copyright = "Copyright © 2024 Oak Ridge National Laboratory"
+
 [dependencies]
 eframe = "0.29"
 egui_plot = "0.29"
@@ -20,3 +35,4 @@ rfd = "0.15"
 tiff = "0.9"
 ndarray = "0.15"
 bm3d_core = { path = "../bm3d_core" }
+image = { version = "0.25", default-features = false, features = ["png"] }

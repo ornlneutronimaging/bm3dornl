@@ -60,6 +60,42 @@ jobs:
           name: gui-wheel-macos-arm64
           path: src/rust_core/crates/bm3d_gui_egui/dist/*.whl
 
+  build-macos-app:
+    name: Build macOS App Bundle
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install CMake and cargo-bundle
+        run: |
+          brew install cmake
+          cargo install cargo-bundle
+
+      - name: Build macOS app bundle
+        working-directory: src/rust_core/crates/bm3d_gui_egui
+        run: cargo bundle --release
+
+      - name: Create DMG
+        run: |
+          # Get version from tag or use default
+          VERSION=${GITHUB_REF_NAME:-dev}
+          VERSION=${VERSION#v}  # Remove 'v' prefix if present
+
+          # Create DMG from the app bundle
+          hdiutil create -volname "bm3dornl ${VERSION}" \
+            -srcfolder src/rust_core/target/release/bundle/osx/bm3dornl.app \
+            -ov -format UDZO \
+            bm3dornl-${VERSION}-macos-arm64.dmg
+
+      - name: Upload DMG artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: gui-macos-app
+          path: "*.dmg"
+
   publish-pypi:
     name: Publish GUI to PyPI
     needs: [build-linux, build-macos]
@@ -86,18 +122,28 @@ jobs:
 
   upload-release-assets:
     name: Upload to GitHub Release
-    needs: [build-linux, build-macos]
+    needs: [build-linux, build-macos, build-macos-app]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
     steps:
       - uses: actions/checkout@v4
 
-      - name: Download all artifacts
+      - name: Download wheel artifacts
         uses: actions/download-artifact@v4
         with:
           path: dist
           pattern: gui-wheel-*
           merge-multiple: true
+
+      - name: Download macOS app artifact
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: gui-macos-app
+          merge-multiple: true
+
+      - name: List all artifacts
+        run: ls -la dist/
 
       - name: Upload assets to existing release
         uses: softprops/action-gh-release@v2

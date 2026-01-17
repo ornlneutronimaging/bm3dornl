@@ -18,13 +18,32 @@ use ui::{
     SingleViewHistogram, SliceViewer, WindowLevel,
 };
 
+/// Load application icon from embedded PNG (256x256 for reasonable binary size)
+fn load_icon() -> Option<egui::IconData> {
+    let icon_bytes = include_bytes!("../../../../../resources/bm3dornl_icon_256.png");
+    let image = image::load_from_memory(icon_bytes).ok()?.into_rgba8();
+    let (width, height) = image.dimensions();
+    Some(egui::IconData {
+        rgba: image.into_raw(),
+        width,
+        height,
+    })
+}
+
 fn main() -> eframe::Result<()> {
+    let mut viewport = egui::ViewportBuilder::default().with_inner_size([1400.0, 900.0]);
+
+    // Set application icon if available
+    if let Some(icon) = load_icon() {
+        viewport = viewport.with_icon(std::sync::Arc::new(icon));
+    }
+
     let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default().with_inner_size([1400.0, 900.0]),
+        viewport,
         ..Default::default()
     };
     eframe::run_native(
-        "BM3D Volume Viewer",
+        "bm3dornl - BM3D Ring Artifact Removal",
         options,
         Box::new(|_cc| Ok(Box::new(App::default()))),
     )
@@ -281,7 +300,7 @@ impl App {
             let raw_data = vol.raw_data().to_owned();
             let mode = self.bm3d_params.mode;
             let config = self.bm3d_params.to_multiscale_config();
-            let use_multiscale = self.bm3d_params.multiscale;
+            let use_multiscale = self.bm3d_params.uses_multiscale();
 
             // Use the processing axis from parameters (configurable in Advanced).
             // Default is axis 1 (Y) for standard tomography data [angles, Y, X].
@@ -538,7 +557,7 @@ impl eframe::App for App {
         // Top panel
         egui::TopBottomPanel::top("top_panel").show(ctx, |ui| {
             ui.horizontal(|ui| {
-                ui.heading("BM3D Volume Viewer");
+                ui.heading("bm3dornl");
                 ui.separator();
 
                 // Dropdown menu for file opening options
@@ -590,6 +609,12 @@ impl eframe::App for App {
                         ui.colored_label(egui::Color32::LIGHT_BLUE, "Viewing: Compare")
                     }
                 };
+
+                // Version display (right-aligned)
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.label(format!("v{}", env!("CARGO_PKG_VERSION")))
+                        .on_hover_text("bm3dornl version");
+                });
             });
 
             if let Some(error) = &self.error_message {

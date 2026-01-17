@@ -382,7 +382,7 @@ pub fn estimate_streak_profile_py_f64<'py>(
 /// sinogram : numpy.ndarray
 ///     Input 2D sinogram (H × W), dtype float32.
 /// mode : str
-///     Processing mode: "generic", "streak", or "fourier_svd".
+///     Processing mode: "generic", "streak", "multiscale_streak", or "fourier_svd".
 /// sigma_random : float, optional
 ///     Random noise std dev. Default: 0.0 (auto-estimate)
 /// patch_size : int, optional
@@ -455,10 +455,11 @@ pub fn bm3d_ring_artifact_removal_2d<'py>(
     let ring_mode = match mode.to_lowercase().as_str() {
         "generic" => RingRemovalMode::Generic,
         "streak" => RingRemovalMode::Streak,
+        "multiscale_streak" | "multiscalestreak" => RingRemovalMode::MultiscaleStreak,
         "fourier_svd" | "fouriersvd" => RingRemovalMode::FourierSvd,
         _ => {
             return Err(pyo3::exceptions::PyValueError::new_err(format!(
-                "Invalid mode '{}'. Expected 'generic', 'streak', or 'fourier_svd'.",
+                "Invalid mode '{}'. Expected 'generic', 'streak', 'multiscale_streak', or 'fourier_svd'.",
                 mode
             )))
         }
@@ -558,10 +559,11 @@ pub fn bm3d_ring_artifact_removal_2d_f64<'py>(
     let ring_mode = match mode.to_lowercase().as_str() {
         "generic" => RingRemovalMode::Generic,
         "streak" => RingRemovalMode::Streak,
+        "multiscale_streak" | "multiscalestreak" => RingRemovalMode::MultiscaleStreak,
         "fourier_svd" | "fouriersvd" => RingRemovalMode::FourierSvd,
         _ => {
             return Err(pyo3::exceptions::PyValueError::new_err(format!(
-                "Invalid mode '{}'. Expected 'generic', 'streak', or 'fourier_svd'.",
+                "Invalid mode '{}'. Expected 'generic', 'streak', 'multiscale_streak', or 'fourier_svd'.",
                 mode
             )))
         }

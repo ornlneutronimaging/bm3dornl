@@ -79,7 +79,7 @@ const NORMALIZATION_EPSILON: f64 = 1e-10;
 // =============================================================================
 
 /// Processing mode for BM3D ring artifact removal
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum RingRemovalMode {
     /// Standard BM3D assuming white noise.
     /// No streak pre-subtraction, uses scalar PSD.
@@ -87,6 +87,10 @@ pub enum RingRemovalMode {
     /// Streak pre-subtraction + anisotropic PSD.
     /// Designed for ring artifact removal in sinograms.
     Streak,
+    /// Multi-scale BM3D with streak pre-subtraction.
+    /// Handles wide streaks via pyramid processing.
+    #[default]
+    MultiscaleStreak,
     /// Fourier-SVD algorithm.
     /// Uses FFT-guided energy detection with rank-1 SVD for streak removal.
     FourierSvd,
@@ -337,18 +341,18 @@ pub fn bm3d_ring_artifact_removal_with_plans<F: Bm3dFloat>(
             // Scalar PSD (no colored noise model)
             Array2::zeros((1, 1))
         }
-        RingRemovalMode::Streak => {
-            // Anisotropic PSD for streak mode
+        RingRemovalMode::Streak | RingRemovalMode::MultiscaleStreak => {
+            // Anisotropic PSD for streak modes
             construct_psd(config.patch_size, config.psd_width)
         }
         RingRemovalMode::FourierSvd => {
-            // SVD-MG: No PSD needed (handing off to separate logic externally or default behavior)
+            // Fourier-SVD: No PSD needed (uses separate algorithm)
             Array2::zeros((1, 1))
         }
     };
 
-    // Step 5: Streak pre-subtraction (streak mode only) or SVD-MG
-    if mode == RingRemovalMode::Streak {
+    // Step 5: Streak pre-subtraction (streak modes) or Fourier-SVD
+    if mode == RingRemovalMode::Streak || mode == RingRemovalMode::MultiscaleStreak {
         subtract_streak_profile(
             &mut z_norm,
             config.streak_sigma_smooth,

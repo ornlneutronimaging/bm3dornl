@@ -74,8 +74,9 @@ test = { depends-on = ["test-rust", "test-python"] }
 bench = "python benchmarks/measure_stack_speed.py"
 bench-rust = { cmd = "cargo bench -p bm3d_core", cwd = "src/rust_core" }
 clean = "cargo clean --manifest-path src/rust_core/Cargo.toml"
-gui = { cmd = "bash -c 'RUSTFLAGS=\"-C link-args=-Wl,-rpath,$HDF5_DIR/lib\" cargo run --release -p bm3d_gui_egui'", cwd = "src/rust_core" }
-gui-debug = { cmd = "bash -c 'RUSTFLAGS=\"-C link-args=-Wl,-rpath,$HDF5_DIR/lib\" cargo run -p bm3d_gui_egui'", cwd = "src/rust_core" }
+gui = { cmd = "bash -c 'unset HDF5_DIR && cargo run --release -p bm3d_gui_egui'", cwd = "src/rust_core" }
+gui-debug = { cmd = "bash -c 'unset HDF5_DIR && cargo run -p bm3d_gui_egui'", cwd = "src/rust_core" }
+gui-bundle = { cmd = "bash -c 'unset HDF5_DIR && cargo bundle --release'", cwd = "src/rust_core/crates/bm3d_gui_egui" }
 
 [tool.pixi.dependencies]
 python = "3.12.*"

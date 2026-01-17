@@ -256,13 +256,17 @@ fn process_volume_worker(
             RingRemovalMode::Generic => {
                 bm3d_ring_artifact_removal(slice_owned.view(), mode, &config.bm3d_config)
             }
-            // Streak mode can use Multiscale if enabled
+            // Streak mode can use Multiscale if enabled via use_multiscale flag
             RingRemovalMode::Streak => {
                 if use_multiscale {
                     multiscale_bm3d_streak_removal(slice_owned.view(), &config)
                 } else {
                     bm3d_ring_artifact_removal(slice_owned.view(), mode, &config.bm3d_config)
                 }
+            }
+            // MultiscaleStreak mode always uses multiscale processing
+            RingRemovalMode::MultiscaleStreak => {
+                multiscale_bm3d_streak_removal(slice_owned.view(), &config)
             }
             RingRemovalMode::FourierSvd => {
                 // Fourier-SVD requires f64 for precision

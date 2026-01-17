@@ -567,6 +567,7 @@ dependencies = [
  "egui_plot",
  "hdf5-metno",
  "hdf5-metno-sys",
+ "image",
  "ndarray",
  "rfd",
  "tiff",
