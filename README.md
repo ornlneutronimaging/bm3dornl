@@ -4,7 +4,7 @@
 [![CII Best Practices](https://bestpractices.coreinfrastructure.org/projects/6650/badge)](https://bestpractices.coreinfrastructure.org/projects/6650)
 [![Documentation Status](https://readthedocs.org/projects/bm3dornl/badge/?version=latest)](https://bm3dornl.readthedocs.io/en/latest/?badge=latest)
 [![PyPI](https://img.shields.io/pypi/v/bm3dornl)](https://pypi.org/project/bm3dornl/)
-[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.18226146.svg)](https://doi.org/10.5281/zenodo.18226146)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.18276016.svg)](https://doi.org/10.5281/zenodo.18276016)
 
 <!-- End Badges -->
 BM3D ORNL
