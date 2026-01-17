@@ -1,4 +1,7 @@
-use bm3d_core::{bm3d_ring_artifact_removal, Bm3dConfig, RingRemovalMode};
+use bm3d_core::{
+    bm3d_ring_artifact_removal, fourier_svd::fourier_svd_removal, multiscale_bm3d_streak_removal,
+    Bm3dConfig, MultiscaleConfig, RingRemovalMode,
+};
 use ndarray::{Array2, Array3, Axis};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
@@ -94,7 +97,8 @@ impl ProcessingManager {
         &mut self,
         input: Array3<f32>,
         mode: RingRemovalMode,
-        config: Bm3dConfig<f32>,
+        config: MultiscaleConfig<f32>,
+        use_multiscale: bool,
         slice_axis: usize,
     ) {
         // Cancel any existing processing
@@ -113,7 +117,15 @@ impl ProcessingManager {
 
         // Spawn worker thread
         let handle = thread::spawn(move || {
-            process_volume_worker(input, mode, config, slice_axis, tx, cancel_flag);
+            process_volume_worker(
+                input,
+                mode,
+                config,
+                use_multiscale,
+                slice_axis,
+                tx,
+                cancel_flag,
+            );
         });
 
         self.worker_handle = Some(handle);
@@ -202,7 +214,8 @@ impl ProcessingManager {
 fn process_volume_worker(
     input: Array3<f32>,
     mode: RingRemovalMode,
-    config: Bm3dConfig<f32>,
+    config: MultiscaleConfig<f32>,
+    use_multiscale: bool,
     slice_axis: usize,
     tx: Sender<ProcessingProgress>,
     cancel_flag: Arc<AtomicBool>,
@@ -238,7 +251,35 @@ fn process_volume_worker(
         let slice_owned: Array2<f32> = slice_2d.to_owned();
 
         // Process slice
-        match bm3d_ring_artifact_removal(slice_owned.view(), mode, &config) {
+        let result = match mode {
+            // Generic mode always uses standard BM3D
+            RingRemovalMode::Generic => {
+                bm3d_ring_artifact_removal(slice_owned.view(), mode, &config.bm3d_config)
+            }
+            // Streak mode can use Multiscale if enabled via use_multiscale flag
+            RingRemovalMode::Streak => {
+                if use_multiscale {
+                    multiscale_bm3d_streak_removal(slice_owned.view(), &config)
+                } else {
+                    bm3d_ring_artifact_removal(slice_owned.view(), mode, &config.bm3d_config)
+                }
+            }
+            // MultiscaleStreak mode always uses multiscale processing
+            RingRemovalMode::MultiscaleStreak => {
+                multiscale_bm3d_streak_removal(slice_owned.view(), &config)
+            }
+            RingRemovalMode::FourierSvd => {
+                // Fourier-SVD requires f64 for precision
+                let slice_f64 = slice_owned.mapv(|x| x as f64);
+                let fft_alpha = config.bm3d_config.fft_alpha as f64;
+                let notch_width = config.bm3d_config.notch_width as f64;
+                let result_f64 = fourier_svd_removal(slice_f64.view(), fft_alpha, notch_width);
+                // Convert back to f32
+                Ok(result_f64.mapv(|x| x as f32))
+            }
+        };
+
+        match result {
             Ok(processed) => {
                 // Copy result back to output at the correct position
                 let mut out_slice = output.index_axis_mut(Axis(slice_axis), slice_idx);

@@ -1,8 +1,6 @@
 #!/usr/bin/env python3
 """Denoising functions using Rust backend."""
 
-import warnings
-
 import numpy as np
 from scipy.ndimage import gaussian_filter1d
 from . import bm3d_rust
@@ -99,20 +97,13 @@ def bm3d_ring_artifact_removal(
     sigma_map : np.ndarray | None, optional
         Optional pre-computed sigma map (3D processing only), by default None.
     multiscale : bool, optional
-        **[EXPERIMENTAL]** If True, use multi-scale BM3D for handling wide streaks.
-        Only supported with mode="streak". By default False.
-
-        .. warning::
-            This feature is experimental. It works well for wide ring artifacts
-            (>39 pixels) but may over-process regular sinograms. For most use
-            cases, the default single-scale mode (multiscale=False) is recommended.
+        Enable multi-scale processing for handling wide streaks (default False).
     num_scales : int | None, optional
-        Override automatic scale calculation for multi-scale mode.
-        If None, uses floor(log2(width/40)). By default None.
+        Number of scales for multi-scale pyramid. If None, automatic.
     filter_strength : float, optional
-        Multiplier for BM3D filtering intensity (multi-scale only). By default 1.0.
+        Filtering strength multiplier for multi-scale mode (default 1.0).
     debin_iterations : int, optional
-        Iterations for cubic spline debinning (multi-scale only). By default 30.
+        Number of debinning iterations (default 30).
 
     Returns
     -------
@@ -126,20 +117,9 @@ def bm3d_ring_artifact_removal(
     """
     # Validate multiscale + mode combination
     if multiscale and mode != "streak":
-        raise ValueError(
-            f"multiscale=True only supports mode='streak', got mode='{mode}'"
-        )
+        raise ValueError(f"multiscale=True only supports mode='streak', got mode='{mode}'")
 
-    # Emit experimental warning for multiscale mode
-    if multiscale:
-        warnings.warn(
-            "multiscale=True is experimental. It works well for wide ring "
-            "artifacts (>39 pixels) but may over-process regular sinograms. "
-            "For most use cases, the default single-scale mode "
-            "(multiscale=False) is recommended.",
-            UserWarning,
-            stacklevel=2,
-        )
+
 
     # Check Dimension
     is_stack = sinogram.ndim == 3
@@ -162,6 +142,7 @@ def bm3d_ring_artifact_removal(
                 step_size=step_size,
                 search_window=search_window,
                 max_matches=max_matches,
+                sigma_random=float(sigma_random),
             )
         else:
             # Single-scale BM3D
@@ -201,6 +182,7 @@ def bm3d_ring_artifact_removal(
                 step_size=step_size,
                 search_window=search_window,
                 max_matches=max_matches,
+                sigma_random=float(sigma_random),
             )
         return output_result
 
@@ -210,9 +192,7 @@ def bm3d_ring_artifact_removal(
 
     # --- Spatially Adaptive BM3D Setup Helpers ---
     def compute_slice_map(slice_img):
-        streak_profile_rough = estimate_streak_profile(
-            slice_img, sigma_smooth=5.0, iterations=1
-        )
+        streak_profile_rough = estimate_streak_profile(slice_img, sigma_smooth=5.0, iterations=1)
         profile_smooth = gaussian_filter1d(streak_profile_rough, sigma_map_smoothing)
         streak_signal = streak_profile_rough - profile_smooth
         sigma_streak_1d = np.abs(streak_signal).astype(np.float32)

@@ -1,6 +1,6 @@
 [project]
 name = "bm3dornl"
-version = "0.6.4"
+version = "0.7.0"
 description = "BM3D for streak artifact removal in neutron imaging"
 requires-python = ">=3.12"
 dependencies = [
@@ -20,7 +20,7 @@ documentation = "https://bm3dornl.readthedocs.io/en/latest/"
 issues = "https://github.com/ornlneutronimaging/bm3dornl/issues"
 
 [project.optional-dependencies]
-gui = ["bm3dornl-gui==0.6.4"]
+gui = ["bm3dornl-gui==0.7.0"]
 
 [build-system]
 requires = ["maturin>=1.0,<2.0"]
@@ -74,8 +74,14 @@ test = { depends-on = ["test-rust", "test-python"] }
 bench = "python benchmarks/measure_stack_speed.py"
 bench-rust = { cmd = "cargo bench -p bm3d_core", cwd = "src/rust_core" }
 clean = "cargo clean --manifest-path src/rust_core/Cargo.toml"
-gui = { cmd = "bash -c 'RUSTFLAGS=\"-C link-args=-Wl,-rpath,$HDF5_DIR/lib\" cargo run --release -p bm3d_gui_egui'", cwd = "src/rust_core" }
-gui-debug = { cmd = "bash -c 'RUSTFLAGS=\"-C link-args=-Wl,-rpath,$HDF5_DIR/lib\" cargo run -p bm3d_gui_egui'", cwd = "src/rust_core" }
+gui = { cmd = "bash -c 'unset HDF5_DIR && cargo run --release -p bm3d_gui_egui'", cwd = "src/rust_core" }
+gui-debug = { cmd = "bash -c 'unset HDF5_DIR && cargo run -p bm3d_gui_egui'", cwd = "src/rust_core" }
+gui-bundle = { cmd = "bash -c 'unset HDF5_DIR && cargo bundle --release'", cwd = "src/rust_core/crates/bm3d_gui_egui" }
+version-show = "python scripts/version.py show"
+version-sync = "python scripts/version.py sync"
+version-patch = "python scripts/version.py patch"
+version-minor = "python scripts/version.py minor"
+version-major = "python scripts/version.py major"
 
 [tool.pixi.dependencies]
 python = "3.12.*"
@@ -89,6 +95,9 @@ matplotlib = ">=3.10.8,<4"
 jupyter = ">=1.1.1,<2"
 hdf5 = ">=1.14.0"
 pkg-config = "*"
+scipy = ">=1.17.0,<2"
+scikit-learn = ">=1.8.0,<2"
+pywavelets = ">=1.9.0,<2"
 
 [tool.pixi.activation.env]
 HDF5_DIR = "$CONDA_PREFIX"

@@ -547,26 +547,27 @@ dependencies = [
 
 [[package]]
 name = "bm3d_core"
-version = "0.6.3"
+version = "0.7.0"
 dependencies = [
  "criterion",
  "ndarray",
  "num-traits",
  "rand 0.8.5",
+ "rand_distr",
  "rayon",
  "rustfft",
- "splines",
 ]
 
 [[package]]
 name = "bm3d_gui_egui"
-version = "0.6.3"
+version = "0.7.0"
 dependencies = [
  "bm3d_core",
  "eframe",
  "egui_plot",
  "hdf5-metno",
  "hdf5-metno-sys",
+ "image",
  "ndarray",
  "rfd",
  "tiff",
@@ -574,7 +575,7 @@ dependencies = [
 
 [[package]]
 name = "bm3d_python"
-version = "0.6.3"
+version = "0.7.0"
 dependencies = [
  "bm3d_core",
  "ndarray",
@@ -2032,6 +2033,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "libm"
+version = "0.2.15"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f9fbbcab51052fe104eb5e5d351cf728d30a5be1fe14d9be8a3b097481fb97de"
+
+[[package]]
 name = "libredox"
 version = "0.1.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2301,6 +2308,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "071dfc062690e90b734c0b2273ce72ad0ffa95f0c74596bc250dcfd960262841"
 dependencies = [
  "autocfg",
+ "libm",
 ]
 
 [[package]]
@@ -3063,6 +3071,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "rand_distr"
+version = "0.4.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "32cb0b9bc82b0a0876c2dd994a7e7a2683d3e7390ca40e6886785ef0c7e3ee31"
+dependencies = [
+ "num-traits",
+ "rand 0.8.5",
+]
+
+[[package]]
 name = "raw-window-handle"
 version = "0.6.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3460,12 +3478,6 @@ checksum = "eda41003dc44290527a59b13432d4a0379379fa074b70174882adfbdfd917844"
 dependencies = [
  "bitflags 2.10.0",
 ]
-
-[[package]]
-name = "splines"
-version = "4.4.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3278aafb315f972aa58d958e3f6b8ef60ceb7723bfedfbd00399c73ed0570583"
 
 [[package]]
 name = "stable_deref_trait"

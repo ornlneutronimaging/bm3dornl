@@ -15,6 +15,7 @@
 use ndarray::{Array1, Array2, ArrayView2};
 
 use crate::float_trait::Bm3dFloat;
+use crate::noise_estimation::estimate_noise_sigma;
 use crate::pipeline::{run_bm3d_step, Bm3dMode};
 use crate::streak::{estimate_streak_profile_impl, gaussian_blur_1d};
 
@@ -22,8 +23,8 @@ use crate::streak::{estimate_streak_profile_impl, gaussian_blur_1d};
 // Constants
 // =============================================================================
 
-/// Default random noise standard deviation
-const DEFAULT_SIGMA_RANDOM: f64 = 0.1;
+/// Default random noise standard deviation (0.0 = auto-estimate)
+const DEFAULT_SIGMA_RANDOM: f64 = 0.0;
 
 /// Default patch size for block matching
 const DEFAULT_PATCH_SIZE: usize = 8;
@@ -64,6 +65,12 @@ const SIGMA_MAP_STREAK_SIGMA: f64 = 5.0;
 /// Fixed iterations for streak profile estimation when computing sigma map
 const SIGMA_MAP_STREAK_ITERATIONS: usize = 1;
 
+/// Default FFT alpha (trust factor). 0.0 = disabled, 1.0 = standard boost.
+const DEFAULT_FFT_ALPHA: f64 = 1.0;
+
+/// Default Gaussian notch width for vertical energy detection
+const DEFAULT_NOTCH_WIDTH: f64 = 2.0;
+
 /// Small epsilon to avoid division by zero during normalization
 const NORMALIZATION_EPSILON: f64 = 1e-10;
 
@@ -72,7 +79,7 @@ const NORMALIZATION_EPSILON: f64 = 1e-10;
 // =============================================================================
 
 /// Processing mode for BM3D ring artifact removal
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum RingRemovalMode {
     /// Standard BM3D assuming white noise.
     /// No streak pre-subtraction, uses scalar PSD.
@@ -80,6 +87,13 @@ pub enum RingRemovalMode {
     /// Streak pre-subtraction + anisotropic PSD.
     /// Designed for ring artifact removal in sinograms.
     Streak,
+    /// Multi-scale BM3D with streak pre-subtraction.
+    /// Handles wide streaks via pyramid processing.
+    #[default]
+    MultiscaleStreak,
+    /// Fourier-SVD algorithm.
+    /// Uses FFT-guided energy detection with rank-1 SVD for streak removal.
+    FourierSvd,
 }
 
 /// Configuration for BM3D ring artifact removal.
@@ -112,6 +126,10 @@ pub struct Bm3dConfig<F: Bm3dFloat> {
     pub psd_width: F,
     /// Filter strength multiplier (affects BM3D thresholding). Default: 1.0
     pub filter_strength: F,
+    /// FFT-Guided SVD: Trust factor (Alpha). Default: 1.0
+    pub fft_alpha: F,
+    /// FFT-Guided SVD: Gaussian notch width. Default: 2.0
+    pub notch_width: F,
 }
 
 impl<F: Bm3dFloat> Default for Bm3dConfig<F> {
@@ -129,6 +147,8 @@ impl<F: Bm3dFloat> Default for Bm3dConfig<F> {
             streak_sigma_scale: F::from_f64_c(DEFAULT_STREAK_SIGMA_SCALE),
             psd_width: F::from_f64_c(DEFAULT_PSD_WIDTH),
             filter_strength: F::from_f64_c(DEFAULT_FILTER_STRENGTH),
+            fft_alpha: F::from_f64_c(DEFAULT_FFT_ALPHA),
+            notch_width: F::from_f64_c(DEFAULT_NOTCH_WIDTH),
         }
     }
 }
@@ -161,6 +181,12 @@ impl<F: Bm3dFloat> Bm3dConfig<F> {
         }
         if self.filter_strength <= F::zero() {
             return Err("filter_strength must be > 0".to_string());
+        }
+        if self.fft_alpha < F::zero() {
+            return Err("fft_alpha must be >= 0".to_string());
+        }
+        if self.notch_width <= F::zero() {
+            return Err("notch_width must be > 0".to_string());
         }
         Ok(())
     }
@@ -258,40 +284,15 @@ fn subtract_streak_profile<F: Bm3dFloat>(
 // Main Entry Point
 // =============================================================================
 
-/// Unified BM3D ring artifact removal for 2D sinograms.
+/// Unified BM3D ring artifact removal with pre-computed plans (Internal/Advanced).
 ///
-/// This function performs the complete BM3D denoising pipeline:
-/// 1. Normalizes input to [0, 1] range
-/// 2. Computes spatially adaptive sigma map
-/// 3. (Streak mode) Subtracts estimated streak profile
-/// 4. Runs two-pass BM3D: Hard Threshold → Wiener
-/// 5. Denormalizes output to original range
-///
-/// # Arguments
-///
-/// * `sinogram` - Input 2D sinogram (H × W)
-/// * `mode` - Processing mode (Generic or Streak)
-/// * `config` - Configuration parameters
-///
-/// # Returns
-///
-/// Denoised sinogram with same shape as input, or error if parameters invalid.
-///
-/// # Example
-///
-/// ```
-/// use bm3d_core::{bm3d_ring_artifact_removal, RingRemovalMode, Bm3dConfig};
-/// use ndarray::Array2;
-///
-/// let sinogram = Array2::<f32>::zeros((64, 64));
-/// let config = Bm3dConfig::default();
-/// let result = bm3d_ring_artifact_removal(sinogram.view(), RingRemovalMode::Generic, &config);
-/// assert!(result.is_ok());
-/// ```
-pub fn bm3d_ring_artifact_removal<F: Bm3dFloat>(
+/// This is the core implementation that takes pre-computed FFT plans.
+/// See `bm3d_ring_artifact_removal` for the public API.
+pub fn bm3d_ring_artifact_removal_with_plans<F: Bm3dFloat>(
     sinogram: ArrayView2<F>,
     mode: RingRemovalMode,
     config: &Bm3dConfig<F>,
+    plans: &crate::pipeline::Bm3dPlans<F>,
 ) -> Result<Array2<F>, String> {
     // Validate configuration
     config.validate()?;
@@ -340,20 +341,40 @@ pub fn bm3d_ring_artifact_removal<F: Bm3dFloat>(
             // Scalar PSD (no colored noise model)
             Array2::zeros((1, 1))
         }
-        RingRemovalMode::Streak => {
-            // Anisotropic PSD for streak mode
+        RingRemovalMode::Streak | RingRemovalMode::MultiscaleStreak => {
+            // Anisotropic PSD for streak modes
             construct_psd(config.patch_size, config.psd_width)
+        }
+        RingRemovalMode::FourierSvd => {
+            // Fourier-SVD: No PSD needed (uses separate algorithm)
+            Array2::zeros((1, 1))
         }
     };
 
-    // Step 5: Streak pre-subtraction (streak mode only)
-    if mode == RingRemovalMode::Streak {
+    // Step 5: Streak pre-subtraction (streak modes) or Fourier-SVD
+    if mode == RingRemovalMode::Streak || mode == RingRemovalMode::MultiscaleStreak {
         subtract_streak_profile(
             &mut z_norm,
             config.streak_sigma_smooth,
             config.streak_iterations,
         );
+    } else if mode == RingRemovalMode::FourierSvd {
+        // Fourier-SVD Streak Removal
+        z_norm = crate::fourier_svd::fourier_svd_removal(
+            z_norm.view(),
+            config.fft_alpha,
+            config.notch_width,
+        );
     }
+
+    // Step 5b: Auto-estimate sigma if not provided
+    // If sigma_random is effectively 0, estimate from data.
+    let sigma_random = if config.sigma_random <= F::from_f64_c(1e-6) {
+        // Use z_norm for estimation (it has streaks removed if in Streak/FourierSvd mode)
+        estimate_noise_sigma(z_norm.view())
+    } else {
+        config.sigma_random
+    };
 
     // Step 6: BM3D Pass 1 - Hard Thresholding
     let yhat_ht = run_bm3d_step(
@@ -362,12 +383,13 @@ pub fn bm3d_ring_artifact_removal<F: Bm3dFloat>(
         Bm3dMode::HardThreshold,
         sigma_psd.view(),
         sigma_map.view(),
-        config.sigma_random,
+        sigma_random,
         config.threshold,
         config.patch_size,
         config.step_size,
         config.search_window,
         config.max_matches,
+        plans,
     )?;
 
     // Step 7: BM3D Pass 2 - Wiener Filtering
@@ -377,23 +399,64 @@ pub fn bm3d_ring_artifact_removal<F: Bm3dFloat>(
         Bm3dMode::Wiener,
         sigma_psd.view(),
         sigma_map.view(),
-        config.sigma_random,
+        sigma_random,
         F::zero(), // threshold not used for Wiener
         config.patch_size,
         config.step_size,
         config.search_window,
         config.max_matches,
+        plans,
     )?;
 
     // Step 8: Denormalize to original range
     let output = if range > eps {
         yhat_final.mapv(|x| x * range + d_min)
     } else {
-        // Return original constant value
-        Array2::from_elem((rows, cols), d_min)
+        // Constant image - restore original mean/min
+        Array2::from_elem(yhat_final.raw_dim(), d_min)
     };
 
     Ok(output)
+}
+
+/// Unified BM3D ring artifact removal for 2D sinograms.
+///
+/// This function performs the complete BM3D denoising pipeline:
+/// 1. Normalizes input to [0, 1] range
+/// 2. Computes spatially adaptive sigma map
+/// 3. (Streak mode) Subtracts estimated streak profile
+/// 4. Runs two-pass BM3D: Hard Threshold → Wiener
+/// 5. Denormalizes output to original range
+///
+/// # Arguments
+///
+/// * `sinogram` - Input 2D sinogram (H × W)
+/// * `mode` - Processing mode (Generic or Streak)
+/// * `config` - Configuration parameters
+///
+/// # Returns
+///
+/// Denoised sinogram with same shape as input, or error if parameters invalid.
+///
+/// # Example
+///
+/// ```
+/// use bm3d_core::{bm3d_ring_artifact_removal, RingRemovalMode, Bm3dConfig};
+/// use ndarray::Array2;
+///
+/// let sinogram = Array2::<f32>::zeros((64, 64));
+/// let config = Bm3dConfig::default();
+/// let result = bm3d_ring_artifact_removal(sinogram.view(), RingRemovalMode::Generic, &config);
+/// assert!(result.is_ok());
+/// ```
+pub fn bm3d_ring_artifact_removal<F: Bm3dFloat>(
+    sinogram: ArrayView2<F>,
+    mode: RingRemovalMode,
+    config: &Bm3dConfig<F>,
+) -> Result<Array2<F>, String> {
+    // Create plans locally
+    let plans = crate::pipeline::Bm3dPlans::new(config.patch_size, config.max_matches);
+    bm3d_ring_artifact_removal_with_plans(sinogram, mode, config, &plans)
 }
 
 // =============================================================================
@@ -401,6 +464,7 @@ pub fn bm3d_ring_artifact_removal<F: Bm3dFloat>(
 // =============================================================================
 
 #[cfg(test)]
+#[allow(clippy::field_reassign_with_default)]
 mod tests {
     use super::*;
     use ndarray::Array2;
@@ -441,7 +505,7 @@ mod tests {
     fn test_default_config_matches_spec() {
         let config: Bm3dConfig<f32> = Bm3dConfig::default();
 
-        assert!(approx_eq(config.sigma_random, 0.1, 1e-6));
+        assert!(approx_eq(config.sigma_random, 0.0, 1e-6));
         assert_eq!(config.patch_size, 8);
         assert_eq!(config.step_size, 4);
         assert_eq!(config.search_window, 24);
@@ -837,5 +901,33 @@ mod tests {
 
             assert!(result.is_ok(), "Failed for sigma={}", sigma);
         }
+    }
+    #[test]
+    fn test_auto_sigma_estimation() {
+        // Create a noisy image
+        let mut rng = SimpleLcg::new(999);
+        let image = Array2::from_shape_fn((64, 64), |_| rng.next_f32());
+
+        // Config with sigma=0.0 to trigger auto-estimation
+        let mut config = Bm3dConfig::default();
+        config.sigma_random = 0.0;
+
+        let result = bm3d_ring_artifact_removal(image.view(), RingRemovalMode::Generic, &config);
+
+        assert!(result.is_ok(), "Auto-estimation should succeed");
+        let output = result.unwrap();
+        assert_eq!(output.dim(), image.dim());
+
+        // Ensure processed image isn't identical to input (denoising occurred)
+        let diff: f32 = output
+            .iter()
+            .zip(image.iter())
+            .map(|(a, b)| (a - b).abs())
+            .sum();
+        assert!(
+            diff > 0.1,
+            "Denoising should have occurred (diff: {})",
+            diff
+        );
     }
 }

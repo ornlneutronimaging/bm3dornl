@@ -17,7 +17,7 @@ jobs:
     name: Build Linux x86_64
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Build wheel
         uses: PyO3/maturin-action@v1
@@ -32,7 +32,7 @@ jobs:
             ln -sf /usr/bin/cmake3 /usr/bin/cmake || true
 
       - name: Upload wheel
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: gui-wheel-linux-x86_64
           path: src/rust_core/crates/bm3d_gui_egui/dist/*.whl
@@ -41,7 +41,7 @@ jobs:
     name: Build macOS ARM64
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install CMake
         run: brew install cmake
@@ -55,10 +55,46 @@ jobs:
         # No HDF5_DIR - let it build from source with static feature
 
       - name: Upload wheel
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: gui-wheel-macos-arm64
           path: src/rust_core/crates/bm3d_gui_egui/dist/*.whl
+
+  build-macos-app:
+    name: Build macOS App Bundle
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install CMake and cargo-bundle
+        run: |
+          brew install cmake
+          cargo install cargo-bundle
+
+      - name: Build macOS app bundle
+        working-directory: src/rust_core/crates/bm3d_gui_egui
+        run: cargo bundle --release
+
+      - name: Create DMG
+        run: |
+          # Get version from tag or use default
+          VERSION=${GITHUB_REF_NAME:-dev}
+          VERSION=${VERSION#v}  # Remove 'v' prefix if present
+
+          # Create DMG from the app bundle
+          hdiutil create -volname "bm3dornl ${VERSION}" \
+            -srcfolder src/rust_core/target/release/bundle/osx/bm3dornl.app \
+            -ov -format UDZO \
+            bm3dornl-${VERSION}-macos-arm64.dmg
+
+      - name: Upload DMG artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: gui-macos-app
+          path: "*.dmg"
 
   publish-pypi:
     name: Publish GUI to PyPI
@@ -70,7 +106,7 @@ jobs:
       url: https://pypi.org/p/bm3dornl-gui
     steps:
       - name: Download all artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v6
         with:
           path: dist
           pattern: gui-wheel-*
@@ -86,18 +122,28 @@ jobs:
 
   upload-release-assets:
     name: Upload to GitHub Release
-    needs: [build-linux, build-macos]
+    needs: [build-linux, build-macos, build-macos-app]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - name: Download all artifacts
-        uses: actions/download-artifact@v4
+      - name: Download wheel artifacts
+        uses: actions/download-artifact@v6
         with:
           path: dist
           pattern: gui-wheel-*
           merge-multiple: true
+
+      - name: Download macOS app artifact
+        uses: actions/download-artifact@v6
+        with:
+          path: dist
+          pattern: gui-macos-app
+          merge-multiple: true
+
+      - name: List all artifacts
+        run: ls -la dist/
 
       - name: Upload assets to existing release
         uses: softprops/action-gh-release@v2
