@@ -83,16 +83,25 @@ fn reflect_index(idx: isize, len: usize) -> usize {
     }
 }
 
-/// Create a 1D padded buffer with reflected boundaries.
-/// This enables branchless convolution in the hot path.
+/// Fill a pre-allocated padded buffer with reflected boundaries.
+/// This enables branchless convolution in the hot path without re-allocation.
 #[inline]
-fn create_padded_row<F: Bm3dFloat>(input: &[F], radius: usize) -> Vec<F> {
+fn fill_padded_row<F: Bm3dFloat>(input: &[F], radius: usize, padded: &mut Vec<F>) {
     let n = input.len();
     let padded_len = n + 2 * radius;
-    let mut padded = vec![F::zero(); padded_len];
+
+    // Ensure buffer size
+    if padded.len() != padded_len {
+        padded.resize(padded_len, F::zero());
+    }
+
+    // Since we are writing to specific indices, we don't strictly need to zero-fill,
+    // but resize does it for new elements.
 
     // Copy original data
-    padded[radius..radius + n].copy_from_slice(input);
+    // padded[radius] is the start of valid data
+    let dest_slice = &mut padded[radius..radius + n];
+    dest_slice.copy_from_slice(input);
 
     // Left reflection
     for i in 0..radius {
@@ -105,7 +114,13 @@ fn create_padded_row<F: Bm3dFloat>(input: &[F], radius: usize) -> Vec<F> {
         let src_idx = reflect_index((n + i) as isize, n);
         padded[radius + n + i] = input[src_idx];
     }
+}
 
+/// Create a 1D padded buffer (wrapper around fill_padded_row for backward compat/convenience)
+#[inline]
+fn create_padded_row<F: Bm3dFloat>(input: &[F], radius: usize) -> Vec<F> {
+    let mut padded = Vec::with_capacity(input.len() + 2 * radius);
+    fill_padded_row(input, radius, &mut padded);
     padded
 }
 
@@ -194,9 +209,16 @@ fn blur_rows<F: Bm3dFloat>(input: ArrayView2<F>, sigma: F) -> Array2<F> {
             });
     } else {
         // Sequential processing for smaller arrays
+        let mut row_slice = Vec::with_capacity(cols);
+        let mut padded = Vec::with_capacity(cols + 2 * radius);
+
         for r in 0..rows {
-            let row_slice: Vec<F> = input.row(r).iter().copied().collect();
-            let padded = create_padded_row(&row_slice, radius);
+            // Re-fill buffer without allocation (reuse capacity)
+            row_slice.clear();
+            row_slice.extend(input.row(r).iter().copied());
+
+            fill_padded_row(&row_slice, radius, &mut padded);
+
             let out_slice = output.row_mut(r).into_slice().unwrap();
             convolve_1d_padded(&padded, &kernel, out_slice);
         }
@@ -245,10 +267,16 @@ fn blur_cols<F: Bm3dFloat>(input: ArrayView2<F>, sigma: F) -> Array2<F> {
         }
     } else {
         // Sequential column processing
+        let mut col_data = Vec::with_capacity(rows);
+        let mut padded = Vec::with_capacity(rows + 2 * radius);
+        let mut col_out = vec![F::zero(); rows];
+
         for c in 0..cols {
-            let col_data: Vec<F> = (0..rows).map(|r| input[[r, c]]).collect();
-            let padded = create_padded_row(&col_data, radius);
-            let mut col_out = vec![F::zero(); rows];
+            col_data.clear();
+            col_data.extend((0..rows).map(|r| input[[r, c]]));
+
+            fill_padded_row(&col_data, radius, &mut padded);
+
             convolve_1d_padded(&padded, &kernel, &mut col_out);
 
             for (r, &val) in col_out.iter().enumerate() {
@@ -317,8 +345,12 @@ pub fn median_axis0<F: Bm3dFloat>(input: ArrayView2<F>) -> Array1<F> {
 
     let mut output = Array1::zeros(cols);
 
+    // Reuse buffer for column data
+    let mut col_data: Vec<F> = Vec::with_capacity(rows);
+
     for c in 0..cols {
-        let mut col_data: Vec<F> = (0..rows).map(|r| input[[r, c]]).collect();
+        col_data.clear();
+        col_data.extend((0..rows).map(|r| input[[r, c]]));
         output[c] = median_slice(&mut col_data);
     }
 

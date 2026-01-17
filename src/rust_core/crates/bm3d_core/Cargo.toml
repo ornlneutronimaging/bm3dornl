@@ -15,11 +15,11 @@ ndarray = { workspace = true }
 num-traits = "0.2"
 rayon = { workspace = true }
 rustfft = { workspace = true }
-splines = "4.3"
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
 rand = "0.8"
+rand_distr = "0.4"
 
 [[bench]]
 name = "bm3d_benchmarks"

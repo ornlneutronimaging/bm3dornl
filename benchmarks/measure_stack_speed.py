@@ -45,9 +45,7 @@ def test_stack_speed():
 
     print("Processing stack (Mode=streak, Patch=8x8)...")
     start = time.time()
-    denoised_stack = bm3d_ring_artifact_removal(
-        stack_noisy, mode="streak", sigma_random=sigma, patch_size=8
-    )
+    denoised_stack = bm3d_ring_artifact_removal(stack_noisy, mode="streak", sigma_random=sigma, patch_size=8)
     end = time.time()
 
     total_time = end - start
@@ -77,9 +75,7 @@ def test_stack_speed():
 
     psnrs = []
     for i in range(N):
-        p = skimage.metrics.peak_signal_noise_ratio(
-            stack_clean[i], denoised_stack_m32[i]
-        )
+        p = skimage.metrics.peak_signal_noise_ratio(stack_clean[i], denoised_stack_m32[i])
         psnrs.append(p)
     avg_psnr_m32 = np.mean(psnrs)
     print(f"Average PSNR (max_matches=32): {avg_psnr_m32:.2f} dB")
@@ -98,9 +94,7 @@ def test_stack_speed():
 
     psnrs = []
     for i in range(N):
-        p = skimage.metrics.peak_signal_noise_ratio(
-            stack_clean[i], denoised_stack_s3[i]
-        )
+        p = skimage.metrics.peak_signal_noise_ratio(stack_clean[i], denoised_stack_s3[i])
         psnrs.append(p)
     avg_psnr_s3 = np.mean(psnrs)
     print(f"Average PSNR (step_size=3): {avg_psnr_s3:.2f} dB")

@@ -81,8 +81,8 @@ mod tests {
 
     #[test]
     fn test_f32_trait_impl() {
-        let val: f32 = Bm3dFloat::from_f64_c(3.14159);
-        assert!((val - 3.14159f32).abs() < 1e-5);
+        let val: f32 = Bm3dFloat::from_f64_c(std::f64::consts::PI);
+        assert!((val - std::f32::consts::PI).abs() < 1e-5);
 
         let usize_val: f32 = Bm3dFloat::usize_as(42);
         assert_eq!(usize_val, 42.0f32);
@@ -93,8 +93,8 @@ mod tests {
 
     #[test]
     fn test_f64_trait_impl() {
-        let val: f64 = Bm3dFloat::from_f64_c(3.14159265358979);
-        assert!((val - 3.14159265358979f64).abs() < 1e-14);
+        let val: f64 = Bm3dFloat::from_f64_c(std::f64::consts::PI);
+        assert!((val - std::f64::consts::PI).abs() < 1e-14);
 
         let usize_val: f64 = Bm3dFloat::usize_as(42);
         assert_eq!(usize_val, 42.0f64);

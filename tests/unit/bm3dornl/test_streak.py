@@ -36,39 +36,29 @@ class TestStreakProfileRustVsPython:
         """Uniform image should produce near-zero profile in both implementations."""
         sinogram = np.full((32, 64), 0.5, dtype=np.float32)
 
-        py_result = estimate_streak_profile_python(
-            sinogram, sigma_smooth=3.0, iterations=3
-        )
+        py_result = estimate_streak_profile_python(sinogram, sigma_smooth=3.0, iterations=3)
         rust_result = bm3d_rust.estimate_streak_profile_rust(sinogram, 3.0, 3)
 
         # Both should be near zero
-        assert np.allclose(py_result, 0.0, atol=1e-5), (
-            f"Python result not near zero: max={np.max(np.abs(py_result))}"
-        )
-        assert np.allclose(rust_result, 0.0, atol=1e-5), (
-            f"Rust result not near zero: max={np.max(np.abs(rust_result))}"
-        )
+        assert np.allclose(py_result, 0.0, atol=1e-5), f"Python result not near zero: max={np.max(np.abs(py_result))}"
+        assert np.allclose(
+            rust_result, 0.0, atol=1e-5
+        ), f"Rust result not near zero: max={np.max(np.abs(rust_result))}"
 
     def test_vertical_stripe_detection(self):
         """Both implementations should detect a vertical stripe at the same location."""
         sinogram = np.zeros((64, 128), dtype=np.float32)
         sinogram[:, 50] = 1.0  # Bright vertical stripe at column 50
 
-        py_result = estimate_streak_profile_python(
-            sinogram, sigma_smooth=3.0, iterations=3
-        )
+        py_result = estimate_streak_profile_python(sinogram, sigma_smooth=3.0, iterations=3)
         rust_result = bm3d_rust.estimate_streak_profile_rust(sinogram, 3.0, 3)
 
         # Both should have peak near column 50
         py_peak_idx = np.argmax(py_result)
         rust_peak_idx = np.argmax(rust_result)
 
-        assert abs(py_peak_idx - 50) <= 2, (
-            f"Python peak at {py_peak_idx}, expected near 50"
-        )
-        assert abs(rust_peak_idx - 50) <= 2, (
-            f"Rust peak at {rust_peak_idx}, expected near 50"
-        )
+        assert abs(py_peak_idx - 50) <= 2, f"Python peak at {py_peak_idx}, expected near 50"
+        assert abs(rust_peak_idx - 50) <= 2, f"Rust peak at {rust_peak_idx}, expected near 50"
 
     def test_multiple_stripes(self):
         """Both implementations should detect multiple vertical stripes."""
@@ -78,48 +68,32 @@ class TestStreakProfileRustVsPython:
         sinogram[:, 60] = 1.0  # Brightest
         sinogram[:, 100] = 0.6
 
-        py_result = estimate_streak_profile_python(
-            sinogram, sigma_smooth=3.0, iterations=3
-        )
+        py_result = estimate_streak_profile_python(sinogram, sigma_smooth=3.0, iterations=3)
         rust_result = bm3d_rust.estimate_streak_profile_rust(sinogram, 3.0, 3)
 
         # Column 60 should have highest value in both
         assert py_result[60] > py_result[20], "Python: column 60 should be > column 20"
-        assert py_result[60] > py_result[100], (
-            "Python: column 60 should be > column 100"
-        )
-        assert rust_result[60] > rust_result[20], (
-            "Rust: column 60 should be > column 20"
-        )
-        assert rust_result[60] > rust_result[100], (
-            "Rust: column 60 should be > column 100"
-        )
+        assert py_result[60] > py_result[100], "Python: column 60 should be > column 100"
+        assert rust_result[60] > rust_result[20], "Rust: column 60 should be > column 20"
+        assert rust_result[60] > rust_result[100], "Rust: column 60 should be > column 100"
 
     def test_output_shape(self):
         """Output shape should match input width for both implementations."""
         for shape in [(32, 64), (64, 128), (100, 200)]:
             sinogram = np.random.rand(*shape).astype(np.float32)
 
-            py_result = estimate_streak_profile_python(
-                sinogram, sigma_smooth=3.0, iterations=2
-            )
+            py_result = estimate_streak_profile_python(sinogram, sigma_smooth=3.0, iterations=2)
             rust_result = bm3d_rust.estimate_streak_profile_rust(sinogram, 3.0, 2)
 
-            assert py_result.shape == (shape[1],), (
-                f"Python output shape mismatch for input {shape}"
-            )
-            assert rust_result.shape == (shape[1],), (
-                f"Rust output shape mismatch for input {shape}"
-            )
+            assert py_result.shape == (shape[1],), f"Python output shape mismatch for input {shape}"
+            assert rust_result.shape == (shape[1],), f"Rust output shape mismatch for input {shape}"
 
     def test_horizontal_structure_ignored(self):
         """Horizontal structures should not create column-specific streaks."""
         sinogram = np.zeros((64, 64), dtype=np.float32)
         sinogram[32, :] = 1.0  # Bright horizontal line
 
-        py_result = estimate_streak_profile_python(
-            sinogram, sigma_smooth=3.0, iterations=3
-        )
+        py_result = estimate_streak_profile_python(sinogram, sigma_smooth=3.0, iterations=3)
         rust_result = bm3d_rust.estimate_streak_profile_rust(sinogram, 3.0, 3)
 
         # Profile should be approximately uniform
@@ -135,20 +109,12 @@ class TestStreakProfileRustVsPython:
         sinogram[:, 30] = 1.0
 
         for iterations in [1, 2, 3, 5]:
-            py_result = estimate_streak_profile_python(
-                sinogram, sigma_smooth=3.0, iterations=iterations
-            )
-            rust_result = bm3d_rust.estimate_streak_profile_rust(
-                sinogram, 3.0, iterations
-            )
+            py_result = estimate_streak_profile_python(sinogram, sigma_smooth=3.0, iterations=iterations)
+            rust_result = bm3d_rust.estimate_streak_profile_rust(sinogram, 3.0, iterations)
 
             # Both should detect the streak
-            assert py_result[30] > 0, (
-                f"Python failed to detect streak with {iterations} iterations"
-            )
-            assert rust_result[30] > 0, (
-                f"Rust failed to detect streak with {iterations} iterations"
-            )
+            assert py_result[30] > 0, f"Python failed to detect streak with {iterations} iterations"
+            assert rust_result[30] > 0, f"Rust failed to detect streak with {iterations} iterations"
 
     def test_different_sigma_smooth(self):
         """Both implementations should handle different sigma values."""
@@ -156,9 +122,7 @@ class TestStreakProfileRustVsPython:
         sinogram[:, 30] = 1.0
 
         for sigma in [1.0, 3.0, 5.0, 10.0]:
-            py_result = estimate_streak_profile_python(
-                sinogram, sigma_smooth=sigma, iterations=3
-            )
+            py_result = estimate_streak_profile_python(sinogram, sigma_smooth=sigma, iterations=3)
             rust_result = bm3d_rust.estimate_streak_profile_rust(sinogram, sigma, 3)
 
             # Both should detect the streak (may be weaker with large sigma)
@@ -181,9 +145,7 @@ class TestStreakProfileRustVsPython:
         # Add a clear streak
         sinogram[:, 32] += 0.5
 
-        py_result = estimate_streak_profile_python(
-            sinogram, sigma_smooth=3.0, iterations=3
-        )
+        py_result = estimate_streak_profile_python(sinogram, sigma_smooth=3.0, iterations=3)
         rust_result = bm3d_rust.estimate_streak_profile_rust(sinogram, 3.0, 3)
 
         # Check correlation between results (should be highly correlated)
@@ -193,9 +155,7 @@ class TestStreakProfileRustVsPython:
         # Check that both detect the peak at the same location
         py_peak = np.argmax(py_result)
         rust_peak = np.argmax(rust_result)
-        assert abs(py_peak - rust_peak) <= 2, (
-            f"Peak location differs: Python={py_peak}, Rust={rust_peak}"
-        )
+        assert abs(py_peak - rust_peak) <= 2, f"Peak location differs: Python={py_peak}, Rust={rust_peak}"
 
 
 class TestStreakProfileRustEdgeCases:
