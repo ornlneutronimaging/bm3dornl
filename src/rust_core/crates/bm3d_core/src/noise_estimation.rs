@@ -183,12 +183,6 @@ mod tests {
         let sigma_est = estimate_noise_sigma(noise_img.view());
 
         let error = (sigma_est - sigma_true).abs() / sigma_true;
-        println!(
-            "Sigma True: {}, Est: {}, Error: {:.2}%",
-            sigma_true,
-            sigma_est,
-            error * 100.0
-        );
 
         // Expect < 10% error
         assert!(
@@ -211,8 +205,6 @@ mod tests {
         let est_low = estimate_noise_sigma(img_low.view());
         let est_high = estimate_noise_sigma(img_high.view());
 
-        println!("Low: {}, High: {}", est_low, est_high);
-
         assert!(
             est_high > est_low,
             "High noise should yield higher sigma than low noise"
@@ -221,7 +213,6 @@ mod tests {
         // Safe division check
         if est_low > 1e-9 {
             let ratio = est_high / est_low;
-            println!("Ratio: {}", ratio);
             assert!(
                 ratio > 8.0 && ratio < 12.0,
                 "Expected ratio ~10, got {}",
@@ -254,11 +245,6 @@ mod tests {
 
         let sigma_est = estimate_noise_sigma(combined.view());
 
-        println!(
-            "Structure Amp: 1.0, Streak Sigma: {}, Estimated: {}",
-            sigma_true, sigma_est
-        );
-
         // It might overestimate slightly, but shouldn't be dominated by structure (1.0)
         assert!(
             sigma_est < 0.10,
@@ -288,13 +274,6 @@ mod tests {
 
         let sigma_est = estimate_noise_sigma(img.view());
         let error = (sigma_est - sigma_true).abs() / sigma_true;
-
-        println!(
-            "f64 - True: {}, Est: {}, Error: {:.2}%",
-            sigma_true,
-            sigma_est,
-            error * 100.0
-        );
 
         assert!(
             error < 0.10,

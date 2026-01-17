@@ -460,6 +460,7 @@ pub fn bm3d_ring_artifact_removal<F: Bm3dFloat>(
 // =============================================================================
 
 #[cfg(test)]
+#[allow(clippy::field_reassign_with_default)]
 mod tests {
     use super::*;
     use ndarray::Array2;

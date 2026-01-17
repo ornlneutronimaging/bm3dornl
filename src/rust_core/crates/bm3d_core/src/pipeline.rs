@@ -1117,7 +1117,7 @@ mod tests {
         for &val in output.iter() {
             assert!(val.is_finite(), "Output contains non-finite value");
             assert!(
-                val >= -1.0 && val <= 2.0,
+                (-1.0..=2.0).contains(&val),
                 "Output value {} outside reasonable range",
                 val
             );

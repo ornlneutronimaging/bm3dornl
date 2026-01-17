@@ -1075,6 +1075,7 @@ pub fn multiscale_bm3d_streak_removal<F: Bm3dFloat>(
 // =============================================================================
 
 #[cfg(test)]
+#[allow(clippy::field_reassign_with_default)]
 mod tests {
     use super::*;
     use ndarray::Array2;
@@ -1590,8 +1591,8 @@ mod kernel_tests {
             "Residual kernel sum reflects pipeline DC damping (0.5)"
         );
 
-        for i in 0..19 {
-            println!("{:5} | {:10.4e}", i, computed[i]);
+        for (i, val) in computed.iter().enumerate().take(19) {
+            println!("{:5} | {:10.4e}", i, val);
         }
     }
 }

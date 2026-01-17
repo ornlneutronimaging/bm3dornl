@@ -261,6 +261,7 @@ mod tests {
     }
 
     // Helper: Create FFT plans for a given size
+    #[allow(clippy::type_complexity)]
     fn create_fft_plans_f32(
         rows: usize,
         cols: usize,
@@ -278,6 +279,7 @@ mod tests {
         (fft_row, fft_col, ifft_row, ifft_col)
     }
 
+    #[allow(clippy::type_complexity)]
     fn create_fft_plans_f64(
         rows: usize,
         cols: usize,
@@ -540,17 +542,17 @@ mod tests {
     #[test]
     fn test_fft2d_single_element() {
         let mut input = Array2::<f32>::zeros((1, 1));
-        input[[0, 0]] = 3.14;
+        input[[0, 0]] = 2.71; // Euler's number approximation (not PI to avoid clippy)
         let (fft_row, fft_col, ifft_row, ifft_col) = create_fft_plans_f32(1, 1);
 
         let freq = fft2d(input.view(), &fft_row, &fft_col);
         assert!(
-            (freq[[0, 0]].re - 3.14).abs() < 1e-5,
+            (freq[[0, 0]].re - 2.71).abs() < 1e-5,
             "1x1 FFT should preserve value"
         );
 
         let output = ifft2d(&freq, &ifft_row, &ifft_col);
-        assert!((output[[0, 0]] - 3.14).abs() < 1e-5, "1x1 roundtrip failed");
+        assert!((output[[0, 0]] - 2.71).abs() < 1e-5, "1x1 roundtrip failed");
     }
 
     #[test]
