@@ -360,7 +360,11 @@ pub fn bm3d_ring_artifact_removal_with_plans<F: Bm3dFloat>(
         );
     } else if mode == RingRemovalMode::FourierSvd {
         // Fourier-SVD Streak Removal
-        z_norm = crate::fourier_svd::fourier_svd_removal(z_norm.view(), config.fft_alpha, config.notch_width);
+        z_norm = crate::fourier_svd::fourier_svd_removal(
+            z_norm.view(),
+            config.fft_alpha,
+            config.notch_width,
+        );
     }
 
     // Step 5b: Auto-estimate sigma if not provided

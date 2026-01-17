@@ -63,7 +63,11 @@ impl Bm3dParameters {
         let default = Bm3dConfig::<f32>::default();
         // If auto_sigma is enabled, we pass 0.0 to Rust core to trigger auto-estimation.
         // Otherwise we pass the manual value.
-        let sigma = if self.auto_sigma { 0.0 } else { self.sigma_random };
+        let sigma = if self.auto_sigma {
+            0.0
+        } else {
+            self.sigma_random
+        };
 
         Bm3dConfig {
             sigma_random: sigma,
@@ -173,7 +177,11 @@ impl Bm3dParameters {
                         changed = true;
                     }
                     if ui
-                        .selectable_value(&mut self.mode, RingRemovalMode::FourierSvd, "Fourier-SVD")
+                        .selectable_value(
+                            &mut self.mode,
+                            RingRemovalMode::FourierSvd,
+                            "Fourier-SVD",
+                        )
                         .on_hover_text("Fast FFT-guided SVD destriping")
                         .changed()
                     {
@@ -325,7 +333,10 @@ impl Bm3dParameters {
             );
 
             egui::ComboBox::from_id_salt("processing_axis")
-                .selected_text(format!("Axis {} (D{})", self.processing_axis, self.processing_axis))
+                .selected_text(format!(
+                    "Axis {} (D{})",
+                    self.processing_axis, self.processing_axis
+                ))
                 .show_ui(ui, |ui| {
                     for axis in 0..3 {
                         let label = match axis {
@@ -376,7 +387,11 @@ impl Bm3dParameters {
                         .show_ui(ui, |ui| {
                             for size in [4, 8, 16] {
                                 if ui
-                                    .selectable_value(&mut self.patch_size, size, format!("{}", size))
+                                    .selectable_value(
+                                        &mut self.patch_size,
+                                        size,
+                                        format!("{}", size),
+                                    )
                                     .changed()
                                 {
                                     changed = true;

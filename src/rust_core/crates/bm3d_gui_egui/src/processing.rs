@@ -1,6 +1,6 @@
 use bm3d_core::{
-    bm3d_ring_artifact_removal, multiscale_bm3d_streak_removal, fourier_svd::fourier_svd_removal, Bm3dConfig,
-    MultiscaleConfig, RingRemovalMode,
+    bm3d_ring_artifact_removal, fourier_svd::fourier_svd_removal, multiscale_bm3d_streak_removal,
+    Bm3dConfig, MultiscaleConfig, RingRemovalMode,
 };
 use ndarray::{Array2, Array3, Axis};
 use std::sync::atomic::{AtomicBool, Ordering};

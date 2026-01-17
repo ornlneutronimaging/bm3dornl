@@ -629,7 +629,8 @@ pub fn fourier_svd_removal_py<'py>(
     fft_alpha: f32,
     notch_width: f32,
 ) -> PyResult<Bound<'py, PyArray2<f32>>> {
-    let output = bm3d_core::fourier_svd::fourier_svd_removal(sinogram.as_array(), fft_alpha, notch_width);
+    let output =
+        bm3d_core::fourier_svd::fourier_svd_removal(sinogram.as_array(), fft_alpha, notch_width);
     Ok(output.to_pyarray(py))
 }
 
@@ -643,7 +644,8 @@ pub fn fourier_svd_removal_py_f64<'py>(
     fft_alpha: f64,
     notch_width: f64,
 ) -> PyResult<Bound<'py, PyArray2<f64>>> {
-    let output = bm3d_core::fourier_svd::fourier_svd_removal(sinogram.as_array(), fft_alpha, notch_width);
+    let output =
+        bm3d_core::fourier_svd::fourier_svd_removal(sinogram.as_array(), fft_alpha, notch_width);
     Ok(output.to_pyarray(py))
 }
 
