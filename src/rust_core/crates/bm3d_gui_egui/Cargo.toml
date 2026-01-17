@@ -12,11 +12,11 @@ path = "src/main.rs"
 test = false  # GUI binary requires HDF5 runtime; tested manually
 
 # macOS app bundle configuration for cargo-bundle
+# Note: version is inherited from [package].version (which uses workspace inheritance)
 [package.metadata.bundle]
 name = "bm3dornl"
 identifier = "com.ornl.bm3dornl"
 icon = ["../../../../resources/bm3dornl.icns"]
-version = "0.6.4"
 short_description = "BM3D Ring Artifact Removal for Neutron Imaging"
 long_description = """
 bm3dornl is a high-performance tool for removing ring artifacts from
