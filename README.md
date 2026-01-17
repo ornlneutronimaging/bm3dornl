@@ -18,6 +18,8 @@ The BM3D algorithm was originally proposed by K. Dabov, A. Foi, V. Katkovnik, an
 **BM3D ORNL** provides a Python API with a **Rust backend** for efficient, parallel processing of tomography data. Key features:
 
 - **Streak/Ring Artifact Removal**: Specialized mode for removing vertical streak artifacts common in neutron and X-ray imaging
+- **Multi-Scale Processing**: True multi-scale BM3D for handling wide streaks that single-scale cannot capture (based on Mäkinen et al. 2021)
+- **Fourier-SVD Method**: Alternative fast algorithm (~2.6x faster than BM3D) combining FFT-based energy detection with rank-1 SVD
 - **Stack Processing**: Efficient batched processing of 3D sinogram stacks
 - **High Performance**: Rust backend with optimized block matching (integral images, early termination) and transforms (Hadamard, FFT)
 
@@ -74,6 +76,30 @@ denoised = bm3d_ring_artifact_removal(
     search_window=40,       # Max search distance
     max_matches=64,         # Similar patches per 3D group
     batch_size=32,          # Batch size for stack processing
+)
+
+# Multi-scale BM3D for wide streaks (v0.7.0+)
+denoised = bm3d_ring_artifact_removal(
+    sinogram,
+    mode="streak",
+    multiscale=True,        # Enable multi-scale pyramid processing
+    num_scales=None,        # Auto-detect (or set explicitly)
+    filter_strength=1.0,    # Filtering intensity multiplier
+)
+```
+
+### Fourier-SVD Method (v0.7.0+)
+
+For faster processing with excellent results on many datasets:
+
+```python
+from bm3dornl.fourier_svd import fourier_svd_removal
+
+# Fast streak removal (~2.6x faster than BM3D)
+denoised = fourier_svd_removal(
+    sinogram,
+    fft_alpha=1.0,          # FFT-guided trust factor (0.0 disables FFT guidance)
+    notch_width=2.0,        # Gaussian notch filter width
 )
 ```
 
@@ -164,3 +190,14 @@ Parameter Reference
 | `max_matches` | `16` | Maximum similar patches per 3D group |
 | `batch_size` | `32` | Batch size for stack processing |
 | `streak_sigma_smooth` | `1.0` | Smoothing for streak mode (streak mode only) |
+| `multiscale` | `False` | Enable multi-scale processing for wide streaks |
+| `num_scales` | `None` | Number of scales (auto-detected if None) |
+| `filter_strength` | `1.0` | Filtering strength multiplier for multi-scale |
+| `debin_iterations` | `30` | Debinning iterations for multi-scale |
+
+### Fourier-SVD Parameters
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `fft_alpha` | `1.0` | FFT-guided trust factor (0.0 disables FFT guidance) |
+| `notch_width` | `2.0` | Gaussian notch filter width in frequency domain |
