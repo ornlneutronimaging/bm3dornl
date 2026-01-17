@@ -382,7 +382,7 @@ pub fn estimate_streak_profile_py_f64<'py>(
 /// sinogram : numpy.ndarray
 ///     Input 2D sinogram (H × W), dtype float32.
 /// mode : str
-///     Processing mode: "generic", "streak", or "svd_mg".
+///     Processing mode: "generic", "streak", or "fourier_svd".
 /// sigma_random : float, optional
 ///     Random noise std dev. Default: 0.0 (auto-estimate)
 /// patch_size : int, optional
@@ -406,9 +406,9 @@ pub fn estimate_streak_profile_py_f64<'py>(
 /// psd_width : float, optional
 ///     PSD Gaussian width for streak mode. Default: 0.6
 /// fft_alpha : float, optional
-///     FFT-Guided SVD Trust Factor. Default: 1.0 (SVD-MG Mode only)
+///     FFT-Guided SVD Trust Factor. Default: 1.0 (Fourier-SVD mode only)
 /// notch_width : float, optional
-///     FFT-Guided SVD Notch Width. Default: 2.0 (SVD-MG Mode only)
+///     FFT-Guided SVD Notch Width. Default: 2.0 (Fourier-SVD mode only)
 ///
 /// Returns
 /// -------
@@ -455,10 +455,10 @@ pub fn bm3d_ring_artifact_removal_2d<'py>(
     let ring_mode = match mode.to_lowercase().as_str() {
         "generic" => RingRemovalMode::Generic,
         "streak" => RingRemovalMode::Streak,
-        "svd_mg" | "svdmg" => RingRemovalMode::SvdMg,
+        "fourier_svd" | "fouriersvd" => RingRemovalMode::FourierSvd,
         _ => {
             return Err(pyo3::exceptions::PyValueError::new_err(format!(
-                "Invalid mode '{}'. Expected 'generic', 'streak', or 'svd_mg'.",
+                "Invalid mode '{}'. Expected 'generic', 'streak', or 'fourier_svd'.",
                 mode
             )))
         }
@@ -558,10 +558,10 @@ pub fn bm3d_ring_artifact_removal_2d_f64<'py>(
     let ring_mode = match mode.to_lowercase().as_str() {
         "generic" => RingRemovalMode::Generic,
         "streak" => RingRemovalMode::Streak,
-        "svd_mg" | "svdmg" => RingRemovalMode::SvdMg,
+        "fourier_svd" | "fouriersvd" => RingRemovalMode::FourierSvd,
         _ => {
             return Err(pyo3::exceptions::PyValueError::new_err(format!(
-                "Invalid mode '{}'. Expected 'generic', 'streak', or 'svd_mg'.",
+                "Invalid mode '{}'. Expected 'generic', 'streak', or 'fourier_svd'.",
                 mode
             )))
         }
@@ -617,31 +617,31 @@ pub fn bm3d_ring_artifact_removal_2d_f64<'py>(
     Ok(output.to_pyarray(py))
 }
 
-/// SVD-MG Streak Removal (Standalone) - f32
+/// Fourier-SVD Streak Removal (Standalone) - f32
 #[pyfunction]
-#[pyo3(name = "svd_mg_removal_rust")]
+#[pyo3(name = "fourier_svd_removal_rust")]
 #[pyo3(signature = (sinogram, fft_alpha=1.0, notch_width=2.0))]
-pub fn svd_mg_removal_py<'py>(
+pub fn fourier_svd_removal_py<'py>(
     py: Python<'py>,
     sinogram: PyReadonlyArray2<'py, f32>,
     fft_alpha: f32,
     notch_width: f32,
 ) -> PyResult<Bound<'py, PyArray2<f32>>> {
-    let output = bm3d_core::svdmg::svd_mg_removal(sinogram.as_array(), fft_alpha, notch_width);
+    let output = bm3d_core::fourier_svd::fourier_svd_removal(sinogram.as_array(), fft_alpha, notch_width);
     Ok(output.to_pyarray(py))
 }
 
-/// SVD-MG Streak Removal (Standalone) - f64
+/// Fourier-SVD Streak Removal (Standalone) - f64
 #[pyfunction]
-#[pyo3(name = "svd_mg_removal_rust_f64")]
+#[pyo3(name = "fourier_svd_removal_rust_f64")]
 #[pyo3(signature = (sinogram, fft_alpha=1.0, notch_width=2.0))]
-pub fn svd_mg_removal_py_f64<'py>(
+pub fn fourier_svd_removal_py_f64<'py>(
     py: Python<'py>,
     sinogram: PyReadonlyArray2<'py, f64>,
     fft_alpha: f64,
     notch_width: f64,
 ) -> PyResult<Bound<'py, PyArray2<f64>>> {
-    let output = bm3d_core::svdmg::svd_mg_removal(sinogram.as_array(), fft_alpha, notch_width);
+    let output = bm3d_core::fourier_svd::fourier_svd_removal(sinogram.as_array(), fft_alpha, notch_width);
     Ok(output.to_pyarray(py))
 }
 
@@ -912,7 +912,7 @@ fn bm3d_rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(estimate_streak_profile_py, m)?)?;
     m.add_function(wrap_pyfunction!(bm3d_ring_artifact_removal_2d, m)?)?;
     m.add_function(wrap_pyfunction!(multiscale_bm3d_streak_removal_2d, m)?)?;
-    m.add_function(wrap_pyfunction!(svd_mg_removal_py, m)?)?;
+    m.add_function(wrap_pyfunction!(fourier_svd_removal_py, m)?)?;
     m.add_function(wrap_pyfunction!(estimate_noise_sigma_py, m)?)?;
 
     // f64 (double precision) functions
@@ -924,7 +924,7 @@ fn bm3d_rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(estimate_streak_profile_py_f64, m)?)?;
     m.add_function(wrap_pyfunction!(bm3d_ring_artifact_removal_2d_f64, m)?)?;
     m.add_function(wrap_pyfunction!(multiscale_bm3d_streak_removal_2d_f64, m)?)?;
-    m.add_function(wrap_pyfunction!(svd_mg_removal_py_f64, m)?)?;
+    m.add_function(wrap_pyfunction!(fourier_svd_removal_py_f64, m)?)?;
     m.add_function(wrap_pyfunction!(estimate_noise_sigma_py_f64, m)?)?;
 
     Ok(())

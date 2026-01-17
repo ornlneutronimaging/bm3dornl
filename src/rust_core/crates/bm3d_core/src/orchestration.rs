@@ -87,9 +87,9 @@ pub enum RingRemovalMode {
     /// Streak pre-subtraction + anisotropic PSD.
     /// Designed for ring artifact removal in sinograms.
     Streak,
-    /// SVD-Median-Gated algorithm.
-    /// Uses low-rank approximation to identify and remove vertical streaks.
-    SvdMg,
+    /// Fourier-SVD algorithm.
+    /// Uses FFT-guided energy detection with rank-1 SVD for streak removal.
+    FourierSvd,
 }
 
 /// Configuration for BM3D ring artifact removal.
@@ -341,7 +341,7 @@ pub fn bm3d_ring_artifact_removal_with_plans<F: Bm3dFloat>(
             // Anisotropic PSD for streak mode
             construct_psd(config.patch_size, config.psd_width)
         }
-        RingRemovalMode::SvdMg => {
+        RingRemovalMode::FourierSvd => {
             // SVD-MG: No PSD needed (handing off to separate logic externally or default behavior)
             Array2::zeros((1, 1))
         }
@@ -354,16 +354,15 @@ pub fn bm3d_ring_artifact_removal_with_plans<F: Bm3dFloat>(
             config.streak_sigma_smooth,
             config.streak_iterations,
         );
-    } else if mode == RingRemovalMode::SvdMg {
-        // SVD-Median-Gated Streak Removal
-        // We replace z_norm with the result of SVD-MG
-        z_norm = crate::svdmg::svd_mg_removal(z_norm.view(), config.fft_alpha, config.notch_width);
+    } else if mode == RingRemovalMode::FourierSvd {
+        // Fourier-SVD Streak Removal
+        z_norm = crate::fourier_svd::fourier_svd_removal(z_norm.view(), config.fft_alpha, config.notch_width);
     }
 
     // Step 5b: Auto-estimate sigma if not provided
     // If sigma_random is effectively 0, estimate from data.
     let sigma_random = if config.sigma_random <= F::from_f64_c(1e-6) {
-        // Use z_norm for estimation (it has streaks removed if in Streak/SvdMg mode)
+        // Use z_norm for estimation (it has streaks removed if in Streak/FourierSvd mode)
         estimate_noise_sigma(z_norm.view())
     } else {
         config.sigma_random

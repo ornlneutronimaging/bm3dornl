@@ -1,30 +1,50 @@
+"""
+Fourier-SVD Streak Removal
+
+A two-stage algorithm for removing vertical streak artifacts from sinograms:
+
+Stage 1: FFT-Guided Energy Detection
+- Apply FFT and isolate vertical frequencies (Fy ≈ 0) using Gaussian notch filter
+- Compute per-column energy profile from isolated streak spectrum
+- Use energy profile to spatially modulate removal threshold
+
+Stage 2: Rank-1 SVD with Magnitude Gating
+- Extract first principal component via power iteration
+- Median filter the v-vector to separate baseline from streak detail
+- Apply soft magnitude gating: 1 / (1 + (|v| / threshold)^exponent)
+- Reconstruct streak as rank-1 outer product and subtract from input
+
+Parameters:
+- fft_alpha: Controls FFT energy influence on threshold modulation (default: 1.0)
+- notch_width: Gaussian notch filter width in frequency domain (default: 2.0)
+"""
+
 import numpy as np
 import logging
 
 try:
     from .bm3d_rust import (
-        svd_mg_removal_rust,
-        svd_mg_removal_rust_f64
+        fourier_svd_removal_rust,
+        fourier_svd_removal_rust_f64
     )
 except ImportError:
     # During development/test, might not be installed yet
-    logging.warning("bm3d_rust module not found. SVDMG will fail.")
-    svd_mg_removal_rust = None
-    svd_mg_removal_rust_f64 = None
+    logging.warning("bm3d_rust module not found. Fourier-SVD will fail.")
+    fourier_svd_removal_rust = None
+    fourier_svd_removal_rust_f64 = None
 
 logger = logging.getLogger(__name__)
 
-def svd_streak_removal(
+def fourier_svd_removal(
     sinogram: np.ndarray,
     fft_alpha: float = 1.0,
     notch_width: float = 2.0,
 ) -> np.ndarray:
     """
-    SVD-MG (Singular Value Decomposition - Median Gated) Streak Removal.
+    Fourier-SVD Streak Removal.
 
-    An innovative, fast, and robust destriping algorithm that uses the First Principal Component
-    to estimate the streak profile. It employs a Median Filter to separate structure from streaks
-    and Magnitude Gating to protect high-contrast edges (walls).
+    A two-stage algorithm combining FFT-based energy detection with rank-1 SVD
+    for removing vertical streak artifacts from sinograms.
 
     Benchmark Performance:
     - Speed: ~2.6x faster than BM3D.
@@ -57,23 +77,23 @@ def svd_streak_removal(
     # Check dimensions
     rows, cols = sinogram.shape
     if rows < 10 or cols < 10:
-        logger.warning("Image too small for SVD streak removal. Returning input.")
+        logger.warning("Image too small for Fourier-SVD streak removal. Returning input.")
         return sinogram.copy()
 
     # Dispatch based on dtype
     if input_dtype == np.float32:
-        if svd_mg_removal_rust is None:
+        if fourier_svd_removal_rust is None:
             raise ImportError("bm3d_rust backend not available")
-        return svd_mg_removal_rust(sinogram, fft_alpha, notch_width)
+        return fourier_svd_removal_rust(sinogram, fft_alpha, notch_width)
 
     elif input_dtype == np.float64:
-        if svd_mg_removal_rust_f64 is None:
+        if fourier_svd_removal_rust_f64 is None:
             raise ImportError("bm3d_rust backend not available")
-        return svd_mg_removal_rust_f64(sinogram, fft_alpha, notch_width)
+        return fourier_svd_removal_rust_f64(sinogram, fft_alpha, notch_width)
 
     else:
         # Auto-convert other types to float32
         logger.info(f"Converting input from {input_dtype} to float32 for processing")
         sino_f32 = sinogram.astype(np.float32)
-        result = svd_mg_removal_rust(sino_f32, fft_alpha, notch_width)
+        result = fourier_svd_removal_rust(sino_f32, fft_alpha, notch_width)
         return result.astype(input_dtype)

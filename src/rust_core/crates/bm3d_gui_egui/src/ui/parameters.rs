@@ -105,13 +105,13 @@ impl Bm3dParameters {
         // Tier 1 - Simple parameters (always visible)
         ui.horizontal(|ui| {
             ui.label("Mode:")
-                .on_hover_text("Generic: Standard denoising for white noise\nStreak: Optimized for ring artifact removal\nSVD-MG: Fast SVD-based destriping for subtle artifacts");
+                .on_hover_text("Generic: Standard denoising for white noise\nStreak: Optimized for ring artifact removal\nFourier-SVD: Fast FFT-guided SVD destriping for subtle artifacts");
 
             egui::ComboBox::from_id_salt("bm3d_mode")
                 .selected_text(match self.mode {
                     RingRemovalMode::Generic => "Generic",
                     RingRemovalMode::Streak => "Streak",
-                    RingRemovalMode::SvdMg => "SVD-MG",
+                    RingRemovalMode::FourierSvd => "Fourier-SVD",
                 })
                 .show_ui(ui, |ui| {
                     if ui
@@ -127,7 +127,7 @@ impl Bm3dParameters {
                         changed = true;
                     }
                     if ui
-                        .selectable_value(&mut self.mode, RingRemovalMode::SvdMg, "SVD-MG")
+                        .selectable_value(&mut self.mode, RingRemovalMode::FourierSvd, "Fourier-SVD")
                         .changed()
                     {
                         changed = true;
@@ -135,8 +135,8 @@ impl Bm3dParameters {
                 });
         });
 
-        // Show SVD-MG specific parameters
-        if self.mode == RingRemovalMode::SvdMg {
+        // Show Fourier-SVD specific parameters
+        if self.mode == RingRemovalMode::FourierSvd {
             ui.horizontal(|ui| {
                 ui.label("FFT Alpha:")
                     .on_hover_text("FFT Trust Factor (0.0 - 5.0). 1.0 = standard.");

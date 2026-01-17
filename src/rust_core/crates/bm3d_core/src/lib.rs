@@ -17,7 +17,7 @@ pub mod noise_estimation;
 pub mod orchestration;
 pub mod pipeline;
 pub mod streak;
-pub mod svdmg;
+pub mod fourier_svd;
 pub mod transforms;
 pub mod utils;
 

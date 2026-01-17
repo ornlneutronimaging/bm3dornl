@@ -1,3 +1,22 @@
+//! # Fourier-SVD Streak Removal
+//!
+//! A two-stage algorithm for removing vertical streak artifacts from sinograms:
+//!
+//! ## Stage 1: FFT-Guided Energy Detection
+//! - Apply FFT and isolate vertical frequencies (Fy ≈ 0) using Gaussian notch filter
+//! - Compute per-column energy profile from isolated streak spectrum
+//! - Use energy profile to spatially modulate removal threshold
+//!
+//! ## Stage 2: Rank-1 SVD with Magnitude Gating
+//! - Extract first principal component via power iteration
+//! - Median filter the v-vector to separate baseline from streak detail
+//! - Apply soft magnitude gating: `1 / (1 + (|v| / threshold)^exponent)`
+//! - Reconstruct streak as rank-1 outer product and subtract from input
+//!
+//! ## Parameters
+//! - `fft_alpha`: Controls FFT energy influence on threshold modulation (default: 1.0)
+//! - `notch_width`: Gaussian notch filter width in frequency domain (default: 2.0)
+
 use crate::float_trait::Bm3dFloat;
 use crate::transforms;
 use crate::utils::{compute_1d_median_filter, estimate_robust_sigma};
@@ -171,16 +190,17 @@ fn compute_vertical_energy_profile<F: Bm3dFloat>(
     energy_profile
 }
 
-/// SVD-Median-Gated Streak Removal
+/// Fourier-SVD Streak Removal
 ///
-/// 1. SVD(A) -> u, s, v (First component)
+/// A two-stage algorithm combining FFT-based energy detection with rank-1 SVD:
+///
+/// 1. SVD(A) -> u, s, v (First principal component via power iteration)
 /// 2. v_smooth = MedianFilter(v)
 /// 3. v_detail = v - v_smooth
-/// 4. v_streak = Gate(v_detail, thresh)
-///    - Thresh modulated by FFT Energy if alpha > 0
+/// 4. v_streak = Gate(v_detail, thresh) where thresh is modulated by FFT energy if alpha > 0
 /// 5. StreakImage = u * s * v_streak^T
 /// 6. Corrected = A - StreakImage
-pub fn svd_mg_removal<F: Bm3dFloat>(
+pub fn fourier_svd_removal<F: Bm3dFloat>(
     sinogram: ArrayView2<F>,
     fft_alpha: F,
     notch_width: F,

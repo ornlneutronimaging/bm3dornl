@@ -9,12 +9,12 @@ Main API
    :undoc-members:
    :show-inheritance:
 
-SVD-MG Streak Removal
----------------------
+Fourier-SVD Streak Removal
+--------------------------
 
-Fast SVD-based destriping algorithm using median gating for structure preservation.
+Fast FFT-guided SVD destriping algorithm using magnitude gating for structure preservation.
 
-.. automodule:: bm3dornl.svdmg
+.. automodule:: bm3dornl.fourier_svd
    :members:
    :undoc-members:
    :show-inheritance:
