@@ -381,13 +381,13 @@ packages:
   timestamp: 1733513285902
 - pypi: ..
   name: bm3dornl
-  version: 0.6.0
-  sha256: be2e30aa9c09faeca659f6d435e855ea6dc208e50759cdf93fa5de336b2e8331
+  version: 0.7.0
+  sha256: 330b59b7e9efd470efc70ce881cc99d682d87809b637fae9979dd6a7e07ea4c5
   requires_dist:
   - numpy
   - scipy
   - scikit-image
-  - bm3dornl-gui>=0.4.0 ; extra == 'gui'
+  - bm3dornl-gui==0.7.0 ; extra == 'gui'
   requires_python: '>=3.12'
 - conda: https://conda.anaconda.org/conda-forge/linux-64/brotli-1.2.0-hed03a55_1.conda
   sha256: e511644d691f05eb12ebe1e971fd6dc3ae55a4df5c253b4e1788b789bdf2dfa6

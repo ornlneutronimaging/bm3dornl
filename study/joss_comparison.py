@@ -30,6 +30,7 @@ warnings.filterwarnings("ignore", category=RuntimeWarning)
 
 # bm3dornl imports
 from bm3dornl import bm3d_ring_artifact_removal
+from bm3dornl.fourier_svd import fourier_svd_removal
 from bm3dornl.phantom import (
     generate_sinogram,
     shepp_logan_phantom,
@@ -71,9 +72,9 @@ np.random.seed(42)
 # Test parameters - 512x512 for bm3d-streak-removal compatibility
 PHANTOM_SIZE = 512
 SCAN_STEP = 0.5  # degrees
-NUM_TIMING_RUNS = 30  # All methods use identical number of runs for scientific rigor
-DETECTOR_GAIN_RANGE = (0.95, 1.05)
-DETECTOR_GAIN_ERROR = 0.02
+NUM_TIMING_RUNS = 100  # All methods use identical number of runs for scientific rigor
+DETECTOR_GAIN_RANGE = (0.98, 1.02)
+DETECTOR_GAIN_ERROR = 0.01
 
 
 def generate_test_data():
@@ -147,11 +148,11 @@ def run_bm3dornl_streak(sinogram):
     return bm3d_ring_artifact_removal(
         sinogram,
         mode="streak",
-        sigma_random=0.05,
+        sigma_random=0.0,  # Auto-estimate noise sigma from sinogram
         patch_size=8,
         step_size=4,
         search_window=24,
-        max_matches=16,
+        max_matches=32,
     )
 
 
@@ -160,11 +161,35 @@ def run_bm3dornl_generic(sinogram):
     return bm3d_ring_artifact_removal(
         sinogram,
         mode="generic",
-        sigma_random=0.05,
+        sigma_random=0.0,  # Auto-estimate noise sigma from sinogram
         patch_size=8,
         step_size=4,
         search_window=24,
-        max_matches=16,
+        max_matches=32,
+    )
+
+
+def run_bm3dornl_multiscale(sinogram):
+    """Apply bm3dornl with multi-scale pyramid approach (Mäkinen et al. 2021)."""
+    return bm3d_ring_artifact_removal(
+        sinogram,
+        mode="streak",
+        sigma_random=0.0,  # Auto-estimate noise sigma from sinogram
+        multiscale=True,
+        num_scales=3,
+        patch_size=8,
+        step_size=4,
+        search_window=24,
+        max_matches=32,
+    )
+
+
+def run_fourier_svd(sinogram):
+    """Apply Fourier-SVD lightweight FFT-guided destriping."""
+    return fourier_svd_removal(
+        sinogram,
+        fft_alpha=1.0,
+        notch_width=2.0,
     )
 
 
@@ -198,6 +223,8 @@ def run_benchmarks(data):
     methods = [
         ("bm3dornl (streak)", run_bm3dornl_streak, True, NUM_TIMING_RUNS),
         ("bm3dornl (generic)", run_bm3dornl_generic, True, NUM_TIMING_RUNS),
+        ("bm3dornl (multiscale)", run_bm3dornl_multiscale, True, NUM_TIMING_RUNS),
+        ("Fourier-SVD", run_fourier_svd, True, NUM_TIMING_RUNS),
         ("TomoPy FW (Münch)", run_tomopy_fw, True, NUM_TIMING_RUNS),
         ("TomoPy SF (Vo)", run_tomopy_sf, True, NUM_TIMING_RUNS),
         ("TomoPy BSD (sort)", run_tomopy_bsd, True, NUM_TIMING_RUNS),
