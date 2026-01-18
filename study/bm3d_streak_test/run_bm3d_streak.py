@@ -19,7 +19,7 @@ from skimage.metrics import peak_signal_noise_ratio, structural_similarity
 from bm3d_streak_removal import multiscale_streak_removal, extreme_streak_attenuation
 
 # Timing configuration - must match joss_comparison.py for scientific rigor
-NUM_TIMING_RUNS = 30
+NUM_TIMING_RUNS = 100
 
 # Paths
 STUDY_DIR = Path(__file__).parent.parent
