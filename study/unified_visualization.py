@@ -58,6 +58,8 @@ def load_all_results():
     method_files = {
         "bm3dornl (streak)": "result_bm3dornl_streak.npy",
         "bm3dornl (generic)": "result_bm3dornl_generic.npy",
+        "bm3dornl (multiscale)": "result_bm3dornl_multiscale.npy",
+        "Fourier-SVD": "result_Fourier-SVD.npy",
         "TomoPy FW (Münch)": "result_TomoPy_FW_Münch.npy",
         "TomoPy SF (Vo)": "result_TomoPy_SF_Vo.npy",
         "TomoPy BSD (sort)": "result_TomoPy_BSD_sort.npy",
@@ -151,11 +153,13 @@ def create_unified_comparison_grid(data, results):
         # Color-code title
         method = r["method"]
         if "bm3dornl" in method:
-            color = "#1f77b4"
+            color = "#1f77b4"  # blue
+        elif "Fourier-SVD" in method:
+            color = "#17becf"  # cyan/teal (also bm3dornl)
         elif "bm3d-streak" in method:
-            color = "#2ca02c"
+            color = "#2ca02c"  # green
         else:
-            color = "#ff7f0e"
+            color = "#ff7f0e"  # orange (TomoPy)
 
         title = f"{method}\n{r['time_mean']:.2f}s | PSNR={r['psnr']:.1f}"
         ax.set_title(title, fontsize=9, color=color, fontweight="bold")
@@ -207,11 +211,13 @@ def create_unified_timing_chart(results):
     # Color coding
     def get_color(m):
         if "bm3dornl" in m:
-            return "#1f77b4"
+            return "#1f77b4"  # blue
+        elif "Fourier-SVD" in m:
+            return "#17becf"  # cyan/teal (also bm3dornl)
         elif "bm3d-streak" in m:
-            return "#2ca02c"
+            return "#2ca02c"  # green
         else:
-            return "#ff7f0e"
+            return "#ff7f0e"  # orange (TomoPy)
 
     colors = [get_color(m) for m in methods]
 
@@ -237,6 +243,7 @@ def create_unified_timing_chart(results):
     from matplotlib.patches import Patch
     legend_elements = [
         Patch(facecolor="#1f77b4", label="bm3dornl"),
+        Patch(facecolor="#17becf", label="Fourier-SVD (bm3dornl)"),
         Patch(facecolor="#2ca02c", label="bm3d-streak-removal"),
         Patch(facecolor="#ff7f0e", label="TomoPy"),
     ]
@@ -265,11 +272,13 @@ def create_unified_quality_chart(results):
     # Color coding
     def get_color(m):
         if "bm3dornl" in m:
-            return "#1f77b4"
+            return "#1f77b4"  # blue
+        elif "Fourier-SVD" in m:
+            return "#17becf"  # cyan/teal (also bm3dornl)
         elif "bm3d-streak" in m:
-            return "#2ca02c"
+            return "#2ca02c"  # green
         else:
-            return "#ff7f0e"
+            return "#ff7f0e"  # orange (TomoPy)
 
     colors = [get_color(m) for m in methods]
 
