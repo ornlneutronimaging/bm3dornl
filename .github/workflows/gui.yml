@@ -106,7 +106,7 @@ jobs:
       url: https://pypi.org/p/bm3dornl-gui
     steps:
       - name: Download all artifacts
-        uses: actions/download-artifact@v6
+        uses: actions/download-artifact@v7
         with:
           path: dist
           pattern: gui-wheel-*
@@ -129,14 +129,14 @@ jobs:
       - uses: actions/checkout@v6
 
       - name: Download wheel artifacts
-        uses: actions/download-artifact@v6
+        uses: actions/download-artifact@v7
         with:
           path: dist
           pattern: gui-wheel-*
           merge-multiple: true
 
       - name: Download macOS app artifact
-        uses: actions/download-artifact@v6
+        uses: actions/download-artifact@v7
         with:
           path: dist
           pattern: gui-macos-app
