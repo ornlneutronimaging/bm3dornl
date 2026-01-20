@@ -1,7 +1,7 @@
 <!-- Badges -->
 
 [![Build Status](https://github.com/ornlneutronimaging/bm3dornl/actions/workflows/test.yml/badge.svg?branch=next)](https://github.com/ornlneutronimaging/bm3dornl/actions/workflows/test.yml?query=branch?next)
-[![CII Best Practices](https://bestpractices.coreinfrastructure.org/projects/6650/badge)](https://bestpractices.coreinfrastructure.org/projects/6650)
+[![OpenSSF Best Practices](https://www.bestpractices.dev/projects/11811/badge)](https://www.bestpractices.dev/projects/11811)
 [![Documentation Status](https://readthedocs.org/projects/bm3dornl/badge/?version=latest)](https://bm3dornl.readthedocs.io/en/latest/?badge=latest)
 [![PyPI](https://img.shields.io/pypi/v/bm3dornl)](https://pypi.org/project/bm3dornl/)
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.18276016.svg)](https://doi.org/10.5281/zenodo.18276016)
