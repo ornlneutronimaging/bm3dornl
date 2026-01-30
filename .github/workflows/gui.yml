@@ -151,3 +151,89 @@ jobs:
           files: dist/*
           # Don't set name/body - just upload files to existing release
           fail_on_unmatched_files: false
+
+  update-homebrew:
+    name: Update Homebrew Tap
+    needs: upload-release-assets
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v') && !contains(github.ref, 'rc') && !contains(github.ref, 'alpha') && !contains(github.ref, 'beta')
+    steps:
+      - name: Extract version from tag
+        id: version
+        run: |
+          VERSION=${GITHUB_REF_NAME#v}
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Updating Homebrew tap for version $VERSION"
+
+      - name: Wait for release asset to be available
+        run: |
+          echo "Waiting for DMG to be available on GitHub Release..."
+          for i in {1..30}; do
+            if curl -sL --head --fail \
+              "https://github.com/ornlneutronimaging/bm3dornl/releases/download/v${{ steps.version.outputs.version }}/bm3dornl-${{ steps.version.outputs.version }}-macos-arm64.dmg" \
+              > /dev/null 2>&1; then
+              echo "DMG is available"
+              exit 0
+            fi
+            echo "Attempt $i/30: DMG not yet available, waiting 10s..."
+            sleep 10
+          done
+          echo "DMG not available after 5 minutes"
+          exit 1
+
+      - name: Download DMG and calculate SHA256
+        id: sha256
+        run: |
+          DMG_URL="https://github.com/ornlneutronimaging/bm3dornl/releases/download/v${{ steps.version.outputs.version }}/bm3dornl-${{ steps.version.outputs.version }}-macos-arm64.dmg"
+          echo "Downloading $DMG_URL"
+          curl -fSL --retry 3 --retry-delay 5 "$DMG_URL" -o bm3dornl.dmg
+
+          # Verify the downloaded file is a valid DMG (not an error page)
+          if [ ! -s bm3dornl.dmg ]; then
+            echo "Error: Downloaded file is empty"
+            exit 1
+          fi
+
+          # Check for DMG magic bytes (first 4 bytes should not be HTML)
+          if head -c 15 bm3dornl.dmg | grep -q '<!DOCTYPE\|<html'; then
+            echo "Error: Downloaded file appears to be HTML, not a DMG"
+            exit 1
+          fi
+
+          SHA256=$(sha256sum bm3dornl.dmg | cut -d' ' -f1)
+          echo "sha256=$SHA256" >> $GITHUB_OUTPUT
+          echo "SHA256: $SHA256"
+
+      - name: Clone Homebrew tap repository
+        run: |
+          git clone https://x-access-token:${{ secrets.HOMEBREW_TAP_TOKEN }}@github.com/ornlneutronimaging/homebrew-bm3dornl.git
+          cd homebrew-bm3dornl
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Update cask formula
+        run: |
+          cd homebrew-bm3dornl
+
+          # Update version
+          sed -i 's/version "[^"]*"/version "${{ steps.version.outputs.version }}"/' Casks/bm3dornl.rb
+
+          # Update sha256
+          sed -i 's/sha256 "[^"]*"/sha256 "${{ steps.sha256.outputs.sha256 }}"/' Casks/bm3dornl.rb
+
+          echo "Updated Casks/bm3dornl.rb:"
+          cat Casks/bm3dornl.rb
+
+      - name: Commit and push changes
+        run: |
+          cd homebrew-bm3dornl
+          git add Casks/bm3dornl.rb
+
+          # Only commit and push if there are actual changes
+          if git diff --staged --quiet; then
+            echo "No changes to commit - tap is already up to date for version ${{ steps.version.outputs.version }}"
+          else
+            git commit -m "Update bm3dornl to ${{ steps.version.outputs.version }}"
+            git push origin main
+            echo "Successfully updated Homebrew tap to version ${{ steps.version.outputs.version }}"
+          fi
