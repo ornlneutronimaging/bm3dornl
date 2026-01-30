@@ -186,7 +186,20 @@ jobs:
         run: |
           DMG_URL="https://github.com/ornlneutronimaging/bm3dornl/releases/download/v${{ steps.version.outputs.version }}/bm3dornl-${{ steps.version.outputs.version }}-macos-arm64.dmg"
           echo "Downloading $DMG_URL"
-          curl -sL "$DMG_URL" -o bm3dornl.dmg
+          curl -fSL --retry 3 --retry-delay 5 "$DMG_URL" -o bm3dornl.dmg
+
+          # Verify the downloaded file is a valid DMG (not an error page)
+          if [ ! -s bm3dornl.dmg ]; then
+            echo "Error: Downloaded file is empty"
+            exit 1
+          fi
+
+          # Check for DMG magic bytes (first 4 bytes should not be HTML)
+          if head -c 15 bm3dornl.dmg | grep -q '<!DOCTYPE\|<html'; then
+            echo "Error: Downloaded file appears to be HTML, not a DMG"
+            exit 1
+          fi
+
           SHA256=$(sha256sum bm3dornl.dmg | cut -d' ' -f1)
           echo "sha256=$SHA256" >> $GITHUB_OUTPUT
           echo "SHA256: $SHA256"
@@ -215,6 +228,12 @@ jobs:
         run: |
           cd homebrew-bm3dornl
           git add Casks/bm3dornl.rb
-          git commit -m "Update bm3dornl to ${{ steps.version.outputs.version }}"
-          git push origin main
-          echo "Successfully updated Homebrew tap to version ${{ steps.version.outputs.version }}"
+
+          # Only commit and push if there are actual changes
+          if git diff --staged --quiet; then
+            echo "No changes to commit - tap is already up to date for version ${{ steps.version.outputs.version }}"
+          else
+            git commit -m "Update bm3dornl to ${{ steps.version.outputs.version }}"
+            git push origin main
+            echo "Successfully updated Homebrew tap to version ${{ steps.version.outputs.version }}"
+          fi
