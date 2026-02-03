@@ -5,6 +5,10 @@ edition.workspace = true
 description = "Pure Rust BM3D denoising algorithm core"
 license = "MIT"
 repository = "https://github.com/ornlneutronimaging/bm3dornl"
+readme = "README.md"
+keywords = ["image-processing", "denoising", "bm3d", "noise-reduction", "scientific-computing"]
+categories = ["multimedia::images", "science"]
+authors = ["Oak Ridge National Laboratory Neutron Imaging Team"]
 
 [lib]
 name = "bm3d_core"
