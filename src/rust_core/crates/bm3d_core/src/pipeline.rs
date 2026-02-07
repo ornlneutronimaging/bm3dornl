@@ -4,7 +4,6 @@ use ndarray::{s, Array2, Array3, ArrayView2, ArrayView3, Axis};
 use rayon::prelude::*;
 use rustfft::num_complex::Complex;
 use rustfft::Fft;
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::block_matching::{self, PatchMatch};
@@ -257,7 +256,8 @@ fn apply_inverse_2d_transform<F: Bm3dFloat>(
     }
 }
 
-type TileAccumulatorMap<F> = HashMap<usize, (Array2<F>, Array2<F>)>;
+type TileAccumulator<F> = (Array2<F>, Array2<F>);
+type TileAccumulatorVec<F> = Vec<Option<TileAccumulator<F>>>;
 
 /// Resolve aggregation tile size from environment with a safe fallback.
 fn resolve_aggregation_tile_size(patch_size: usize) -> usize {
@@ -267,6 +267,30 @@ fn resolve_aggregation_tile_size(patch_size: usize) -> usize {
         .filter(|&v| v > 0)
         .map(|v| v.max(patch_size))
         .unwrap_or(AGGREGATION_TILE_SIZE.max(patch_size))
+}
+
+fn get_or_insert_tile<F: Bm3dFloat>(
+    tile_accumulators: &mut TileAccumulatorVec<F>,
+    tile_id: usize,
+    tile_row: usize,
+    tile_col: usize,
+    rows: usize,
+    cols: usize,
+    tile_size: usize,
+) -> &mut TileAccumulator<F> {
+    if tile_accumulators[tile_id].is_none() {
+        let row_start = tile_row * tile_size;
+        let col_start = tile_col * tile_size;
+        let tile_h = (rows - row_start).min(tile_size);
+        let tile_w = (cols - col_start).min(tile_size);
+        tile_accumulators[tile_id] = Some((
+            Array2::<F>::zeros((tile_h, tile_w)),
+            Array2::<F>::zeros((tile_h, tile_w)),
+        ));
+    }
+    tile_accumulators[tile_id]
+        .as_mut()
+        .expect("tile should be initialized")
 }
 
 /// Aggregate a single denoised patch into tile-local numerator/denominator accumulators.
@@ -280,8 +304,53 @@ fn aggregate_patch_into_tiles<F: Bm3dFloat>(
     cols: usize,
     tile_size: usize,
     tile_cols: usize,
-    tile_accumulators: &mut TileAccumulatorMap<F>,
+    tile_accumulators: &mut TileAccumulatorVec<F>,
 ) {
+    let patch_end_r = m.row + patch_size - 1;
+    let patch_end_c = m.col + patch_size - 1;
+    let start_tile_row = m.row / tile_size;
+    let start_tile_col = m.col / tile_size;
+    let end_tile_row = patch_end_r / tile_size;
+    let end_tile_col = patch_end_c / tile_size;
+
+    // Fast path: most patches are entirely inside one tile.
+    if start_tile_row == end_tile_row && start_tile_col == end_tile_col {
+        let tile_row = start_tile_row;
+        let tile_col = start_tile_col;
+        let tile_id = tile_row * tile_cols + tile_col;
+        let row_start = tile_row * tile_size;
+        let col_start = tile_col * tile_size;
+        let local_r0 = m.row - row_start;
+        let local_c0 = m.col - col_start;
+
+        let (num_tile, den_tile) = get_or_insert_tile(
+            tile_accumulators,
+            tile_id,
+            tile_row,
+            tile_col,
+            rows,
+            cols,
+            tile_size,
+        );
+
+        for pr in 0..patch_size {
+            let tr = m.row + pr;
+            if tr >= rows {
+                continue;
+            }
+            let local_r = local_r0 + pr;
+            for pc in 0..patch_size {
+                let tc = m.col + pc;
+                if tc < cols {
+                    let local_c = local_c0 + pc;
+                    num_tile[[local_r, local_c]] += spatial[[pr, pc]] * weight;
+                    den_tile[[local_r, local_c]] += weight;
+                }
+            }
+        }
+        return;
+    }
+
     for pr in 0..patch_size {
         for pc in 0..patch_size {
             let tr = m.row + pr;
@@ -295,14 +364,15 @@ fn aggregate_patch_into_tiles<F: Bm3dFloat>(
                 let local_r = tr - row_start;
                 let local_c = tc - col_start;
 
-                let (num_tile, den_tile) = tile_accumulators.entry(tile_id).or_insert_with(|| {
-                    let tile_h = (rows - row_start).min(tile_size);
-                    let tile_w = (cols - col_start).min(tile_size);
-                    (
-                        Array2::<F>::zeros((tile_h, tile_w)),
-                        Array2::<F>::zeros((tile_h, tile_w)),
-                    )
-                });
+                let (num_tile, den_tile) = get_or_insert_tile(
+                    tile_accumulators,
+                    tile_id,
+                    tile_row,
+                    tile_col,
+                    rows,
+                    cols,
+                    tile_size,
+                );
 
                 num_tile[[local_r, local_c]] += spatial[[pr, pc]] * weight;
                 den_tile[[local_r, local_c]] += weight;
@@ -384,7 +454,9 @@ pub fn run_bm3d_kernel<F: Bm3dFloat>(
     let wiener_eps = F::from_f64_c(WIENER_EPSILON);
     let max_wiener_weight = F::from_f64_c(MAX_WIENER_WEIGHT);
     let tile_size = resolve_aggregation_tile_size(patch_size);
+    let tile_rows = rows.div_ceil(tile_size).max(1);
     let tile_cols = cols.div_ceil(tile_size).max(1);
+    let tile_count = tile_rows * tile_cols;
 
     let (final_num, final_den) = if ref_coords.is_empty() {
         (
@@ -403,7 +475,8 @@ pub fn run_bm3d_kernel<F: Bm3dFloat>(
         ref_coords
             .par_chunks(chunk_len)
             .map(|coord_chunk| {
-                let mut tile_accumulators = TileAccumulatorMap::<F>::new();
+                let mut tile_accumulators: TileAccumulatorVec<F> =
+                    (0..tile_count).map(|_| None).collect();
 
                 for &(ref_r, ref_c) in coord_chunk {
                     // 1. Block Matching
@@ -575,12 +648,14 @@ pub fn run_bm3d_kernel<F: Bm3dFloat>(
                 tile_accumulators
             })
             .reduce_with(|mut a, b| {
-                for (tile_id, (b_num, b_den)) in b {
-                    if let Some((a_num, a_den)) = a.get_mut(&tile_id) {
-                        *a_num += &b_num;
-                        *a_den += &b_den;
-                    } else {
-                        a.insert(tile_id, (b_num, b_den));
+                for (a_slot, b_slot) in a.iter_mut().zip(b.into_iter()) {
+                    if let Some((b_num, b_den)) = b_slot {
+                        if let Some((a_num, a_den)) = a_slot.as_mut() {
+                            *a_num += &b_num;
+                            *a_den += &b_den;
+                        } else {
+                            *a_slot = Some((b_num, b_den));
+                        }
                     }
                 }
                 a
@@ -596,7 +671,10 @@ pub fn run_bm3d_kernel<F: Bm3dFloat>(
                     let mut numerator_acc = Array2::<F>::zeros((rows, cols));
                     let mut denominator_acc = Array2::<F>::zeros((rows, cols));
 
-                    for (tile_id, (num_tile, den_tile)) in tile_accumulators {
+                    for (tile_id, tile_entry) in tile_accumulators.into_iter().enumerate() {
+                        let Some((num_tile, den_tile)) = tile_entry else {
+                            continue;
+                        };
                         let tile_row = tile_id / tile_cols;
                         let tile_col = tile_id % tile_cols;
                         let row_start = tile_row * tile_size;
