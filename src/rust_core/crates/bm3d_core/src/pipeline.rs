@@ -170,22 +170,25 @@ fn compute_noise_var<F: Bm3dFloat>(
 }
 
 /// Apply 2D forward transform into a pre-allocated output buffer.
+#[allow(clippy::too_many_arguments)]
 fn apply_forward_2d_transform_into<F: Bm3dFloat>(
     group: &Array3<F>,
     k: usize,
     use_hadamard: bool,
     fft_row: &Arc<dyn Fft<F>>,
     fft_col: &Arc<dyn Fft<F>>,
+    work_complex: &mut Array2<Complex<F>>,
+    scratch: &mut [Complex<F>],
     out: &mut ndarray::Array3<Complex<F>>,
 ) {
     for i in 0..k {
         let slice = group.slice(s![i, .., ..]);
         if use_hadamard {
-            let transformed = transforms::wht2d_8x8_forward(slice);
-            out.slice_mut(s![i, .., ..]).assign(&transformed);
+            let out_slice = out.slice_mut(s![i, .., ..]);
+            transforms::wht2d_8x8_forward_into_view(slice, out_slice);
         } else {
-            let transformed = transforms::fft2d(slice, fft_row, fft_col);
-            out.slice_mut(s![i, .., ..]).assign(&transformed);
+            let out_slice = out.slice_mut(s![i, .., ..]);
+            transforms::fft2d_into(slice, fft_row, fft_col, work_complex, out_slice, scratch);
         }
     }
 }
@@ -239,7 +242,7 @@ struct WorkerBuffers<F: Bm3dFloat> {
     g_noisy_c: ndarray::Array3<Complex<F>>,
     g_pilot_c: ndarray::Array3<Complex<F>>,
     spatial_patch: Array2<F>,
-    inverse_work: Array2<Complex<F>>,
+    complex_work: Array2<Complex<F>>,
     coeff_buffer: Vec<F>,
     scratch_1d: Vec<Complex<F>>,
     scratch_2d: Vec<Complex<F>>,
@@ -254,7 +257,7 @@ impl<F: Bm3dFloat> WorkerBuffers<F> {
             g_noisy_c: ndarray::Array3::<Complex<F>>::zeros((max_matches, patch_size, patch_size)),
             g_pilot_c: ndarray::Array3::<Complex<F>>::zeros((max_matches, patch_size, patch_size)),
             spatial_patch: Array2::<F>::zeros(patch_dim),
-            inverse_work: Array2::<Complex<F>>::zeros(patch_dim),
+            complex_work: Array2::<Complex<F>>::zeros(patch_dim),
             coeff_buffer: vec![F::zero(); patch_size * patch_size],
             scratch_1d: vec![Complex::new(F::zero(), F::zero()); max_matches.max(1)],
             scratch_2d: vec![Complex::new(F::zero(), F::zero()); patch_size.max(1)],
@@ -519,6 +522,8 @@ pub fn run_bm3d_kernel<F: Bm3dFloat>(
                         use_hadamard,
                         fft_2d_row_ref,
                         fft_2d_col_ref,
+                        &mut worker.complex_work,
+                        &mut worker.scratch_2d,
                         &mut worker.g_noisy_c,
                     );
                     if mode == Bm3dMode::Wiener {
@@ -534,6 +539,8 @@ pub fn run_bm3d_kernel<F: Bm3dFloat>(
                             use_hadamard,
                             fft_2d_row_ref,
                             fft_2d_col_ref,
+                            &mut worker.complex_work,
+                            &mut worker.scratch_2d,
                             &mut worker.g_pilot_c,
                         );
                     }
@@ -664,7 +671,7 @@ pub fn run_bm3d_kernel<F: Bm3dFloat>(
                                 complex_slice,
                                 ifft_2d_row_ref,
                                 ifft_2d_col_ref,
-                                &mut worker.inverse_work,
+                                &mut worker.complex_work,
                                 &mut worker.spatial_patch,
                                 &mut worker.scratch_2d,
                             );

@@ -1,4 +1,4 @@
-use ndarray::{Array2, ArrayView2};
+use ndarray::{Array2, ArrayView2, ArrayViewMut2};
 use rustfft::{num_complex::Complex, Fft};
 use std::sync::Arc;
 
@@ -19,42 +19,65 @@ pub fn fft2d<F: Bm3dFloat>(
     fft_col_plan: &Arc<dyn Fft<F>>,
 ) -> Array2<Complex<F>> {
     let (rows, cols) = input.dim();
+    let mut intermediate = Array2::<Complex<F>>::zeros((rows, cols));
+    let mut output = Array2::<Complex<F>>::zeros((rows, cols));
+    let mut scratch = vec![Complex::new(F::zero(), F::zero()); rows.max(cols)];
+    fft2d_into(
+        input,
+        fft_row_plan,
+        fft_col_plan,
+        &mut intermediate,
+        output.view_mut(),
+        &mut scratch,
+    );
+    output
+}
+
+/// Compute 2D FFT into pre-allocated buffers.
+///
+/// - `work_complex` must have shape `(rows, cols)` matching `input`.
+/// - `output` must have shape `(rows, cols)` matching `input`.
+/// - `scratch` length must be at least `max(rows, cols)`.
+pub fn fft2d_into<F: Bm3dFloat>(
+    input: ArrayView2<F>,
+    fft_row_plan: &Arc<dyn Fft<F>>,
+    fft_col_plan: &Arc<dyn Fft<F>>,
+    work_complex: &mut Array2<Complex<F>>,
+    mut output: ArrayViewMut2<Complex<F>>,
+    scratch: &mut [Complex<F>],
+) {
+    let (rows, cols) = input.dim();
+    assert_eq!(work_complex.dim(), (rows, cols));
+    assert_eq!(output.dim(), (rows, cols));
+    assert!(scratch.len() >= rows.max(cols));
 
     // 1. Transform rows
-    let mut intermediate = Array2::<Complex<F>>::zeros((rows, cols));
-    let mut row_vec = vec![Complex::new(F::zero(), F::zero()); cols];
-
     for r in 0..rows {
         // Copy to buffer
         for (c, &v) in input.row(r).iter().enumerate() {
-            row_vec[c] = Complex::new(v, F::zero());
+            scratch[c] = Complex::new(v, F::zero());
         }
         // FFT
-        fft_row_plan.process(&mut row_vec);
+        fft_row_plan.process(&mut scratch[..cols]);
         // Copy back
         for c in 0..cols {
-            intermediate[[r, c]] = row_vec[c];
+            work_complex[[r, c]] = scratch[c];
         }
     }
 
     // 2. Transform columns
-    let mut output = Array2::<Complex<F>>::zeros((rows, cols));
-    let mut col_vec = vec![Complex::new(F::zero(), F::zero()); rows];
-
     for c in 0..cols {
         // Extract column
         for r in 0..rows {
-            col_vec[r] = intermediate[[r, c]];
+            scratch[r] = work_complex[[r, c]];
         }
         // FFT
-        fft_col_plan.process(&mut col_vec);
+        fft_col_plan.process(&mut scratch[..rows]);
         // Copy back
         for r in 0..rows {
-            output[[r, c]] = col_vec[r];
+            output[[r, c]] = scratch[r];
         }
     }
-
-    output
 }
 
 /// Compute 2D Inverse FFT of a square patch using pre-computed plans.
@@ -202,6 +225,17 @@ fn fwht8<F: Bm3dFloat>(buf: &mut [F; 8]) {
 
 /// 2D WHT for 8x8 patch. Returns Complex (im=0) for compatibility.
 pub fn wht2d_8x8_forward<F: Bm3dFloat>(input: ArrayView2<F>) -> Array2<Complex<F>> {
+    let mut output = Array2::<Complex<F>>::zeros((8, 8));
+    wht2d_8x8_forward_into_view(input, output.view_mut());
+    output
+}
+
+/// 2D WHT for 8x8 patch into a pre-allocated output view.
+pub fn wht2d_8x8_forward_into_view<F: Bm3dFloat>(
+    input: ArrayView2<F>,
+    mut output: ArrayViewMut2<Complex<F>>,
+) {
+    assert_eq!(output.dim(), (8, 8));
     let mut data = [F::zero(); 64];
     let mut idx = 0;
     for r in 0..8 {
@@ -227,7 +261,6 @@ pub fn wht2d_8x8_forward<F: Bm3dFloat>(input: ArrayView2<F>) -> Array2<Complex<F
             data[r * 8 + c] = col_buf[r];
         }
     }
-    let mut output = Array2::<Complex<F>>::zeros((8, 8));
     idx = 0;
     for r in 0..8 {
         for c in 0..8 {
@@ -235,7 +268,6 @@ pub fn wht2d_8x8_forward<F: Bm3dFloat>(input: ArrayView2<F>) -> Array2<Complex<F
             idx += 1;
         }
     }
-    output
 }
 
 /// 2D Inverse WHT for 8x8 patch.
@@ -1011,6 +1043,35 @@ mod tests {
     }
 
     #[test]
+    fn test_fft2d_into_matches_fft2d() {
+        let input = random_matrix_f32(8, 8, 123456);
+        let mut planner = FftPlanner::new();
+        let fft_row = planner.plan_fft_forward(8);
+        let fft_col = planner.plan_fft_forward(8);
+
+        let expected = fft2d(input.view(), &fft_row, &fft_col);
+
+        let mut work = Array2::<Complex<f32>>::zeros((8, 8));
+        let mut output = Array2::<Complex<f32>>::zeros((8, 8));
+        let mut scratch = vec![Complex::new(0.0f32, 0.0f32); 8];
+        fft2d_into(
+            input.view(),
+            &fft_row,
+            &fft_col,
+            &mut work,
+            output.view_mut(),
+            &mut scratch,
+        );
+
+        for r in 0..8 {
+            for c in 0..8 {
+                let diff = (expected[[r, c]] - output[[r, c]]).norm();
+                assert!(diff < 1e-6, "fft2d_into mismatch at ({}, {})", r, c);
+            }
+        }
+    }
+
+    #[test]
     fn test_wht_inverse_into_matches_inverse() {
         let input = random_matrix_f32(8, 8, 99999);
         let freq = wht2d_8x8_forward(input.view());
@@ -1022,5 +1083,25 @@ mod tests {
             arrays_approx_equal_f32(&expected, &output, 1e-6),
             "wht2d_8x8_inverse_into_view should match wht2d_8x8_inverse"
         );
+    }
+
+    #[test]
+    fn test_wht_forward_into_matches_forward() {
+        let input = random_matrix_f32(8, 8, 424242);
+        let expected = wht2d_8x8_forward(input.view());
+        let mut output = Array2::<Complex<f32>>::zeros((8, 8));
+        wht2d_8x8_forward_into_view(input.view(), output.view_mut());
+
+        for r in 0..8 {
+            for c in 0..8 {
+                let diff = (expected[[r, c]] - output[[r, c]]).norm();
+                assert!(
+                    diff < 1e-6,
+                    "wht2d_8x8_forward_into_view mismatch at ({}, {})",
+                    r,
+                    c
+                );
+            }
+        }
     }
 }
