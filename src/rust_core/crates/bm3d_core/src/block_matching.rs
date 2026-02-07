@@ -1,4 +1,4 @@
-use ndarray::{s, Array2, ArrayView2};
+use ndarray::{Array2, ArrayView2};
 use std::cmp::Ordering;
 
 use crate::float_trait::Bm3dFloat;
@@ -32,13 +32,26 @@ impl<F: Bm3dFloat> PartialOrd for PatchMatch<F> {
     }
 }
 
-/// Compute squared L2 distance between two patches with early termination.
-#[inline]
-fn compute_squared_distance<F: Bm3dFloat>(p1: ArrayView2<F>, p2: ArrayView2<F>, threshold: F) -> F {
+/// Compute squared L2 distance between two patches directly from the source image.
+///
+/// This avoids creating candidate patch views in the hot inner loop.
+#[inline(always)]
+fn compute_squared_distance_at<F: Bm3dFloat>(
+    image: ArrayView2<F>,
+    ref_r: usize,
+    ref_c: usize,
+    cand_r: usize,
+    cand_c: usize,
+    ph: usize,
+    pw: usize,
+    threshold: F,
+) -> F {
     let mut sum_sq = F::zero();
-    for (r1, r2) in p1.outer_iter().zip(p2.outer_iter()) {
-        for (a, b) in r1.iter().zip(r2.iter()) {
-            let diff = *a - *b;
+    for dr in 0..ph {
+        let ref_row = image.row(ref_r + dr);
+        let cand_row = image.row(cand_r + dr);
+        for dc in 0..pw {
+            let diff = ref_row[ref_c + dc] - cand_row[cand_c + dc];
             sum_sq += diff * diff;
         }
         if sum_sq >= threshold {
@@ -115,8 +128,6 @@ pub fn find_similar_patches_in_place<F: Bm3dFloat>(
     let (ph, pw) = patch_size;
     let (h, w) = image.dim();
 
-    let ref_patch = image.slice(s![ref_r..ref_r + ph, ref_c..ref_c + pw]);
-
     let search_r_start = ref_r.saturating_sub(search_window.0 / 2);
     let search_r_end = (ref_r + search_window.0 / 2).min(h - ph);
     let search_c_start = ref_c.saturating_sub(search_window.1 / 2);
@@ -171,8 +182,7 @@ pub fn find_similar_patches_in_place<F: Bm3dFloat>(
             }
 
             // 2. Full Distance Calculation
-            let candidate_patch = image.slice(s![r..r + ph, c..c + pw]);
-            let dist = compute_squared_distance(ref_patch, candidate_patch, threshold);
+            let dist = compute_squared_distance_at(image, ref_r, ref_c, r, c, ph, pw, threshold);
 
             if dist < threshold {
                 if out_matches.len() < max_matches {
