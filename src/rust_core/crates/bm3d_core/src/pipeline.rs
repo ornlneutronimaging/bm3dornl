@@ -233,40 +233,31 @@ fn apply_inverse_1d_transform<F: Bm3dFloat>(
     }
 }
 
-/// Apply 2D inverse transform to a single patch slice.
-///
-/// Uses IWHT for 8x8 patches, IFFT otherwise.
-fn apply_inverse_2d_transform<F: Bm3dFloat>(
-    complex_slice: ndarray::ArrayView2<Complex<F>>,
-    use_hadamard: bool,
-    ifft_row: &Arc<dyn Fft<F>>,
-    ifft_col: &Arc<dyn Fft<F>>,
-) -> Array2<F> {
-    if use_hadamard {
-        transforms::wht2d_8x8_inverse_view(complex_slice)
-    } else {
-        transforms::ifft2d_view(complex_slice, ifft_row, ifft_col)
-    }
-}
-
 struct WorkerBuffers<F: Bm3dFloat> {
     group_noisy: Array3<F>,
     group_pilot: Array3<F>,
     g_noisy_c: ndarray::Array3<Complex<F>>,
     g_pilot_c: ndarray::Array3<Complex<F>>,
+    spatial_patch: Array2<F>,
+    inverse_work: Array2<Complex<F>>,
     coeff_buffer: Vec<F>,
     scratch_1d: Vec<Complex<F>>,
+    scratch_2d: Vec<Complex<F>>,
 }
 
 impl<F: Bm3dFloat> WorkerBuffers<F> {
     fn new(max_matches: usize, patch_size: usize) -> Self {
+        let patch_dim = (patch_size, patch_size);
         Self {
             group_noisy: Array3::<F>::zeros((max_matches, patch_size, patch_size)),
             group_pilot: Array3::<F>::zeros((max_matches, patch_size, patch_size)),
             g_noisy_c: ndarray::Array3::<Complex<F>>::zeros((max_matches, patch_size, patch_size)),
             g_pilot_c: ndarray::Array3::<Complex<F>>::zeros((max_matches, patch_size, patch_size)),
+            spatial_patch: Array2::<F>::zeros(patch_dim),
+            inverse_work: Array2::<Complex<F>>::zeros(patch_dim),
             coeff_buffer: vec![F::zero(); patch_size * patch_size],
             scratch_1d: vec![Complex::new(F::zero(), F::zero()); max_matches.max(1)],
+            scratch_2d: vec![Complex::new(F::zero(), F::zero()); patch_size.max(1)],
         }
     }
 }
@@ -663,14 +654,23 @@ pub fn run_bm3d_kernel<F: Bm3dFloat>(
                     #[allow(clippy::needless_range_loop)]
                     for i in 0..k {
                         let complex_slice = worker.g_noisy_c.slice(s![i, .., ..]);
-                        let spatial = apply_inverse_2d_transform(
-                            complex_slice,
-                            use_hadamard,
-                            ifft_2d_row_ref,
-                            ifft_2d_col_ref,
-                        );
+                        if use_hadamard {
+                            transforms::wht2d_8x8_inverse_into_view(
+                                complex_slice,
+                                &mut worker.spatial_patch,
+                            );
+                        } else {
+                            transforms::ifft2d_into(
+                                complex_slice,
+                                ifft_2d_row_ref,
+                                ifft_2d_col_ref,
+                                &mut worker.inverse_work,
+                                &mut worker.spatial_patch,
+                                &mut worker.scratch_2d,
+                            );
+                        }
                         aggregate_patch_into_tiles(
-                            &spatial,
+                            &worker.spatial_patch,
                             &matches[i],
                             weight_g,
                             patch_size,
@@ -961,6 +961,63 @@ mod tests {
         sum_sq / (a.len() as f32)
     }
 
+    fn stitch_tiles_to_full(
+        tile_accumulators: TileAccumulatorVec<f32>,
+        rows: usize,
+        cols: usize,
+        tile_size: usize,
+        tile_cols: usize,
+    ) -> (Array2<f32>, Array2<f32>) {
+        let mut numerator = Array2::<f32>::zeros((rows, cols));
+        let mut denominator = Array2::<f32>::zeros((rows, cols));
+        for (tile_id, tile_entry) in tile_accumulators.into_iter().enumerate() {
+            let Some((num_tile, den_tile)) = tile_entry else {
+                continue;
+            };
+            let tile_row = tile_id / tile_cols;
+            let tile_col = tile_id % tile_cols;
+            let row_start = tile_row * tile_size;
+            let col_start = tile_col * tile_size;
+            let (tile_h, tile_w) = num_tile.dim();
+            numerator
+                .slice_mut(s![
+                    row_start..row_start + tile_h,
+                    col_start..col_start + tile_w
+                ])
+                .assign(&num_tile);
+            denominator
+                .slice_mut(s![
+                    row_start..row_start + tile_h,
+                    col_start..col_start + tile_w
+                ])
+                .assign(&den_tile);
+        }
+        (numerator, denominator)
+    }
+
+    fn aggregate_patch_reference(
+        spatial: &Array2<f32>,
+        m: &PatchMatch<f32>,
+        weight: f32,
+        patch_size: usize,
+        rows: usize,
+        cols: usize,
+    ) -> (Array2<f32>, Array2<f32>) {
+        let mut numerator = Array2::<f32>::zeros((rows, cols));
+        let mut denominator = Array2::<f32>::zeros((rows, cols));
+        for pr in 0..patch_size {
+            for pc in 0..patch_size {
+                let tr = m.row + pr;
+                let tc = m.col + pc;
+                if tr < rows && tc < cols {
+                    numerator[[tr, tc]] += spatial[[pr, pc]] * weight;
+                    denominator[[tr, tc]] += weight;
+                }
+            }
+        }
+        (numerator, denominator)
+    }
+
     // Default test parameters (small for speed)
     const TEST_PATCH_SIZE: usize = 8;
     const TEST_STEP_SIZE: usize = 4;
@@ -980,6 +1037,64 @@ mod tests {
 
     fn dummy_sigma_map_3d() -> Array3<f32> {
         Array3::zeros((1, 1, 1))
+    }
+
+    #[test]
+    fn test_aggregate_patch_into_tiles_matches_reference() {
+        let rows = 16usize;
+        let cols = 16usize;
+        let weight = 0.75f32;
+
+        for (patch_size, tile_size, row, col) in [(4usize, 8usize, 2usize, 3usize), (8, 6, 4, 5)] {
+            let spatial = Array2::from_shape_fn((patch_size, patch_size), |(r, c)| {
+                1.0 + (r * patch_size + c) as f32 * 0.01
+            });
+            let m = PatchMatch {
+                row,
+                col,
+                distance: 0.0,
+            };
+
+            let tile_rows = rows.div_ceil(tile_size).max(1);
+            let tile_cols = cols.div_ceil(tile_size).max(1);
+            let tile_count = tile_rows * tile_cols;
+            let mut tile_accumulators: TileAccumulatorVec<f32> =
+                (0..tile_count).map(|_| None).collect();
+
+            aggregate_patch_into_tiles(
+                &spatial,
+                &m,
+                weight,
+                patch_size,
+                rows,
+                cols,
+                tile_size,
+                tile_cols,
+                &mut tile_accumulators,
+            );
+
+            let (num_ref, den_ref) =
+                aggregate_patch_reference(&spatial, &m, weight, patch_size, rows, cols);
+            let (num_tiled, den_tiled) =
+                stitch_tiles_to_full(tile_accumulators, rows, cols, tile_size, tile_cols);
+
+            for r in 0..rows {
+                for c in 0..cols {
+                    assert!(
+                        (num_ref[[r, c]] - num_tiled[[r, c]]).abs() < 1e-6,
+                        "Numerator mismatch at ({}, {})",
+                        r,
+                        c
+                    );
+                    assert!(
+                        (den_ref[[r, c]] - den_tiled[[r, c]]).abs() < 1e-6,
+                        "Denominator mismatch at ({}, {})",
+                        r,
+                        c
+                    );
+                }
+            }
+        }
     }
 
     // ==================== Smoke Tests ====================

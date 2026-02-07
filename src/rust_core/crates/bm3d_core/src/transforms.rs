@@ -108,6 +108,49 @@ pub fn ifft2d_view<F: Bm3dFloat>(
     output
 }
 
+/// Compute 2D Inverse FFT into pre-allocated buffers.
+///
+/// - `work_complex` must have shape `(rows, cols)` matching `input`.
+/// - `output` must have shape `(rows, cols)` matching `input`.
+/// - `scratch` length must be at least `max(rows, cols)`.
+pub fn ifft2d_into<F: Bm3dFloat>(
+    input: ArrayView2<Complex<F>>,
+    ifft_row_plan: &Arc<dyn Fft<F>>,
+    ifft_col_plan: &Arc<dyn Fft<F>>,
+    work_complex: &mut Array2<Complex<F>>,
+    output: &mut Array2<F>,
+    scratch: &mut [Complex<F>],
+) {
+    let (rows, cols) = input.dim();
+    assert_eq!(work_complex.dim(), (rows, cols));
+    assert_eq!(output.dim(), (rows, cols));
+    assert!(scratch.len() >= rows.max(cols));
+
+    // 1. Transform columns in-place in complex workspace.
+    work_complex.assign(&input);
+    for c in 0..cols {
+        for r in 0..rows {
+            scratch[r] = work_complex[[r, c]];
+        }
+        ifft_col_plan.process(&mut scratch[..rows]);
+        for r in 0..rows {
+            work_complex[[r, c]] = scratch[r];
+        }
+    }
+
+    // 2. Transform rows into real output.
+    let norm_factor = F::one() / F::usize_as(rows * cols);
+    for r in 0..rows {
+        for c in 0..cols {
+            scratch[c] = work_complex[[r, c]];
+        }
+        ifft_row_plan.process(&mut scratch[..cols]);
+        for c in 0..cols {
+            output[[r, c]] = scratch[c].re * norm_factor;
+        }
+    }
+}
+
 /// In-place Fast Walsh-Hadamard Transform (Natural Order) for 8 elements.
 /// Uses a butterfly network with only additions and subtractions.
 /// Complexity: 8 log2(8) = 24 ops.
@@ -202,6 +245,17 @@ pub fn wht2d_8x8_inverse<F: Bm3dFloat>(input: &Array2<Complex<F>>) -> Array2<F> 
 
 /// 2D Inverse WHT for 8x8 patch from a complex view.
 pub fn wht2d_8x8_inverse_view<F: Bm3dFloat>(input: ArrayView2<Complex<F>>) -> Array2<F> {
+    let mut output = Array2::<F>::zeros((8, 8));
+    wht2d_8x8_inverse_into_view(input, &mut output);
+    output
+}
+
+/// 2D Inverse WHT for 8x8 patch from a complex view into a pre-allocated output.
+pub fn wht2d_8x8_inverse_into_view<F: Bm3dFloat>(
+    input: ArrayView2<Complex<F>>,
+    output: &mut Array2<F>,
+) {
+    assert_eq!(output.dim(), (8, 8));
     let mut data = [F::zero(); 64];
     let mut idx = 0;
     for r in 0..8 {
@@ -228,7 +282,6 @@ pub fn wht2d_8x8_inverse_view<F: Bm3dFloat>(input: ArrayView2<Complex<F>>) -> Ar
         }
     }
     let norm_scale = F::one() / F::usize_as(64);
-    let mut output = Array2::<F>::zeros((8, 8));
     idx = 0;
     for r in 0..8 {
         for c in 0..8 {
@@ -236,7 +289,6 @@ pub fn wht2d_8x8_inverse_view<F: Bm3dFloat>(input: ArrayView2<Complex<F>>) -> Ar
             idx += 1;
         }
     }
-    output
 }
 
 #[cfg(test)]
@@ -925,6 +977,50 @@ mod tests {
         assert!(
             arrays_approx_equal_f32(&output_clean, &output_imag, 1e-10),
             "WHT inverse should ignore imaginary part"
+        );
+    }
+
+    #[test]
+    fn test_ifft2d_into_matches_ifft2d() {
+        let input = random_matrix_f32(8, 8, 88888);
+        let mut planner = FftPlanner::new();
+        let fft_row = planner.plan_fft_forward(8);
+        let fft_col = planner.plan_fft_forward(8);
+        let ifft_row = planner.plan_fft_inverse(8);
+        let ifft_col = planner.plan_fft_inverse(8);
+
+        let freq = fft2d(input.view(), &fft_row, &fft_col);
+        let expected = ifft2d(&freq, &ifft_row, &ifft_col);
+
+        let mut work = Array2::<Complex<f32>>::zeros((8, 8));
+        let mut output = Array2::<f32>::zeros((8, 8));
+        let mut scratch = vec![Complex::new(0.0f32, 0.0f32); 8];
+        ifft2d_into(
+            freq.view(),
+            &ifft_row,
+            &ifft_col,
+            &mut work,
+            &mut output,
+            &mut scratch,
+        );
+
+        assert!(
+            arrays_approx_equal_f32(&expected, &output, 1e-6),
+            "ifft2d_into should match ifft2d"
+        );
+    }
+
+    #[test]
+    fn test_wht_inverse_into_matches_inverse() {
+        let input = random_matrix_f32(8, 8, 99999);
+        let freq = wht2d_8x8_forward(input.view());
+        let expected = wht2d_8x8_inverse(&freq);
+        let mut output = Array2::<f32>::zeros((8, 8));
+        wht2d_8x8_inverse_into_view(freq.view(), &mut output);
+
+        assert!(
+            arrays_approx_equal_f32(&expected, &output, 1e-6),
+            "wht2d_8x8_inverse_into_view should match wht2d_8x8_inverse"
         );
     }
 }
