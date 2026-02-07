@@ -100,7 +100,6 @@ fn get_patch_sums<F: Bm3dFloat>(
 }
 
 /// Find similar patches within a search window using Integral Image Pre-Screening.
-#[allow(clippy::too_many_arguments)]
 pub fn find_similar_patches<F: Bm3dFloat>(
     image: ArrayView2<F>,
     integral_sum: &Array2<F>,

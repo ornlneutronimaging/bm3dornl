@@ -52,6 +52,17 @@ pub enum Bm3dMode {
     Wiener,
 }
 
+/// Shared BM3D kernel parameters used by both 2D and stack processing.
+#[derive(Debug, Clone, Copy)]
+pub struct Bm3dKernelConfig<F: Bm3dFloat> {
+    pub sigma_random: F,
+    pub threshold: F,
+    pub patch_size: usize,
+    pub step_size: usize,
+    pub search_window: usize,
+    pub max_matches: usize,
+}
+
 /// Helper struct to manage pre-computed FFT plans.
 /// Reusing plans avoids expensive re-initialization overhead (~45% speedup).
 /// We pre-compute:
@@ -116,67 +127,17 @@ fn fill_patch_group<F: Bm3dFloat>(
     }
 }
 
-/// Compute the effective noise standard deviation for a coefficient.
-///
-/// Combines random noise variance and structured (streak) noise variance
-/// based on the PSD and local sigma map values.
-#[inline]
-#[allow(clippy::too_many_arguments)]
-fn compute_noise_std<F: Bm3dFloat>(
-    use_colored_noise: bool,
-    sigma_psd: ArrayView2<F>,
-    local_sigma_streak: F,
-    scalar_sigma_sq: F,
-    k: usize,
-    r: usize,
-    c: usize,
-    spatial_scale: F,
-) -> F {
-    let sigma_s_dist = if use_colored_noise {
-        sigma_psd[[r, c]]
-    } else {
-        F::zero()
-    };
-    let effective_sigma_s = sigma_s_dist * local_sigma_streak;
-    let k_f = F::usize_as(k);
-    let var_r = k_f * scalar_sigma_sq;
-    let var_s = (k_f * k_f) * effective_sigma_s * effective_sigma_s;
-    (var_r + var_s).sqrt() * spatial_scale
-}
-
-/// Compute the effective noise variance for Wiener filtering.
-#[inline]
-#[allow(clippy::too_many_arguments)]
-fn compute_noise_var<F: Bm3dFloat>(
-    use_colored_noise: bool,
-    sigma_psd: ArrayView2<F>,
-    local_sigma_streak: F,
-    scalar_sigma_sq: F,
-    k: usize,
-    r: usize,
-    c: usize,
-    spatial_scale_sq: F,
-) -> F {
-    let sigma_s_dist = if use_colored_noise {
-        sigma_psd[[r, c]]
-    } else {
-        F::zero()
-    };
-    let effective_sigma_s = sigma_s_dist * local_sigma_streak;
-    let k_f = F::usize_as(k);
-    let var_r = k_f * scalar_sigma_sq;
-    let var_s = (k_f * k_f) * effective_sigma_s * effective_sigma_s;
-    (var_r + var_s) * spatial_scale_sq
+struct Fft2dRefs<'a, F: Bm3dFloat> {
+    row: &'a Arc<dyn Fft<F>>,
+    col: &'a Arc<dyn Fft<F>>,
 }
 
 /// Apply 2D forward transform into a pre-allocated output buffer.
-#[allow(clippy::too_many_arguments)]
 fn apply_forward_2d_transform_into<F: Bm3dFloat>(
     group: &Array3<F>,
     k: usize,
     use_hadamard: bool,
-    fft_row: &Arc<dyn Fft<F>>,
-    fft_col: &Arc<dyn Fft<F>>,
+    fft_2d: &Fft2dRefs<F>,
     work_complex: &mut Array2<Complex<F>>,
     scratch: &mut [Complex<F>],
     out: &mut ndarray::Array3<Complex<F>>,
@@ -188,7 +149,14 @@ fn apply_forward_2d_transform_into<F: Bm3dFloat>(
             transforms::wht2d_8x8_forward_into_view(slice, out_slice);
         } else {
             let out_slice = out.slice_mut(s![i, .., ..]);
-            transforms::fft2d_into(slice, fft_row, fft_col, work_complex, out_slice, scratch);
+            transforms::fft2d_into(
+                slice,
+                fft_2d.row,
+                fft_2d.col,
+                work_complex,
+                out_slice,
+                scratch,
+            );
         }
     }
 }
@@ -268,6 +236,14 @@ impl<F: Bm3dFloat> WorkerBuffers<F> {
 type TileAccumulator<F> = (Array2<F>, Array2<F>);
 type TileAccumulatorVec<F> = Vec<Option<TileAccumulator<F>>>;
 
+struct TileAggregationGeometry {
+    patch_size: usize,
+    rows: usize,
+    cols: usize,
+    tile_size: usize,
+    tile_cols: usize,
+}
+
 /// Resolve aggregation tile size from environment with a safe fallback.
 fn resolve_aggregation_tile_size(patch_size: usize) -> usize {
     std::env::var(AGGREGATION_TILE_SIZE_ENV)
@@ -303,32 +279,27 @@ fn get_or_insert_tile<F: Bm3dFloat>(
 }
 
 /// Aggregate a single denoised patch into tile-local numerator/denominator accumulators.
-#[allow(clippy::too_many_arguments)]
 fn aggregate_patch_into_tiles<F: Bm3dFloat>(
     spatial: &Array2<F>,
     m: &PatchMatch<F>,
     weight: F,
-    patch_size: usize,
-    rows: usize,
-    cols: usize,
-    tile_size: usize,
-    tile_cols: usize,
+    geom: &TileAggregationGeometry,
     tile_accumulators: &mut TileAccumulatorVec<F>,
 ) {
-    let patch_end_r = m.row + patch_size - 1;
-    let patch_end_c = m.col + patch_size - 1;
-    let start_tile_row = m.row / tile_size;
-    let start_tile_col = m.col / tile_size;
-    let end_tile_row = patch_end_r / tile_size;
-    let end_tile_col = patch_end_c / tile_size;
+    let patch_end_r = m.row + geom.patch_size - 1;
+    let patch_end_c = m.col + geom.patch_size - 1;
+    let start_tile_row = m.row / geom.tile_size;
+    let start_tile_col = m.col / geom.tile_size;
+    let end_tile_row = patch_end_r / geom.tile_size;
+    let end_tile_col = patch_end_c / geom.tile_size;
 
     // Fast path: most patches are entirely inside one tile.
     if start_tile_row == end_tile_row && start_tile_col == end_tile_col {
         let tile_row = start_tile_row;
         let tile_col = start_tile_col;
-        let tile_id = tile_row * tile_cols + tile_col;
-        let row_start = tile_row * tile_size;
-        let col_start = tile_col * tile_size;
+        let tile_id = tile_row * geom.tile_cols + tile_col;
+        let row_start = tile_row * geom.tile_size;
+        let col_start = tile_col * geom.tile_size;
         let local_r0 = m.row - row_start;
         let local_c0 = m.col - col_start;
 
@@ -337,20 +308,20 @@ fn aggregate_patch_into_tiles<F: Bm3dFloat>(
             tile_id,
             tile_row,
             tile_col,
-            rows,
-            cols,
-            tile_size,
+            geom.rows,
+            geom.cols,
+            geom.tile_size,
         );
 
-        for pr in 0..patch_size {
+        for pr in 0..geom.patch_size {
             let tr = m.row + pr;
-            if tr >= rows {
+            if tr >= geom.rows {
                 continue;
             }
             let local_r = local_r0 + pr;
-            for pc in 0..patch_size {
+            for pc in 0..geom.patch_size {
                 let tc = m.col + pc;
-                if tc < cols {
+                if tc < geom.cols {
                     let local_c = local_c0 + pc;
                     num_tile[[local_r, local_c]] += spatial[[pr, pc]] * weight;
                     den_tile[[local_r, local_c]] += weight;
@@ -360,16 +331,16 @@ fn aggregate_patch_into_tiles<F: Bm3dFloat>(
         return;
     }
 
-    for pr in 0..patch_size {
-        for pc in 0..patch_size {
+    for pr in 0..geom.patch_size {
+        for pc in 0..geom.patch_size {
             let tr = m.row + pr;
             let tc = m.col + pc;
-            if tr < rows && tc < cols {
-                let tile_row = tr / tile_size;
-                let tile_col = tc / tile_size;
-                let tile_id = tile_row * tile_cols + tile_col;
-                let row_start = tile_row * tile_size;
-                let col_start = tile_col * tile_size;
+            if tr < geom.rows && tc < geom.cols {
+                let tile_row = tr / geom.tile_size;
+                let tile_col = tc / geom.tile_size;
+                let tile_id = tile_row * geom.tile_cols + tile_col;
+                let row_start = tile_row * geom.tile_size;
+                let col_start = tile_col * geom.tile_size;
                 let local_r = tr - row_start;
                 let local_c = tc - col_start;
 
@@ -378,9 +349,9 @@ fn aggregate_patch_into_tiles<F: Bm3dFloat>(
                     tile_id,
                     tile_row,
                     tile_col,
-                    rows,
-                    cols,
-                    tile_size,
+                    geom.rows,
+                    geom.cols,
+                    geom.tile_size,
                 );
 
                 num_tile[[local_r, local_c]] += spatial[[pr, pc]] * weight;
@@ -417,25 +388,24 @@ fn finalize_output<F: Bm3dFloat>(
 }
 
 /// Core BM3D Single Image Kernel
-#[allow(clippy::too_many_arguments)]
 pub fn run_bm3d_kernel<F: Bm3dFloat>(
     input_noisy: ArrayView2<F>,
     input_pilot: ArrayView2<F>,
     mode: Bm3dMode,
     sigma_psd: ArrayView2<F>,
     sigma_map: ArrayView2<F>,
-    sigma_random: F,
-    threshold: F,
-    patch_size: usize,
-    step_size: usize,
-    search_window: usize,
-    max_matches: usize,
+    config: &Bm3dKernelConfig<F>,
     plans: &Bm3dPlans<F>,
 ) -> Array2<F> {
     let (rows, cols) = input_noisy.dim();
+    let patch_size = config.patch_size;
+    let step_size = config.step_size;
+    let search_window = config.search_window;
+    let max_matches = config.max_matches;
+    let threshold = config.threshold;
     let use_sigma_map = sigma_map.dim() == (rows, cols);
     let use_colored_noise = sigma_psd.dim() == (patch_size, patch_size);
-    let scalar_sigma_sq = sigma_random * sigma_random;
+    let scalar_sigma_sq = config.sigma_random * config.sigma_random;
 
     // Fast path for 8x8 patches using Hadamard
     let use_hadamard = patch_size == HADAMARD_PATCH_SIZE;
@@ -457,6 +427,10 @@ pub fn run_bm3d_kernel<F: Bm3dFloat>(
     let fft_2d_col_ref = &plans.fft_2d_col;
     let ifft_2d_row_ref = &plans.ifft_2d_row;
     let ifft_2d_col_ref = &plans.ifft_2d_col;
+    let fft_2d_refs = Fft2dRefs {
+        row: fft_2d_row_ref,
+        col: fft_2d_col_ref,
+    };
     let fft_1d_plans_ref = &plans.fft_1d_plans;
     let ifft_1d_plans_ref = &plans.ifft_1d_plans;
 
@@ -466,6 +440,13 @@ pub fn run_bm3d_kernel<F: Bm3dFloat>(
     let tile_rows = rows.div_ceil(tile_size).max(1);
     let tile_cols = cols.div_ceil(tile_size).max(1);
     let tile_count = tile_rows * tile_cols;
+    let tile_geom = TileAggregationGeometry {
+        patch_size,
+        rows,
+        cols,
+        tile_size,
+        tile_cols,
+    };
 
     let (final_num, final_den) = if ref_coords.is_empty() {
         (
@@ -520,8 +501,7 @@ pub fn run_bm3d_kernel<F: Bm3dFloat>(
                         &worker.group_noisy,
                         k,
                         use_hadamard,
-                        fft_2d_row_ref,
-                        fft_2d_col_ref,
+                        &fft_2d_refs,
                         &mut worker.complex_work,
                         &mut worker.scratch_2d,
                         &mut worker.g_noisy_c,
@@ -537,8 +517,7 @@ pub fn run_bm3d_kernel<F: Bm3dFloat>(
                             &worker.group_pilot,
                             k,
                             use_hadamard,
-                            fft_2d_row_ref,
-                            fft_2d_col_ref,
+                            &fft_2d_refs,
                             &mut worker.complex_work,
                             &mut worker.scratch_2d,
                             &mut worker.g_pilot_c,
@@ -575,17 +554,19 @@ pub fn run_bm3d_kernel<F: Bm3dFloat>(
                             let hard_thresholds = &mut worker.coeff_buffer;
                             for r in 0..patch_size {
                                 for c in 0..patch_size {
-                                    hard_thresholds[r * patch_size + c] = threshold
-                                        * compute_noise_std(
-                                            use_colored_noise,
-                                            sigma_psd,
-                                            local_sigma_streak,
-                                            scalar_sigma_sq,
-                                            k,
-                                            r,
-                                            c,
-                                            spatial_scale,
-                                        );
+                                    hard_thresholds[r * patch_size + c] = threshold * {
+                                        let sigma_s_dist = if use_colored_noise {
+                                            sigma_psd[[r, c]]
+                                        } else {
+                                            F::zero()
+                                        };
+                                        let effective_sigma_s = sigma_s_dist * local_sigma_streak;
+                                        let k_f = F::usize_as(k);
+                                        let var_r = k_f * scalar_sigma_sq;
+                                        let var_s =
+                                            (k_f * k_f) * effective_sigma_s * effective_sigma_s;
+                                        (var_r + var_s).sqrt() * spatial_scale
+                                    };
                                 }
                             }
 
@@ -612,16 +593,17 @@ pub fn run_bm3d_kernel<F: Bm3dFloat>(
                             let noise_vars = &mut worker.coeff_buffer;
                             for r in 0..patch_size {
                                 for c in 0..patch_size {
-                                    noise_vars[r * patch_size + c] = compute_noise_var(
-                                        use_colored_noise,
-                                        sigma_psd,
-                                        local_sigma_streak,
-                                        scalar_sigma_sq,
-                                        k,
-                                        r,
-                                        c,
-                                        spatial_scale_sq,
-                                    );
+                                    let sigma_s_dist = if use_colored_noise {
+                                        sigma_psd[[r, c]]
+                                    } else {
+                                        F::zero()
+                                    };
+                                    let effective_sigma_s = sigma_s_dist * local_sigma_streak;
+                                    let k_f = F::usize_as(k);
+                                    let var_r = k_f * scalar_sigma_sq;
+                                    let var_s = (k_f * k_f) * effective_sigma_s * effective_sigma_s;
+                                    noise_vars[r * patch_size + c] =
+                                        (var_r + var_s) * spatial_scale_sq;
                                 }
                             }
 
@@ -658,8 +640,7 @@ pub fn run_bm3d_kernel<F: Bm3dFloat>(
                     );
 
                     // Inverse 2D transforms and aggregation
-                    #[allow(clippy::needless_range_loop)]
-                    for i in 0..k {
+                    for (i, matched) in matches.iter().enumerate().take(k) {
                         let complex_slice = worker.g_noisy_c.slice(s![i, .., ..]);
                         if use_hadamard {
                             transforms::wht2d_8x8_inverse_into_view(
@@ -678,13 +659,9 @@ pub fn run_bm3d_kernel<F: Bm3dFloat>(
                         }
                         aggregate_patch_into_tiles(
                             &worker.spatial_patch,
-                            &matches[i],
+                            matched,
                             weight_g,
-                            patch_size,
-                            rows,
-                            cols,
-                            tile_size,
-                            tile_cols,
+                            &tile_geom,
                             &mut tile_accumulators,
                         );
                     }
@@ -750,19 +727,13 @@ pub fn run_bm3d_kernel<F: Bm3dFloat>(
 }
 
 /// Run BM3D step on a single 2D image.
-#[allow(clippy::too_many_arguments)]
 pub fn run_bm3d_step<F: Bm3dFloat>(
     input_noisy: ArrayView2<F>,
     input_pilot: ArrayView2<F>,
     mode: Bm3dMode,
     sigma_psd: ArrayView2<F>,
     sigma_map: ArrayView2<F>,
-    sigma_random: F,
-    threshold: F,
-    patch_size: usize,
-    step_size: usize,
-    search_window: usize,
-    max_matches: usize,
+    config: &Bm3dKernelConfig<F>,
     plans: &Bm3dPlans<F>,
 ) -> Result<Array2<F>, String> {
     if input_pilot.dim() != input_noisy.dim() {
@@ -786,30 +757,19 @@ pub fn run_bm3d_step<F: Bm3dFloat>(
         mode,
         sigma_psd,
         sigma_map,
-        sigma_random,
-        threshold,
-        patch_size,
-        step_size,
-        search_window,
-        max_matches,
+        config,
         plans,
     ))
 }
 
 /// Run BM3D step on a 3D stack of images.
-#[allow(clippy::too_many_arguments)]
 pub fn run_bm3d_step_stack<F: Bm3dFloat>(
     input_noisy: ArrayView3<F>,
     input_pilot: ArrayView3<F>,
     mode: Bm3dMode,
     sigma_psd: ArrayView2<F>,
     sigma_map: ArrayView3<F>,
-    sigma_random: F,
-    threshold: F,
-    patch_size: usize,
-    step_size: usize,
-    search_window: usize,
-    max_matches: usize,
+    config: &Bm3dKernelConfig<F>,
     plans: &Bm3dPlans<F>,
 ) -> Result<Array3<F>, String> {
     let (n, rows, cols) = input_noisy.dim();
@@ -845,12 +805,7 @@ pub fn run_bm3d_step_stack<F: Bm3dFloat>(
                 mode,
                 sigma_psd,
                 map_slice,
-                sigma_random,
-                threshold,
-                patch_size,
-                step_size,
-                search_window,
-                max_matches,
+                config,
                 plans,
             )
         })
@@ -1046,6 +1001,73 @@ mod tests {
         Array3::zeros((1, 1, 1))
     }
 
+    // Keep tests readable while exercising the production config-based API.
+    fn run_bm3d_step(
+        input_noisy: ndarray::ArrayView2<f32>,
+        input_pilot: ndarray::ArrayView2<f32>,
+        mode: Bm3dMode,
+        sigma_psd: ndarray::ArrayView2<f32>,
+        sigma_map: ndarray::ArrayView2<f32>,
+        sigma_random: f32,
+        threshold: f32,
+        patch_size: usize,
+        step_size: usize,
+        search_window: usize,
+        max_matches: usize,
+        plans: &Bm3dPlans<f32>,
+    ) -> Result<Array2<f32>, String> {
+        let config = Bm3dKernelConfig {
+            sigma_random,
+            threshold,
+            patch_size,
+            step_size,
+            search_window,
+            max_matches,
+        };
+        super::run_bm3d_step(
+            input_noisy,
+            input_pilot,
+            mode,
+            sigma_psd,
+            sigma_map,
+            &config,
+            plans,
+        )
+    }
+
+    fn run_bm3d_step_stack(
+        input_noisy: ndarray::ArrayView3<f32>,
+        input_pilot: ndarray::ArrayView3<f32>,
+        mode: Bm3dMode,
+        sigma_psd: ndarray::ArrayView2<f32>,
+        sigma_map: ndarray::ArrayView3<f32>,
+        sigma_random: f32,
+        threshold: f32,
+        patch_size: usize,
+        step_size: usize,
+        search_window: usize,
+        max_matches: usize,
+        plans: &Bm3dPlans<f32>,
+    ) -> Result<Array3<f32>, String> {
+        let config = Bm3dKernelConfig {
+            sigma_random,
+            threshold,
+            patch_size,
+            step_size,
+            search_window,
+            max_matches,
+        };
+        super::run_bm3d_step_stack(
+            input_noisy,
+            input_pilot,
+            mode,
+            sigma_psd,
+            sigma_map,
+            &config,
+            plans,
+        )
+    }
+
     #[test]
     fn test_aggregate_patch_into_tiles_matches_reference() {
         let rows = 16usize;
@@ -1072,11 +1094,13 @@ mod tests {
                 &spatial,
                 &m,
                 weight,
-                patch_size,
-                rows,
-                cols,
-                tile_size,
-                tile_cols,
+                &TileAggregationGeometry {
+                    patch_size,
+                    rows,
+                    cols,
+                    tile_size,
+                    tile_cols,
+                },
                 &mut tile_accumulators,
             );
 

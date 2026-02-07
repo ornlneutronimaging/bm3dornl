@@ -16,7 +16,7 @@ use ndarray::{Array1, Array2, ArrayView2};
 
 use crate::float_trait::Bm3dFloat;
 use crate::noise_estimation::estimate_noise_sigma;
-use crate::pipeline::{run_bm3d_step, Bm3dMode};
+use crate::pipeline::{run_bm3d_step, Bm3dKernelConfig, Bm3dMode};
 use crate::streak::{estimate_streak_profile_impl, gaussian_blur_1d};
 
 // =============================================================================
@@ -377,34 +377,40 @@ pub fn bm3d_ring_artifact_removal_with_plans<F: Bm3dFloat>(
     };
 
     // Step 6: BM3D Pass 1 - Hard Thresholding
+    let hard_config = Bm3dKernelConfig {
+        sigma_random,
+        threshold: config.threshold,
+        patch_size: config.patch_size,
+        step_size: config.step_size,
+        search_window: config.search_window,
+        max_matches: config.max_matches,
+    };
     let yhat_ht = run_bm3d_step(
         z_norm.view(),
         z_norm.view(), // pilot = noisy for first pass
         Bm3dMode::HardThreshold,
         sigma_psd.view(),
         sigma_map.view(),
-        sigma_random,
-        config.threshold,
-        config.patch_size,
-        config.step_size,
-        config.search_window,
-        config.max_matches,
+        &hard_config,
         plans,
     )?;
 
     // Step 7: BM3D Pass 2 - Wiener Filtering
+    let wiener_config = Bm3dKernelConfig {
+        sigma_random,
+        threshold: F::zero(), // not used for Wiener
+        patch_size: config.patch_size,
+        step_size: config.step_size,
+        search_window: config.search_window,
+        max_matches: config.max_matches,
+    };
     let yhat_final = run_bm3d_step(
         z_norm.view(),
         yhat_ht.view(), // pilot = HT result
         Bm3dMode::Wiener,
         sigma_psd.view(),
         sigma_map.view(),
-        sigma_random,
-        F::zero(), // threshold not used for Wiener
-        config.patch_size,
-        config.step_size,
-        config.search_window,
-        config.max_matches,
+        &wiener_config,
         plans,
     )?;
 
@@ -464,7 +470,6 @@ pub fn bm3d_ring_artifact_removal<F: Bm3dFloat>(
 // =============================================================================
 
 #[cfg(test)]
-#[allow(clippy::field_reassign_with_default)]
 mod tests {
     use super::*;
     use ndarray::Array2;
@@ -527,22 +532,28 @@ mod tests {
 
     #[test]
     fn test_config_validation_invalid_patch_size() {
-        let mut config: Bm3dConfig<f32> = Bm3dConfig::default();
-        config.patch_size = 0;
+        let config: Bm3dConfig<f32> = Bm3dConfig {
+            patch_size: 0,
+            ..Bm3dConfig::default()
+        };
         assert!(config.validate().is_err());
     }
 
     #[test]
     fn test_config_validation_invalid_step_size() {
-        let mut config: Bm3dConfig<f32> = Bm3dConfig::default();
-        config.step_size = 0;
+        let config: Bm3dConfig<f32> = Bm3dConfig {
+            step_size: 0,
+            ..Bm3dConfig::default()
+        };
         assert!(config.validate().is_err());
     }
 
     #[test]
     fn test_config_validation_negative_sigma() {
-        let mut config: Bm3dConfig<f32> = Bm3dConfig::default();
-        config.sigma_random = -0.1;
+        let config = Bm3dConfig {
+            sigma_random: -0.1,
+            ..Bm3dConfig::default()
+        };
         assert!(config.validate().is_err());
     }
 
@@ -833,8 +844,10 @@ mod tests {
     #[test]
     fn test_invalid_config_rejected() {
         let image = random_matrix(32, 32, 88888);
-        let mut config: Bm3dConfig<f32> = Bm3dConfig::default();
-        config.patch_size = 0;
+        let config = Bm3dConfig {
+            patch_size: 0,
+            ..Bm3dConfig::default()
+        };
 
         let result = bm3d_ring_artifact_removal(image.view(), RingRemovalMode::Generic, &config);
 
@@ -876,9 +889,11 @@ mod tests {
         let image = random_matrix(48, 48, 11111);
 
         for patch_size in [4, 8] {
-            let mut config: Bm3dConfig<f32> = Bm3dConfig::default();
-            config.patch_size = patch_size;
-            config.step_size = patch_size / 2;
+            let config = Bm3dConfig {
+                patch_size,
+                step_size: patch_size / 2,
+                ..Bm3dConfig::default()
+            };
 
             let result =
                 bm3d_ring_artifact_removal(image.view(), RingRemovalMode::Generic, &config);
@@ -893,8 +908,10 @@ mod tests {
         let image = random_matrix(32, 32, 22222);
 
         for sigma in [0.05f32, 0.1, 0.2] {
-            let mut config: Bm3dConfig<f32> = Bm3dConfig::default();
-            config.sigma_random = sigma;
+            let config = Bm3dConfig {
+                sigma_random: sigma,
+                ..Bm3dConfig::default()
+            };
 
             let result =
                 bm3d_ring_artifact_removal(image.view(), RingRemovalMode::Generic, &config);
@@ -909,8 +926,10 @@ mod tests {
         let image = Array2::from_shape_fn((64, 64), |_| rng.next_f32());
 
         // Config with sigma=0.0 to trigger auto-estimation
-        let mut config = Bm3dConfig::default();
-        config.sigma_random = 0.0;
+        let config = Bm3dConfig {
+            sigma_random: 0.0,
+            ..Bm3dConfig::default()
+        };
 
         let result = bm3d_ring_artifact_removal(image.view(), RingRemovalMode::Generic, &config);
 

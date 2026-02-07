@@ -142,7 +142,6 @@ fn compute_mad<F: Bm3dFloat>(data: ArrayView2<F>) -> F {
 }
 
 #[cfg(test)]
-#[allow(clippy::print_stdout)]
 mod tests {
     use super::*;
     use ndarray::Array2;

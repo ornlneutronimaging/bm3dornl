@@ -328,6 +328,7 @@ mod tests {
     use super::*;
     use ndarray::Array2;
     use rustfft::FftPlanner;
+    use std::sync::Arc;
 
     // Helper: Simple Linear Congruential Generator for deterministic "random" test data
     // This avoids adding rand as a dependency while still providing varied test inputs
@@ -360,16 +361,14 @@ mod tests {
     }
 
     // Helper: Create FFT plans for a given size
-    #[allow(clippy::type_complexity)]
-    fn create_fft_plans_f32(
-        rows: usize,
-        cols: usize,
-    ) -> (
-        std::sync::Arc<dyn Fft<f32>>,
-        std::sync::Arc<dyn Fft<f32>>,
-        std::sync::Arc<dyn Fft<f32>>,
-        std::sync::Arc<dyn Fft<f32>>,
-    ) {
+    type FftPlanQuad32 = (
+        Arc<dyn Fft<f32>>,
+        Arc<dyn Fft<f32>>,
+        Arc<dyn Fft<f32>>,
+        Arc<dyn Fft<f32>>,
+    );
+
+    fn create_fft_plans_f32(rows: usize, cols: usize) -> FftPlanQuad32 {
         let mut planner = FftPlanner::<f32>::new();
         let fft_row = planner.plan_fft_forward(cols);
         let fft_col = planner.plan_fft_forward(rows);
@@ -378,16 +377,14 @@ mod tests {
         (fft_row, fft_col, ifft_row, ifft_col)
     }
 
-    #[allow(clippy::type_complexity)]
-    fn create_fft_plans_f64(
-        rows: usize,
-        cols: usize,
-    ) -> (
-        std::sync::Arc<dyn Fft<f64>>,
-        std::sync::Arc<dyn Fft<f64>>,
-        std::sync::Arc<dyn Fft<f64>>,
-        std::sync::Arc<dyn Fft<f64>>,
-    ) {
+    type FftPlanQuad64 = (
+        Arc<dyn Fft<f64>>,
+        Arc<dyn Fft<f64>>,
+        Arc<dyn Fft<f64>>,
+        Arc<dyn Fft<f64>>,
+    );
+
+    fn create_fft_plans_f64(rows: usize, cols: usize) -> FftPlanQuad64 {
         let mut planner = FftPlanner::<f64>::new();
         let fft_row = planner.plan_fft_forward(cols);
         let fft_col = planner.plan_fft_forward(rows);

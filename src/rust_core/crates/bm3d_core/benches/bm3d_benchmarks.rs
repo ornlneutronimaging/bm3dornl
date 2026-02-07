@@ -14,7 +14,7 @@ use rustfft::FftPlanner;
 use bm3d_core::block_matching::{compute_integral_images, find_similar_patches};
 use bm3d_core::{
     estimate_streak_profile_impl, fft2d, ifft2d, run_bm3d_kernel, wht2d_8x8_forward,
-    wht2d_8x8_inverse, Bm3dMode, Bm3dPlans,
+    wht2d_8x8_inverse, Bm3dKernelConfig, Bm3dMode, Bm3dPlans,
 };
 
 // =============================================================================
@@ -29,6 +29,39 @@ fn random_matrix_f32(rows: usize, cols: usize, seed: u64) -> Array2<f32> {
 fn random_matrix_f64(rows: usize, cols: usize, seed: u64) -> Array2<f64> {
     let mut rng = StdRng::seed_from_u64(seed);
     Array2::from_shape_fn((rows, cols), |_| rng.gen())
+}
+
+fn run_bm3d_kernel_compat<F: bm3d_core::Bm3dFloat>(
+    input_noisy: ndarray::ArrayView2<F>,
+    input_pilot: ndarray::ArrayView2<F>,
+    mode: Bm3dMode,
+    sigma_psd: ndarray::ArrayView2<F>,
+    sigma_map: ndarray::ArrayView2<F>,
+    sigma_random: F,
+    threshold: F,
+    patch_size: usize,
+    step_size: usize,
+    search_window: usize,
+    max_matches: usize,
+    plans: &Bm3dPlans<F>,
+) -> Array2<F> {
+    let config = Bm3dKernelConfig {
+        sigma_random,
+        threshold,
+        patch_size,
+        step_size,
+        search_window,
+        max_matches,
+    };
+    run_bm3d_kernel(
+        input_noisy,
+        input_pilot,
+        mode,
+        sigma_psd,
+        sigma_map,
+        &config,
+        plans,
+    )
 }
 
 // =============================================================================
@@ -226,7 +259,7 @@ fn bench_bm3d_full(c: &mut Criterion) {
 
         group.bench_with_input(BenchmarkId::new("hard_threshold", label), &size, |b, _| {
             b.iter(|| {
-                run_bm3d_kernel(
+                run_bm3d_kernel_compat(
                     black_box(image.view()),
                     image.view(),
                     Bm3dMode::HardThreshold,
@@ -243,7 +276,7 @@ fn bench_bm3d_full(c: &mut Criterion) {
             })
         });
 
-        let pilot = run_bm3d_kernel(
+        let pilot = run_bm3d_kernel_compat(
             image.view(),
             image.view(),
             Bm3dMode::HardThreshold,
@@ -260,7 +293,7 @@ fn bench_bm3d_full(c: &mut Criterion) {
 
         group.bench_with_input(BenchmarkId::new("wiener", label), &size, |b, _| {
             b.iter(|| {
-                run_bm3d_kernel(
+                run_bm3d_kernel_compat(
                     black_box(image.view()),
                     pilot.view(),
                     Bm3dMode::Wiener,
@@ -279,7 +312,7 @@ fn bench_bm3d_full(c: &mut Criterion) {
 
         group.bench_with_input(BenchmarkId::new("full_2pass", label), &size, |b, _| {
             b.iter(|| {
-                let ht_result = run_bm3d_kernel(
+                let ht_result = run_bm3d_kernel_compat(
                     black_box(image.view()),
                     image.view(),
                     Bm3dMode::HardThreshold,
@@ -293,7 +326,7 @@ fn bench_bm3d_full(c: &mut Criterion) {
                     64,
                     &plans,
                 );
-                run_bm3d_kernel(
+                run_bm3d_kernel_compat(
                     image.view(),
                     ht_result.view(),
                     Bm3dMode::Wiener,
@@ -338,7 +371,7 @@ fn bench_precision_comparison(c: &mut Criterion) {
     // f32 full 2-pass pipeline
     group.bench_function("bm3d_128_f32", |b| {
         b.iter(|| {
-            let ht_result = run_bm3d_kernel(
+            let ht_result = run_bm3d_kernel_compat(
                 black_box(image_f32.view()),
                 image_f32.view(),
                 Bm3dMode::HardThreshold,
@@ -352,7 +385,7 @@ fn bench_precision_comparison(c: &mut Criterion) {
                 64,
                 &plans_f32,
             );
-            run_bm3d_kernel(
+            run_bm3d_kernel_compat(
                 image_f32.view(),
                 ht_result.view(),
                 Bm3dMode::Wiener,
@@ -372,7 +405,7 @@ fn bench_precision_comparison(c: &mut Criterion) {
     // f64 full 2-pass pipeline
     group.bench_function("bm3d_128_f64", |b| {
         b.iter(|| {
-            let ht_result = run_bm3d_kernel(
+            let ht_result = run_bm3d_kernel_compat(
                 black_box(image_f64.view()),
                 image_f64.view(),
                 Bm3dMode::HardThreshold,
@@ -386,7 +419,7 @@ fn bench_precision_comparison(c: &mut Criterion) {
                 64,
                 &plans_f64,
             );
-            run_bm3d_kernel(
+            run_bm3d_kernel_compat(
                 image_f64.view(),
                 ht_result.view(),
                 Bm3dMode::Wiener,
