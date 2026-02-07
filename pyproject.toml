@@ -71,6 +71,9 @@ build = "maturin develop --release"
 test-rust = { cmd = "PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 cargo test --workspace", cwd = "src/rust_core" }
 test-python = "pytest"
 test = { depends-on = ["test-rust", "test-python"] }
+lint-fmt = { cmd = "cargo fmt --all --check", cwd = "src/rust_core" }
+lint-clippy = { cmd = "cargo clippy --workspace --all-targets -- -D warnings", cwd = "src/rust_core" }
+lint = { depends-on = ["lint-fmt", "lint-clippy"] }
 bench = "python benchmarks/measure_stack_speed.py"
 bench-rust = { cmd = "cargo bench -p bm3d_core", cwd = "src/rust_core" }
 clean = "cargo clean --manifest-path src/rust_core/Cargo.toml"
