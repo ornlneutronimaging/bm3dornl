@@ -209,7 +209,7 @@ fn compute_sigma_map<F: Bm3dFloat>(
     sigma_map_smoothing: F,
     streak_sigma_scale: F,
 ) -> Array2<F> {
-    let (rows, cols) = normalized_image.dim();
+    let (_rows, cols) = normalized_image.dim();
 
     // 1. Estimate streak profile with fixed parameters
     let streak_profile = estimate_streak_profile_impl(
@@ -227,11 +227,10 @@ fn compute_sigma_map<F: Bm3dFloat>(
     // 4. Take absolute value and scale
     let sigma_1d: Array1<F> = streak_signal.mapv(|x| x.abs() * streak_sigma_scale);
 
-    // 5. Tile to full image height
-    let mut sigma_map = Array2::zeros((rows, cols));
-    for r in 0..rows {
-        sigma_map.row_mut(r).assign(&sigma_1d);
-    }
+    // 5. Return a compact row-invariant map of shape (1, cols).
+    // BM3D kernel interprets this as "same sigma profile for every row".
+    let mut sigma_map = Array2::zeros((1, cols));
+    sigma_map.row_mut(0).assign(&sigma_1d);
 
     sigma_map
 }
@@ -566,22 +565,16 @@ mod tests {
 
         let sigma_map = compute_sigma_map(normalized.view(), 20.0, 1.1);
 
-        assert_eq!(sigma_map.dim(), (64, 128));
+        assert_eq!(sigma_map.dim(), (1, 128));
     }
 
     #[test]
-    fn test_sigma_map_rows_identical() {
-        // Sigma map should have identical rows (tiled from 1D profile)
+    fn test_sigma_map_compact_row_profile() {
+        // Sigma map is represented compactly as a single row profile.
         let image = random_matrix(32, 64, 54321);
         let sigma_map = compute_sigma_map(image.view(), 20.0, 1.1);
-
-        let first_row: Vec<f32> = sigma_map.row(0).iter().copied().collect();
-        for r in 1..32 {
-            let row: Vec<f32> = sigma_map.row(r).iter().copied().collect();
-            for (a, b) in first_row.iter().zip(row.iter()) {
-                assert!(approx_eq(*a, *b, 1e-6), "Row {} differs from row 0", r);
-            }
-        }
+        assert_eq!(sigma_map.nrows(), 1);
+        assert_eq!(sigma_map.ncols(), 64);
     }
 
     #[test]

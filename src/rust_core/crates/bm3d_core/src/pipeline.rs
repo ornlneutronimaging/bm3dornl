@@ -33,7 +33,7 @@ const RAYON_MIN_CHUNK_LEN: usize = 64;
 
 /// Aggregation tile size for memory-bounded partial accumulation.
 /// Larger tiles reduce hashmap overhead; smaller tiles reduce per-worker memory.
-const AGGREGATION_TILE_SIZE: usize = 256;
+const AGGREGATION_TILE_SIZE: usize = 192;
 const AGGREGATION_TILE_SIZE_ENV: &str = "BM3D_AGGREGATION_TILE_SIZE";
 const USE_HADAMARD_ENV: &str = "BM3D_USE_HADAMARD";
 static USE_HADAMARD_FAST_PATH: AtomicBool = AtomicBool::new(false);
@@ -208,6 +208,7 @@ fn apply_inverse_1d_transform<F: Bm3dFloat>(
 }
 
 struct WorkerBuffers<F: Bm3dFloat> {
+    matches: Vec<PatchMatch<F>>,
     group_noisy: Array3<F>,
     group_pilot: Array3<F>,
     g_noisy_c: ndarray::Array3<Complex<F>>,
@@ -223,6 +224,7 @@ impl<F: Bm3dFloat> WorkerBuffers<F> {
     fn new(max_matches: usize, patch_size: usize) -> Self {
         let patch_dim = (patch_size, patch_size);
         Self {
+            matches: Vec::with_capacity(max_matches.max(1)),
             group_noisy: Array3::<F>::zeros((max_matches, patch_size, patch_size)),
             group_pilot: Array3::<F>::zeros((max_matches, patch_size, patch_size)),
             g_noisy_c: ndarray::Array3::<Complex<F>>::zeros((max_matches, patch_size, patch_size)),
@@ -439,32 +441,6 @@ fn aggregate_patch_into_tiles<F: Bm3dFloat>(
     }
 }
 
-/// Finalize the output by dividing numerator by denominator.
-///
-/// Falls back to original noisy input where denominator is too small.
-fn finalize_output<F: Bm3dFloat>(
-    final_num: &Array2<F>,
-    final_den: &Array2<F>,
-    input_noisy: ArrayView2<F>,
-) -> Array2<F> {
-    let (rows, cols) = input_noisy.dim();
-    let mut output = Array2::<F>::zeros((rows, cols));
-    let agg_eps = F::from_f64_c(AGGREGATION_EPSILON);
-
-    for r in 0..rows {
-        for c in 0..cols {
-            let num = final_num[[r, c]];
-            let den = final_den[[r, c]];
-            if den > agg_eps {
-                output[[r, c]] = num / den;
-            } else {
-                output[[r, c]] = input_noisy[[r, c]];
-            }
-        }
-    }
-    output
-}
-
 /// Core BM3D Single Image Kernel
 pub fn run_bm3d_kernel<F: Bm3dFloat>(
     input_noisy: ArrayView2<F>,
@@ -481,7 +457,8 @@ pub fn run_bm3d_kernel<F: Bm3dFloat>(
     let search_window = config.search_window;
     let max_matches = config.max_matches;
     let threshold = config.threshold;
-    let use_sigma_map = sigma_map.dim() == (rows, cols);
+    let use_sigma_map_full = sigma_map.dim() == (rows, cols);
+    let use_sigma_map_row = sigma_map.dim() == (1, cols);
     let use_colored_noise = sigma_psd.dim() == (patch_size, patch_size);
     let scalar_sigma_sq = config.sigma_random * config.sigma_random;
 
@@ -526,12 +503,10 @@ pub fn run_bm3d_kernel<F: Bm3dFloat>(
         tile_size,
         tile_cols,
     };
+    let agg_eps = F::from_f64_c(AGGREGATION_EPSILON);
 
-    let (final_num, final_den) = if ref_coords.is_empty() {
-        (
-            Array2::<F>::zeros((rows, cols)),
-            Array2::<F>::zeros((rows, cols)),
-        )
+    let final_tiles = if ref_coords.is_empty() {
+        None
     } else {
         // Use one coordinate chunk per Rayon worker to preserve throughput
         // while keeping partial aggregation memory tile-bounded.
@@ -550,7 +525,7 @@ pub fn run_bm3d_kernel<F: Bm3dFloat>(
 
                 for &(ref_r, ref_c) in coord_chunk {
                     // 1. Block Matching
-                    let matches = block_matching::find_similar_patches(
+                    block_matching::find_similar_patches_in_place(
                         input_pilot,
                         &integral_sum,
                         &integral_sq_sum,
@@ -559,21 +534,29 @@ pub fn run_bm3d_kernel<F: Bm3dFloat>(
                         (search_window, search_window),
                         max_matches,
                         step_size,
+                        &mut worker.matches,
                     );
-                    let k = matches.len();
+                    let k = worker.matches.len();
                     if k == 0 {
                         continue;
                     }
 
                     // 1.5 Local Noise Level
-                    let local_sigma_streak = if use_sigma_map {
+                    let local_sigma_streak = if use_sigma_map_full {
                         sigma_map[[ref_r, ref_c]]
+                    } else if use_sigma_map_row {
+                        sigma_map[[0, ref_c]]
                     } else {
                         F::zero()
                     };
 
                     // Build noisy patch group (pilot group is only needed in Wiener mode).
-                    fill_patch_group(input_noisy, &matches, patch_size, &mut worker.group_noisy);
+                    fill_patch_group(
+                        input_noisy,
+                        &worker.matches,
+                        patch_size,
+                        &mut worker.group_noisy,
+                    );
 
                     // Forward 2D transforms
                     apply_forward_2d_transform_into(
@@ -588,7 +571,7 @@ pub fn run_bm3d_kernel<F: Bm3dFloat>(
                     if mode == Bm3dMode::Wiener {
                         fill_patch_group(
                             input_pilot,
-                            &matches,
+                            &worker.matches,
                             patch_size,
                             &mut worker.group_pilot,
                         );
@@ -719,7 +702,7 @@ pub fn run_bm3d_kernel<F: Bm3dFloat>(
                     );
 
                     // Inverse 2D transforms and aggregation
-                    for (i, matched) in matches.iter().enumerate().take(k) {
+                    for (i, matched) in worker.matches.iter().enumerate().take(k) {
                         let complex_slice = worker.g_noisy_c.slice(s![i, .., ..]);
                         if use_hadamard {
                             transforms::wht2d_8x8_inverse_into_view(
@@ -762,48 +745,32 @@ pub fn run_bm3d_kernel<F: Bm3dFloat>(
                 }
                 a
             })
-            .map_or_else(
-                || {
-                    (
-                        Array2::<F>::zeros((rows, cols)),
-                        Array2::<F>::zeros((rows, cols)),
-                    )
-                },
-                |tile_accumulators| {
-                    let mut numerator_acc = Array2::<F>::zeros((rows, cols));
-                    let mut denominator_acc = Array2::<F>::zeros((rows, cols));
-
-                    for (tile_id, tile_entry) in tile_accumulators.into_iter().enumerate() {
-                        let Some((num_tile, den_tile)) = tile_entry else {
-                            continue;
-                        };
-                        let tile_row = tile_id / tile_cols;
-                        let tile_col = tile_id % tile_cols;
-                        let row_start = tile_row * tile_size;
-                        let col_start = tile_col * tile_size;
-                        let (tile_h, tile_w) = num_tile.dim();
-
-                        numerator_acc
-                            .slice_mut(s![
-                                row_start..row_start + tile_h,
-                                col_start..col_start + tile_w
-                            ])
-                            .assign(&num_tile);
-                        denominator_acc
-                            .slice_mut(s![
-                                row_start..row_start + tile_h,
-                                col_start..col_start + tile_w
-                            ])
-                            .assign(&den_tile);
-                    }
-
-                    (numerator_acc, denominator_acc)
-                },
-            )
     };
 
-    // Finalize: divide numerator by denominator
-    finalize_output(&final_num, &final_den, input_noisy)
+    let mut output = input_noisy.to_owned();
+    if let Some(tile_accumulators) = final_tiles {
+        for (tile_id, tile_entry) in tile_accumulators.into_iter().enumerate() {
+            let Some((num_tile, den_tile)) = tile_entry else {
+                continue;
+            };
+            let tile_row = tile_id / tile_cols;
+            let tile_col = tile_id % tile_cols;
+            let row_start = tile_row * tile_size;
+            let col_start = tile_col * tile_size;
+            let (tile_h, tile_w) = num_tile.dim();
+
+            for tr in 0..tile_h {
+                for tc in 0..tile_w {
+                    let den = den_tile[[tr, tc]];
+                    if den > agg_eps {
+                        output[[row_start + tr, col_start + tc]] = num_tile[[tr, tc]] / den;
+                    }
+                }
+            }
+        }
+    };
+
+    output
 }
 
 /// Run BM3D step on a single 2D image.
@@ -823,10 +790,14 @@ pub fn run_bm3d_step<F: Bm3dFloat>(
             input_pilot.dim()
         ));
     }
-    if sigma_map.dim() != input_noisy.dim() && sigma_map.dim() != (1, 1) {
+    if sigma_map.dim() != input_noisy.dim()
+        && sigma_map.dim() != (1, input_noisy.dim().1)
+        && sigma_map.dim() != (1, 1)
+    {
         return Err(format!(
-            "Sigma map dimension mismatch: expected {:?} or (1, 1), got {:?}",
+            "Sigma map dimension mismatch: expected {:?}, (1, {}), or (1, 1), got {:?}",
             input_noisy.dim(),
+            input_noisy.dim().1,
             sigma_map.dim()
         ));
     }
@@ -860,10 +831,15 @@ pub fn run_bm3d_step_stack<F: Bm3dFloat>(
             input_pilot.dim()
         ));
     }
-    if sigma_map.dim() != (n, rows, cols) && sigma_map.dim() != (1, 1, 1) {
+    if sigma_map.dim() != (n, rows, cols)
+        && sigma_map.dim() != (n, 1, cols)
+        && sigma_map.dim() != (1, 1, 1)
+    {
         return Err(format!(
-            "Sigma map dimension mismatch: expected {:?} or (1, 1, 1), got {:?}",
+            "Sigma map dimension mismatch: expected {:?}, ({}, 1, {}), or (1, 1, 1), got {:?}",
             (n, rows, cols),
+            n,
+            cols,
             sigma_map.dim()
         ));
     }

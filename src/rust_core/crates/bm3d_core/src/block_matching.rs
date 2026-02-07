@@ -100,7 +100,7 @@ fn get_patch_sums<F: Bm3dFloat>(
 }
 
 /// Find similar patches within a search window using Integral Image Pre-Screening.
-pub fn find_similar_patches<F: Bm3dFloat>(
+pub fn find_similar_patches_in_place<F: Bm3dFloat>(
     image: ArrayView2<F>,
     integral_sum: &Array2<F>,
     integral_sq_sum: &Array2<F>,
@@ -109,7 +109,8 @@ pub fn find_similar_patches<F: Bm3dFloat>(
     search_window: (usize, usize),
     max_matches: usize,
     step: usize,
-) -> Vec<PatchMatch<F>> {
+    out_matches: &mut Vec<PatchMatch<F>>,
+) {
     let (ref_r, ref_c) = ref_pos;
     let (ph, pw) = patch_size;
     let (h, w) = image.dim();
@@ -121,9 +122,8 @@ pub fn find_similar_patches<F: Bm3dFloat>(
     let search_c_start = ref_c.saturating_sub(search_window.1 / 2);
     let search_c_end = (ref_c + search_window.1 / 2).min(w - pw);
 
-    let mut heap = std::collections::BinaryHeap::with_capacity(max_matches + 1);
-
-    heap.push(PatchMatch {
+    out_matches.clear();
+    out_matches.push(PatchMatch {
         row: ref_r,
         col: ref_c,
         distance: F::zero(),
@@ -175,36 +175,80 @@ pub fn find_similar_patches<F: Bm3dFloat>(
             let dist = compute_squared_distance(ref_patch, candidate_patch, threshold);
 
             if dist < threshold {
-                if heap.len() < max_matches {
-                    heap.push(PatchMatch {
+                if out_matches.len() < max_matches {
+                    out_matches.push(PatchMatch {
                         row: r,
                         col: c,
                         distance: dist,
                     });
-                    if heap.len() == max_matches {
-                        threshold = heap.peek().unwrap().distance;
+                    if out_matches.len() == max_matches {
+                        let mut worst_idx = 0usize;
+                        let mut worst_dist = out_matches[0].distance;
+                        for (idx, m) in out_matches.iter().enumerate().skip(1) {
+                            if m.distance > worst_dist {
+                                worst_idx = idx;
+                                worst_dist = m.distance;
+                            }
+                        }
+                        threshold = out_matches[worst_idx].distance;
                     }
                 } else {
-                    heap.pop();
-                    heap.push(PatchMatch {
+                    let mut worst_idx = 0usize;
+                    let mut worst_dist = out_matches[0].distance;
+                    for (idx, m) in out_matches.iter().enumerate().skip(1) {
+                        if m.distance > worst_dist {
+                            worst_idx = idx;
+                            worst_dist = m.distance;
+                        }
+                    }
+                    out_matches[worst_idx] = PatchMatch {
                         row: r,
                         col: c,
                         distance: dist,
-                    });
-                    threshold = heap.peek().unwrap().distance;
+                    };
+                    let mut next_worst = out_matches[0].distance;
+                    for m in out_matches.iter().skip(1) {
+                        if m.distance > next_worst {
+                            next_worst = m.distance;
+                        }
+                    }
+                    threshold = next_worst;
                 }
             }
         }
     }
 
-    let mut sorted_matches = heap.into_vec();
-    sorted_matches.sort_by(|a, b| {
+    out_matches.sort_by(|a, b| {
         a.distance
             .partial_cmp(&b.distance)
             .unwrap_or(Ordering::Equal)
     });
+}
 
-    sorted_matches
+/// Find similar patches within a search window using Integral Image Pre-Screening.
+pub fn find_similar_patches<F: Bm3dFloat>(
+    image: ArrayView2<F>,
+    integral_sum: &Array2<F>,
+    integral_sq_sum: &Array2<F>,
+    ref_pos: (usize, usize),
+    patch_size: (usize, usize),
+    search_window: (usize, usize),
+    max_matches: usize,
+    step: usize,
+) -> Vec<PatchMatch<F>> {
+    let mut matches = Vec::with_capacity(max_matches.max(1));
+    find_similar_patches_in_place(
+        image,
+        integral_sum,
+        integral_sq_sum,
+        ref_pos,
+        patch_size,
+        search_window,
+        max_matches,
+        step,
+        &mut matches,
+    );
+    matches
 }
 
 #[cfg(test)]
