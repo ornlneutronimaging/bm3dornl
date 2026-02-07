@@ -4,6 +4,7 @@ use ndarray::{s, Array2, Array3, ArrayView2, ArrayView3, Axis};
 use rayon::prelude::*;
 use rustfft::num_complex::Complex;
 use rustfft::Fft;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use crate::block_matching::{self, PatchMatch};
@@ -34,6 +35,8 @@ const RAYON_MIN_CHUNK_LEN: usize = 64;
 /// Larger tiles reduce hashmap overhead; smaller tiles reduce per-worker memory.
 const AGGREGATION_TILE_SIZE: usize = 256;
 const AGGREGATION_TILE_SIZE_ENV: &str = "BM3D_AGGREGATION_TILE_SIZE";
+const USE_HADAMARD_ENV: &str = "BM3D_USE_HADAMARD";
+static USE_HADAMARD_FAST_PATH: AtomicBool = AtomicBool::new(false);
 
 /// Patch size that triggers the fast Hadamard transform path.
 /// Walsh-Hadamard Transform is only implemented for 8x8 patches.
@@ -254,6 +257,78 @@ fn resolve_aggregation_tile_size(patch_size: usize) -> usize {
         .unwrap_or(AGGREGATION_TILE_SIZE.max(patch_size))
 }
 
+/// Enable or disable the 8x8 Hadamard fast path globally.
+///
+/// Default is `false` (quality-first FFT path).
+pub fn set_use_hadamard_fast_path(enabled: bool) {
+    USE_HADAMARD_FAST_PATH.store(enabled, Ordering::Relaxed);
+}
+
+/// Get current 8x8 Hadamard fast-path setting.
+pub fn use_hadamard_fast_path() -> bool {
+    USE_HADAMARD_FAST_PATH.load(Ordering::Relaxed)
+}
+
+/// Resolve whether the 8x8 Hadamard fast path should be used.
+///
+/// Default is quality-first (`false`), because FFT path is less prone to
+/// patch-like artifacts near strong boundaries. Set `BM3D_USE_HADAMARD=1`
+/// to re-enable speed-first behavior for 8x8 patches.
+fn resolve_use_hadamard(patch_size: usize) -> bool {
+    if patch_size != HADAMARD_PATCH_SIZE {
+        return false;
+    }
+    if use_hadamard_fast_path() {
+        return true;
+    }
+    std::env::var(USE_HADAMARD_ENV)
+        .ok()
+        .map(|value| {
+            let v = value.trim();
+            v == "1"
+                || v.eq_ignore_ascii_case("true")
+                || v.eq_ignore_ascii_case("yes")
+                || v.eq_ignore_ascii_case("on")
+        })
+        .unwrap_or(false)
+}
+
+/// Build separable patch-blend weights for overlap-add aggregation.
+///
+/// Uses a sine window with positive edges (no hard zeros), then normalizes
+/// mean weight to 1.0 so effective global scaling remains stable.
+fn compute_patch_blend_weights<F: Bm3dFloat>(patch_size: usize) -> Array2<F> {
+    if patch_size <= 1 {
+        return Array2::ones((patch_size.max(1), patch_size.max(1)));
+    }
+
+    let n = F::usize_as(patch_size);
+    let half = F::from_f64_c(0.5);
+    let mut one_d = vec![F::zero(); patch_size];
+    for (i, slot) in one_d.iter_mut().enumerate() {
+        let idx = F::usize_as(i) + half;
+        *slot = (F::PI * idx / n).sin();
+    }
+
+    let mut weights = Array2::<F>::zeros((patch_size, patch_size));
+    let mut sum = F::zero();
+    for r in 0..patch_size {
+        for c in 0..patch_size {
+            let v = one_d[r] * one_d[c];
+            weights[[r, c]] = v;
+            sum += v;
+        }
+    }
+
+    let mean = sum / F::usize_as(patch_size * patch_size);
+    if mean > F::zero() {
+        for v in &mut weights {
+            *v /= mean;
+        }
+    }
+    weights
+}
+
 fn get_or_insert_tile<F: Bm3dFloat>(
     tile_accumulators: &mut TileAccumulatorVec<F>,
     tile_id: usize,
@@ -283,6 +358,7 @@ fn aggregate_patch_into_tiles<F: Bm3dFloat>(
     spatial: &Array2<F>,
     m: &PatchMatch<F>,
     weight: F,
+    patch_blend_weights: &Array2<F>,
     geom: &TileAggregationGeometry,
     tile_accumulators: &mut TileAccumulatorVec<F>,
 ) {
@@ -323,8 +399,9 @@ fn aggregate_patch_into_tiles<F: Bm3dFloat>(
                 let tc = m.col + pc;
                 if tc < geom.cols {
                     let local_c = local_c0 + pc;
-                    num_tile[[local_r, local_c]] += spatial[[pr, pc]] * weight;
-                    den_tile[[local_r, local_c]] += weight;
+                    let w = weight * patch_blend_weights[[pr, pc]];
+                    num_tile[[local_r, local_c]] += spatial[[pr, pc]] * w;
+                    den_tile[[local_r, local_c]] += w;
                 }
             }
         }
@@ -354,8 +431,9 @@ fn aggregate_patch_into_tiles<F: Bm3dFloat>(
                     geom.tile_size,
                 );
 
-                num_tile[[local_r, local_c]] += spatial[[pr, pc]] * weight;
-                den_tile[[local_r, local_c]] += weight;
+                let w = weight * patch_blend_weights[[pr, pc]];
+                num_tile[[local_r, local_c]] += spatial[[pr, pc]] * w;
+                den_tile[[local_r, local_c]] += w;
             }
         }
     }
@@ -407,8 +485,8 @@ pub fn run_bm3d_kernel<F: Bm3dFloat>(
     let use_colored_noise = sigma_psd.dim() == (patch_size, patch_size);
     let scalar_sigma_sq = config.sigma_random * config.sigma_random;
 
-    // Fast path for 8x8 patches using Hadamard
-    let use_hadamard = patch_size == HADAMARD_PATCH_SIZE;
+    // Fast path for 8x8 patches using Hadamard (opt-in via env).
+    let use_hadamard = resolve_use_hadamard(patch_size);
 
     // Pre-compute Integral Images for Block Matching acceleration
     let (integral_sum, integral_sq_sum) = block_matching::compute_integral_images(input_pilot);
@@ -440,6 +518,7 @@ pub fn run_bm3d_kernel<F: Bm3dFloat>(
     let tile_rows = rows.div_ceil(tile_size).max(1);
     let tile_cols = cols.div_ceil(tile_size).max(1);
     let tile_count = tile_rows * tile_cols;
+    let patch_blend_weights = compute_patch_blend_weights::<F>(patch_size);
     let tile_geom = TileAggregationGeometry {
         patch_size,
         rows,
@@ -661,6 +740,7 @@ pub fn run_bm3d_kernel<F: Bm3dFloat>(
                             &worker.spatial_patch,
                             matched,
                             weight_g,
+                            &patch_blend_weights,
                             &tile_geom,
                             &mut tile_accumulators,
                         );
@@ -961,6 +1041,7 @@ mod tests {
         spatial: &Array2<f32>,
         m: &PatchMatch<f32>,
         weight: f32,
+        patch_blend_weights: &Array2<f32>,
         patch_size: usize,
         rows: usize,
         cols: usize,
@@ -972,8 +1053,9 @@ mod tests {
                 let tr = m.row + pr;
                 let tc = m.col + pc;
                 if tr < rows && tc < cols {
-                    numerator[[tr, tc]] += spatial[[pr, pc]] * weight;
-                    denominator[[tr, tc]] += weight;
+                    let w = weight * patch_blend_weights[[pr, pc]];
+                    numerator[[tr, tc]] += spatial[[pr, pc]] * w;
+                    denominator[[tr, tc]] += w;
                 }
             }
         }
@@ -1089,11 +1171,13 @@ mod tests {
             let tile_count = tile_rows * tile_cols;
             let mut tile_accumulators: TileAccumulatorVec<f32> =
                 (0..tile_count).map(|_| None).collect();
+            let patch_blend_weights = compute_patch_blend_weights::<f32>(patch_size);
 
             aggregate_patch_into_tiles(
                 &spatial,
                 &m,
                 weight,
+                &patch_blend_weights,
                 &TileAggregationGeometry {
                     patch_size,
                     rows,
@@ -1104,8 +1188,15 @@ mod tests {
                 &mut tile_accumulators,
             );
 
-            let (num_ref, den_ref) =
-                aggregate_patch_reference(&spatial, &m, weight, patch_size, rows, cols);
+            let (num_ref, den_ref) = aggregate_patch_reference(
+                &spatial,
+                &m,
+                weight,
+                &patch_blend_weights,
+                patch_size,
+                rows,
+                cols,
+            );
             let (num_tiled, den_tiled) =
                 stitch_tiles_to_full(tile_accumulators, rows, cols, tile_size, tile_cols);
 
