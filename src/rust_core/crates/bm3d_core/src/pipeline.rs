@@ -101,24 +101,19 @@ impl<F: Bm3dFloat> Bm3dPlans<F> {
 // Helper Functions for BM3D Kernel Decomposition
 // =============================================================================
 
-/// Build a patch group from matched locations.
+/// Fill a preallocated patch group buffer from matched locations.
 ///
-/// Extracts patches from an input image at the matched locations,
-/// stacking them into a 3D array of shape (k, patch_size, patch_size).
-fn build_patch_group<F: Bm3dFloat>(
+/// Writes only the first `matches.len()` entries of `out_group`.
+fn fill_patch_group<F: Bm3dFloat>(
     input: ArrayView2<F>,
     matches: &[PatchMatch<F>],
     patch_size: usize,
-) -> Array3<F> {
-    let k = matches.len();
-    let mut group = Array3::<F>::zeros((k, patch_size, patch_size));
-
+    out_group: &mut Array3<F>,
+) {
     for (idx, m) in matches.iter().enumerate() {
         let patch = input.slice(s![m.row..m.row + patch_size, m.col..m.col + patch_size]);
-        group.slice_mut(s![idx, .., ..]).assign(&patch);
+        out_group.slice_mut(s![idx, .., ..]).assign(&patch);
     }
-
-    group
 }
 
 /// Compute the effective noise standard deviation for a coefficient.
@@ -174,44 +169,41 @@ fn compute_noise_var<F: Bm3dFloat>(
     (var_r + var_s) * spatial_scale_sq
 }
 
-/// Apply 2D forward transform to all patches in a group.
-///
-/// Uses WHT for 8x8 patches, FFT otherwise. Returns complex coefficients.
-fn apply_forward_2d_transform<F: Bm3dFloat>(
+/// Apply 2D forward transform into a pre-allocated output buffer.
+fn apply_forward_2d_transform_into<F: Bm3dFloat>(
     group: &Array3<F>,
+    k: usize,
     use_hadamard: bool,
     fft_row: &Arc<dyn Fft<F>>,
     fft_col: &Arc<dyn Fft<F>>,
-) -> ndarray::Array3<Complex<F>> {
-    let (k, patch_size, _) = group.dim();
-    let mut result = ndarray::Array3::<Complex<F>>::zeros((k, patch_size, patch_size));
-
+    out: &mut ndarray::Array3<Complex<F>>,
+) {
     for i in 0..k {
         let slice = group.slice(s![i, .., ..]);
         if use_hadamard {
             let transformed = transforms::wht2d_8x8_forward(slice);
-            result.slice_mut(s![i, .., ..]).assign(&transformed);
+            out.slice_mut(s![i, .., ..]).assign(&transformed);
         } else {
             let transformed = transforms::fft2d(slice, fft_row, fft_col);
-            result.slice_mut(s![i, .., ..]).assign(&transformed);
+            out.slice_mut(s![i, .., ..]).assign(&transformed);
         }
     }
-    result
 }
 
 /// Apply 1D forward FFT along the group dimension at each (r, c) position.
 fn apply_forward_1d_transform<F: Bm3dFloat>(
     group: &mut ndarray::Array3<Complex<F>>,
+    k: usize,
+    patch_size: usize,
     fft_plan: &Arc<dyn Fft<F>>,
+    scratch: &mut [Complex<F>],
 ) {
-    let (k, patch_size, _) = group.dim();
-    let mut scratch = vec![Complex::new(F::zero(), F::zero()); k];
     for r in 0..patch_size {
         for c in 0..patch_size {
             for i in 0..k {
                 scratch[i] = group[[i, r, c]];
             }
-            fft_plan.process(&mut scratch);
+            fft_plan.process(scratch);
             for i in 0..k {
                 group[[i, r, c]] = scratch[i];
             }
@@ -222,17 +214,18 @@ fn apply_forward_1d_transform<F: Bm3dFloat>(
 /// Apply 1D inverse FFT along the group dimension at each (r, c) position.
 fn apply_inverse_1d_transform<F: Bm3dFloat>(
     group: &mut ndarray::Array3<Complex<F>>,
+    k: usize,
+    patch_size: usize,
     ifft_plan: &Arc<dyn Fft<F>>,
+    scratch: &mut [Complex<F>],
 ) {
-    let (k, patch_size, _) = group.dim();
     let norm_k = F::one() / F::usize_as(k);
-    let mut scratch = vec![Complex::new(F::zero(), F::zero()); k];
     for r in 0..patch_size {
         for c in 0..patch_size {
             for i in 0..k {
                 scratch[i] = group[[i, r, c]];
             }
-            ifft_plan.process(&mut scratch);
+            ifft_plan.process(scratch);
             for i in 0..k {
                 group[[i, r, c]] = scratch[i] * norm_k;
             }
@@ -253,6 +246,28 @@ fn apply_inverse_2d_transform<F: Bm3dFloat>(
         transforms::wht2d_8x8_inverse_view(complex_slice)
     } else {
         transforms::ifft2d_view(complex_slice, ifft_row, ifft_col)
+    }
+}
+
+struct WorkerBuffers<F: Bm3dFloat> {
+    group_noisy: Array3<F>,
+    group_pilot: Array3<F>,
+    g_noisy_c: ndarray::Array3<Complex<F>>,
+    g_pilot_c: ndarray::Array3<Complex<F>>,
+    coeff_buffer: Vec<F>,
+    scratch_1d: Vec<Complex<F>>,
+}
+
+impl<F: Bm3dFloat> WorkerBuffers<F> {
+    fn new(max_matches: usize, patch_size: usize) -> Self {
+        Self {
+            group_noisy: Array3::<F>::zeros((max_matches, patch_size, patch_size)),
+            group_pilot: Array3::<F>::zeros((max_matches, patch_size, patch_size)),
+            g_noisy_c: ndarray::Array3::<Complex<F>>::zeros((max_matches, patch_size, patch_size)),
+            g_pilot_c: ndarray::Array3::<Complex<F>>::zeros((max_matches, patch_size, patch_size)),
+            coeff_buffer: vec![F::zero(); patch_size * patch_size],
+            scratch_1d: vec![Complex::new(F::zero(), F::zero()); max_matches.max(1)],
+        }
     }
 }
 
@@ -477,6 +492,7 @@ pub fn run_bm3d_kernel<F: Bm3dFloat>(
             .map(|coord_chunk| {
                 let mut tile_accumulators: TileAccumulatorVec<F> =
                     (0..tile_count).map(|_| None).collect();
+                let mut worker = WorkerBuffers::<F>::new(max_matches, patch_size);
 
                 for &(ref_r, ref_c) in coord_chunk {
                     // 1. Block Matching
@@ -503,32 +519,51 @@ pub fn run_bm3d_kernel<F: Bm3dFloat>(
                     };
 
                     // Build noisy patch group (pilot group is only needed in Wiener mode).
-                    let group_noisy = build_patch_group(input_noisy, &matches, patch_size);
+                    fill_patch_group(input_noisy, &matches, patch_size, &mut worker.group_noisy);
 
                     // Forward 2D transforms
-                    let mut g_noisy_c = apply_forward_2d_transform(
-                        &group_noisy,
+                    apply_forward_2d_transform_into(
+                        &worker.group_noisy,
+                        k,
                         use_hadamard,
                         fft_2d_row_ref,
                         fft_2d_col_ref,
+                        &mut worker.g_noisy_c,
                     );
-                    let mut g_pilot_c = if mode == Bm3dMode::Wiener {
-                        let group_pilot = build_patch_group(input_pilot, &matches, patch_size);
-                        Some(apply_forward_2d_transform(
-                            &group_pilot,
+                    if mode == Bm3dMode::Wiener {
+                        fill_patch_group(
+                            input_pilot,
+                            &matches,
+                            patch_size,
+                            &mut worker.group_pilot,
+                        );
+                        apply_forward_2d_transform_into(
+                            &worker.group_pilot,
+                            k,
                             use_hadamard,
                             fft_2d_row_ref,
                             fft_2d_col_ref,
-                        ))
-                    } else {
-                        None
-                    };
+                            &mut worker.g_pilot_c,
+                        );
+                    }
 
                     // Forward 1D transforms along group dimension
                     let fft_k_plan = &fft_1d_plans_ref[k];
-                    apply_forward_1d_transform(&mut g_noisy_c, fft_k_plan);
-                    if let Some(pilot_coeffs) = g_pilot_c.as_mut() {
-                        apply_forward_1d_transform(pilot_coeffs, fft_k_plan);
+                    apply_forward_1d_transform(
+                        &mut worker.g_noisy_c,
+                        k,
+                        patch_size,
+                        fft_k_plan,
+                        &mut worker.scratch_1d[..k],
+                    );
+                    if mode == Bm3dMode::Wiener {
+                        apply_forward_1d_transform(
+                            &mut worker.g_pilot_c,
+                            k,
+                            patch_size,
+                            fft_k_plan,
+                            &mut worker.scratch_1d[..k],
+                        );
                     }
 
                     // Filtering
@@ -539,7 +574,7 @@ pub fn run_bm3d_kernel<F: Bm3dFloat>(
                     match mode {
                         Bm3dMode::HardThreshold => {
                             // Hard Thresholding
-                            let mut hard_thresholds = vec![F::zero(); patch_size * patch_size];
+                            let hard_thresholds = &mut worker.coeff_buffer;
                             for r in 0..patch_size {
                                 for c in 0..patch_size {
                                     hard_thresholds[r * patch_size + c] = threshold
@@ -560,9 +595,9 @@ pub fn run_bm3d_kernel<F: Bm3dFloat>(
                             for i in 0..k {
                                 for r in 0..patch_size {
                                     for c in 0..patch_size {
-                                        let coeff = g_noisy_c[[i, r, c]];
+                                        let coeff = worker.g_noisy_c[[i, r, c]];
                                         if coeff.norm() < hard_thresholds[r * patch_size + c] {
-                                            g_noisy_c[[i, r, c]] =
+                                            worker.g_noisy_c[[i, r, c]] =
                                                 Complex::new(F::zero(), F::zero());
                                         } else {
                                             nz_count += 1;
@@ -576,10 +611,7 @@ pub fn run_bm3d_kernel<F: Bm3dFloat>(
                         }
                         Bm3dMode::Wiener => {
                             // Wiener Filtering
-                            let g_pilot_c = g_pilot_c
-                                .as_ref()
-                                .expect("Wiener mode requires pilot coefficients");
-                            let mut noise_vars = vec![F::zero(); patch_size * patch_size];
+                            let noise_vars = &mut worker.coeff_buffer;
                             for r in 0..patch_size {
                                 for c in 0..patch_size {
                                     noise_vars[r * patch_size + c] = compute_noise_var(
@@ -599,13 +631,13 @@ pub fn run_bm3d_kernel<F: Bm3dFloat>(
                             for i in 0..k {
                                 for r in 0..patch_size {
                                     for c in 0..patch_size {
-                                        let p_val = g_pilot_c[[i, r, c]];
-                                        let n_val = g_noisy_c[[i, r, c]];
+                                        let p_val = worker.g_pilot_c[[i, r, c]];
+                                        let n_val = worker.g_noisy_c[[i, r, c]];
                                         let w = p_val.norm_sqr()
                                             / (p_val.norm_sqr()
                                                 + noise_vars[r * patch_size + c]
                                                 + wiener_eps);
-                                        g_noisy_c[[i, r, c]] = n_val * w;
+                                        worker.g_noisy_c[[i, r, c]] = n_val * w;
                                         wiener_sum += w * w;
                                     }
                                 }
@@ -619,12 +651,18 @@ pub fn run_bm3d_kernel<F: Bm3dFloat>(
 
                     // Inverse 1D transform along group dimension
                     let ifft_k_plan = &ifft_1d_plans_ref[k];
-                    apply_inverse_1d_transform(&mut g_noisy_c, ifft_k_plan);
+                    apply_inverse_1d_transform(
+                        &mut worker.g_noisy_c,
+                        k,
+                        patch_size,
+                        ifft_k_plan,
+                        &mut worker.scratch_1d[..k],
+                    );
 
                     // Inverse 2D transforms and aggregation
                     #[allow(clippy::needless_range_loop)]
                     for i in 0..k {
-                        let complex_slice = g_noisy_c.slice(s![i, .., ..]);
+                        let complex_slice = worker.g_noisy_c.slice(s![i, .., ..]);
                         let spatial = apply_inverse_2d_transform(
                             complex_slice,
                             use_hadamard,
