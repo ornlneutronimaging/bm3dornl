@@ -64,10 +64,20 @@ pub fn ifft2d<F: Bm3dFloat>(
     ifft_row_plan: &Arc<dyn Fft<F>>,
     ifft_col_plan: &Arc<dyn Fft<F>>,
 ) -> Array2<F> {
+    ifft2d_view(input.view(), ifft_row_plan, ifft_col_plan)
+}
+
+/// Compute 2D Inverse FFT from a complex view.
+/// Normalizes by 1/(rows*cols).
+pub fn ifft2d_view<F: Bm3dFloat>(
+    input: ArrayView2<Complex<F>>,
+    ifft_row_plan: &Arc<dyn Fft<F>>,
+    ifft_col_plan: &Arc<dyn Fft<F>>,
+) -> Array2<F> {
     let (rows, cols) = input.dim();
 
     // 1. Transform columns
-    let mut intermediate = input.clone();
+    let mut intermediate = input.to_owned();
     let mut col_vec = vec![Complex::new(F::zero(), F::zero()); rows];
 
     for c in 0..cols {
@@ -187,6 +197,11 @@ pub fn wht2d_8x8_forward<F: Bm3dFloat>(input: ArrayView2<F>) -> Array2<Complex<F
 
 /// 2D Inverse WHT for 8x8 patch.
 pub fn wht2d_8x8_inverse<F: Bm3dFloat>(input: &Array2<Complex<F>>) -> Array2<F> {
+    wht2d_8x8_inverse_view(input.view())
+}
+
+/// 2D Inverse WHT for 8x8 patch from a complex view.
+pub fn wht2d_8x8_inverse_view<F: Bm3dFloat>(input: ArrayView2<Complex<F>>) -> Array2<F> {
     let mut data = [F::zero(); 64];
     let mut idx = 0;
     for r in 0..8 {

@@ -102,28 +102,24 @@ impl<F: Bm3dFloat> Bm3dPlans<F> {
 // Helper Functions for BM3D Kernel Decomposition
 // =============================================================================
 
-/// Build patch groups from matched locations.
+/// Build a patch group from matched locations.
 ///
-/// Extracts patches from noisy and pilot images at the matched locations,
-/// stacking them into 3D arrays of shape (k, patch_size, patch_size).
-fn build_patch_groups<F: Bm3dFloat>(
-    input_noisy: ArrayView2<F>,
-    input_pilot: ArrayView2<F>,
+/// Extracts patches from an input image at the matched locations,
+/// stacking them into a 3D array of shape (k, patch_size, patch_size).
+fn build_patch_group<F: Bm3dFloat>(
+    input: ArrayView2<F>,
     matches: &[PatchMatch<F>],
     patch_size: usize,
-) -> (Array3<F>, Array3<F>) {
+) -> Array3<F> {
     let k = matches.len();
-    let mut group_noisy = Array3::<F>::zeros((k, patch_size, patch_size));
-    let mut group_pilot = Array3::<F>::zeros((k, patch_size, patch_size));
+    let mut group = Array3::<F>::zeros((k, patch_size, patch_size));
 
     for (idx, m) in matches.iter().enumerate() {
-        let p_n = input_noisy.slice(s![m.row..m.row + patch_size, m.col..m.col + patch_size]);
-        let p_p = input_pilot.slice(s![m.row..m.row + patch_size, m.col..m.col + patch_size]);
-        group_noisy.slice_mut(s![idx, .., ..]).assign(&p_n);
-        group_pilot.slice_mut(s![idx, .., ..]).assign(&p_p);
+        let patch = input.slice(s![m.row..m.row + patch_size, m.col..m.col + patch_size]);
+        group.slice_mut(s![idx, .., ..]).assign(&patch);
     }
 
-    (group_noisy, group_pilot)
+    group
 }
 
 /// Compute the effective noise standard deviation for a coefficient.
@@ -210,12 +206,15 @@ fn apply_forward_1d_transform<F: Bm3dFloat>(
     fft_plan: &Arc<dyn Fft<F>>,
 ) {
     let (k, patch_size, _) = group.dim();
+    let mut scratch = vec![Complex::new(F::zero(), F::zero()); k];
     for r in 0..patch_size {
         for c in 0..patch_size {
-            let mut vec: Vec<Complex<F>> = (0..k).map(|i| group[[i, r, c]]).collect();
-            fft_plan.process(&mut vec);
             for i in 0..k {
-                group[[i, r, c]] = vec[i];
+                scratch[i] = group[[i, r, c]];
+            }
+            fft_plan.process(&mut scratch);
+            for i in 0..k {
+                group[[i, r, c]] = scratch[i];
             }
         }
     }
@@ -228,12 +227,15 @@ fn apply_inverse_1d_transform<F: Bm3dFloat>(
 ) {
     let (k, patch_size, _) = group.dim();
     let norm_k = F::one() / F::usize_as(k);
+    let mut scratch = vec![Complex::new(F::zero(), F::zero()); k];
     for r in 0..patch_size {
         for c in 0..patch_size {
-            let mut vec: Vec<Complex<F>> = (0..k).map(|i| group[[i, r, c]]).collect();
-            ifft_plan.process(&mut vec);
             for i in 0..k {
-                group[[i, r, c]] = vec[i] * norm_k;
+                scratch[i] = group[[i, r, c]];
+            }
+            ifft_plan.process(&mut scratch);
+            for i in 0..k {
+                group[[i, r, c]] = scratch[i] * norm_k;
             }
         }
     }
@@ -243,15 +245,15 @@ fn apply_inverse_1d_transform<F: Bm3dFloat>(
 ///
 /// Uses IWHT for 8x8 patches, IFFT otherwise.
 fn apply_inverse_2d_transform<F: Bm3dFloat>(
-    complex_slice: &ndarray::Array2<Complex<F>>,
+    complex_slice: ndarray::ArrayView2<Complex<F>>,
     use_hadamard: bool,
     ifft_row: &Arc<dyn Fft<F>>,
     ifft_col: &Arc<dyn Fft<F>>,
 ) -> Array2<F> {
     if use_hadamard {
-        transforms::wht2d_8x8_inverse(complex_slice)
+        transforms::wht2d_8x8_inverse_view(complex_slice)
     } else {
-        transforms::ifft2d(complex_slice, ifft_row, ifft_col)
+        transforms::ifft2d_view(complex_slice, ifft_row, ifft_col)
     }
 }
 
@@ -427,9 +429,8 @@ pub fn run_bm3d_kernel<F: Bm3dFloat>(
                         F::zero()
                     };
 
-                    // Build patch groups
-                    let (group_noisy, group_pilot) =
-                        build_patch_groups(input_noisy, input_pilot, &matches, patch_size);
+                    // Build noisy patch group (pilot group is only needed in Wiener mode).
+                    let group_noisy = build_patch_group(input_noisy, &matches, patch_size);
 
                     // Forward 2D transforms
                     let mut g_noisy_c = apply_forward_2d_transform(
@@ -439,21 +440,22 @@ pub fn run_bm3d_kernel<F: Bm3dFloat>(
                         fft_2d_col_ref,
                     );
                     let mut g_pilot_c = if mode == Bm3dMode::Wiener {
-                        apply_forward_2d_transform(
+                        let group_pilot = build_patch_group(input_pilot, &matches, patch_size);
+                        Some(apply_forward_2d_transform(
                             &group_pilot,
                             use_hadamard,
                             fft_2d_row_ref,
                             fft_2d_col_ref,
-                        )
+                        ))
                     } else {
-                        ndarray::Array3::<Complex<F>>::zeros((k, patch_size, patch_size))
+                        None
                     };
 
                     // Forward 1D transforms along group dimension
                     let fft_k_plan = &fft_1d_plans_ref[k];
                     apply_forward_1d_transform(&mut g_noisy_c, fft_k_plan);
-                    if mode == Bm3dMode::Wiener {
-                        apply_forward_1d_transform(&mut g_pilot_c, fft_k_plan);
+                    if let Some(pilot_coeffs) = g_pilot_c.as_mut() {
+                        apply_forward_1d_transform(pilot_coeffs, fft_k_plan);
                     }
 
                     // Filtering
@@ -464,12 +466,11 @@ pub fn run_bm3d_kernel<F: Bm3dFloat>(
                     match mode {
                         Bm3dMode::HardThreshold => {
                             // Hard Thresholding
-                            let mut nz_count = 0usize;
-                            for i in 0..k {
-                                for r in 0..patch_size {
-                                    for c in 0..patch_size {
-                                        let coeff = g_noisy_c[[i, r, c]];
-                                        let noise_std_coeff = compute_noise_std(
+                            let mut hard_thresholds = vec![F::zero(); patch_size * patch_size];
+                            for r in 0..patch_size {
+                                for c in 0..patch_size {
+                                    hard_thresholds[r * patch_size + c] = threshold
+                                        * compute_noise_std(
                                             use_colored_noise,
                                             sigma_psd,
                                             local_sigma_streak,
@@ -479,7 +480,15 @@ pub fn run_bm3d_kernel<F: Bm3dFloat>(
                                             c,
                                             spatial_scale,
                                         );
-                                        if coeff.norm() < threshold * noise_std_coeff {
+                                }
+                            }
+
+                            let mut nz_count = 0usize;
+                            for i in 0..k {
+                                for r in 0..patch_size {
+                                    for c in 0..patch_size {
+                                        let coeff = g_noisy_c[[i, r, c]];
+                                        if coeff.norm() < hard_thresholds[r * patch_size + c] {
                                             g_noisy_c[[i, r, c]] =
                                                 Complex::new(F::zero(), F::zero());
                                         } else {
@@ -494,24 +503,35 @@ pub fn run_bm3d_kernel<F: Bm3dFloat>(
                         }
                         Bm3dMode::Wiener => {
                             // Wiener Filtering
+                            let g_pilot_c = g_pilot_c
+                                .as_ref()
+                                .expect("Wiener mode requires pilot coefficients");
+                            let mut noise_vars = vec![F::zero(); patch_size * patch_size];
+                            for r in 0..patch_size {
+                                for c in 0..patch_size {
+                                    noise_vars[r * patch_size + c] = compute_noise_var(
+                                        use_colored_noise,
+                                        sigma_psd,
+                                        local_sigma_streak,
+                                        scalar_sigma_sq,
+                                        k,
+                                        r,
+                                        c,
+                                        spatial_scale_sq,
+                                    );
+                                }
+                            }
+
                             let mut wiener_sum = F::zero();
                             for i in 0..k {
                                 for r in 0..patch_size {
                                     for c in 0..patch_size {
                                         let p_val = g_pilot_c[[i, r, c]];
                                         let n_val = g_noisy_c[[i, r, c]];
-                                        let noise_var_coeff = compute_noise_var(
-                                            use_colored_noise,
-                                            sigma_psd,
-                                            local_sigma_streak,
-                                            scalar_sigma_sq,
-                                            k,
-                                            r,
-                                            c,
-                                            spatial_scale_sq,
-                                        );
                                         let w = p_val.norm_sqr()
-                                            / (p_val.norm_sqr() + noise_var_coeff + wiener_eps);
+                                            / (p_val.norm_sqr()
+                                                + noise_vars[r * patch_size + c]
+                                                + wiener_eps);
                                         g_noisy_c[[i, r, c]] = n_val * w;
                                         wiener_sum += w * w;
                                     }
@@ -531,9 +551,9 @@ pub fn run_bm3d_kernel<F: Bm3dFloat>(
                     // Inverse 2D transforms and aggregation
                     #[allow(clippy::needless_range_loop)]
                     for i in 0..k {
-                        let complex_slice = g_noisy_c.slice(s![i, .., ..]).to_owned();
+                        let complex_slice = g_noisy_c.slice(s![i, .., ..]);
                         let spatial = apply_inverse_2d_transform(
-                            &complex_slice,
+                            complex_slice,
                             use_hadamard,
                             ifft_2d_row_ref,
                             ifft_2d_col_ref,
