@@ -1,6 +1,7 @@
 use crate::float_trait::Bm3dFloat;
 use ndarray::{Array2, ArrayView2};
 use rayon::prelude::*;
+use std::env;
 
 /// Daubechies-3 wavelet high-pass decomposition filter coefficients.
 /// These coefficients correspond to the decomposition high-pass filter (dec_hi).
@@ -14,13 +15,57 @@ const DB3_DEC_HI: [f64; 6] = [
     0.03522629,
 ];
 
+/// Default cap for columns used in automatic sigma estimation.
+///
+/// For very wide sinograms, sampling evenly spaced columns preserves
+/// robust scale estimation while reducing runtime significantly.
+const DEFAULT_SIGMA_EST_MAX_COLUMNS: usize = 2048;
+const SIGMA_EST_MAX_COLUMNS_ENV: &str = "BM3D_SIGMA_EST_MAX_COLUMNS";
+
+fn resolve_sigma_est_max_columns() -> Option<usize> {
+    match env::var(SIGMA_EST_MAX_COLUMNS_ENV)
+        .ok()
+        .and_then(|s| s.parse::<usize>().ok())
+    {
+        Some(0) => None,
+        Some(v) => Some(v),
+        None => Some(DEFAULT_SIGMA_EST_MAX_COLUMNS),
+    }
+}
+
+fn sample_columns_evenly<F: Bm3dFloat>(data: ArrayView2<F>, sample_cols: usize) -> Array2<F> {
+    let (rows, cols) = data.dim();
+    let sample_cols = sample_cols.max(1).min(cols);
+    if sample_cols == cols {
+        return data.to_owned();
+    }
+
+    Array2::from_shape_fn((rows, sample_cols), |(r, i)| {
+        let c = if sample_cols == 1 {
+            cols / 2
+        } else {
+            i * (cols - 1) / (sample_cols - 1)
+        };
+        data[[r, c]]
+    })
+}
+
 /// Estimate noise standard deviation using MAD-based robust estimation.
 ///
 /// This implements the sigma estimation from Mäkinen et al. (2021).
 /// The image is filtered to isolate vertical streaks (vertical Gaussian + horizontal High-pass),
 /// then the MAD (Median Absolute Deviation) is computed and scaled.
 pub fn estimate_noise_sigma<F: Bm3dFloat>(sinogram: ArrayView2<F>) -> F {
-    let (rows, _cols) = sinogram.dim();
+    let (_rows, cols) = sinogram.dim();
+    let sampled_storage = match resolve_sigma_est_max_columns() {
+        Some(max_cols) if cols > max_cols => Some(sample_columns_evenly(sinogram, max_cols)),
+        _ => None,
+    };
+    let (rows, _cols) = if let Some(sampled) = sampled_storage.as_ref() {
+        sampled.dim()
+    } else {
+        sinogram.dim()
+    };
 
     // Step 1: Vertical Gaussian filter
     // Sigma = height / 12.0
@@ -47,7 +92,11 @@ pub fn estimate_noise_sigma<F: Bm3dFloat>(sinogram: ArrayView2<F>) -> F {
     }
 
     // Apply Vertical Convolution
-    let smoothed = gaussian_filter_1d_vertical(sinogram, &kernel);
+    let smoothed = if let Some(sampled) = sampled_storage.as_ref() {
+        gaussian_filter_1d_vertical(sampled.view(), &kernel)
+    } else {
+        gaussian_filter_1d_vertical(sinogram, &kernel)
+    };
 
     // Step 2: Horizontal High-Pass (db3)
     // Convert DB3 coeffs to generic float
