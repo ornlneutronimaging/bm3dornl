@@ -208,6 +208,9 @@ fn convolve_1d_horizontal<F: Bm3dFloat>(data: ArrayView2<F>, kernel: &[F]) -> Ar
     let k_len = kernel.len();
     let radius = k_len / 2;
     let mut output = Array2::zeros((rows, cols));
+    if cols == 0 {
+        return output;
+    }
 
     if let (Some(data_slice), Some(output_slice)) = (
         data.as_slice_memory_order(),
@@ -418,5 +421,12 @@ mod tests {
             "f64 estimation failed with error {:.2}%",
             error * 100.0
         );
+    }
+
+    #[test]
+    fn test_estimate_noise_sigma_zero_width_input() {
+        let img = Array2::<f32>::zeros((8, 0));
+        let sigma_est = estimate_noise_sigma(img.view());
+        assert_eq!(sigma_est, 0.0);
     }
 }
