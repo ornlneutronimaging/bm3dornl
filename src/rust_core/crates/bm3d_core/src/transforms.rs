@@ -47,35 +47,61 @@ pub fn fft2d_into<F: Bm3dFloat>(
     scratch: &mut [Complex<F>],
 ) {
     let (rows, cols) = input.dim();
-    assert_eq!(work_complex.dim(), (rows, cols));
-    assert_eq!(output.dim(), (rows, cols));
-    assert!(scratch.len() >= rows.max(cols));
+    debug_assert_eq!(work_complex.dim(), (rows, cols));
+    debug_assert_eq!(output.dim(), (rows, cols));
+    debug_assert!(scratch.len() >= rows.max(cols));
 
-    // 1. Transform rows
-    for r in 0..rows {
-        // Copy to buffer
-        for (c, &v) in input.row(r).iter().enumerate() {
-            scratch[c] = Complex::new(v, F::zero());
+    if let (Some(input_data), Some(work_data), Some(output_data)) = (
+        input.as_slice_memory_order(),
+        work_complex.as_slice_memory_order_mut(),
+        output.as_slice_memory_order_mut(),
+    ) {
+        // 1. Transform rows
+        for r in 0..rows {
+            let row_base = r * cols;
+            for c in 0..cols {
+                scratch[c] = Complex::new(input_data[row_base + c], F::zero());
+            }
+            fft_row_plan.process(&mut scratch[..cols]);
+            work_data[row_base..row_base + cols].copy_from_slice(&scratch[..cols]);
         }
-        // FFT
-        fft_row_plan.process(&mut scratch[..cols]);
-        // Copy back
+        // 2. Transform columns
         for c in 0..cols {
-            work_complex[[r, c]] = scratch[c];
+            for r in 0..rows {
+                scratch[r] = work_data[r * cols + c];
+            }
+            fft_col_plan.process(&mut scratch[..rows]);
+            for r in 0..rows {
+                output_data[r * cols + c] = scratch[r];
+            }
         }
-    }
+    } else {
+        // 1. Transform rows
+        for r in 0..rows {
+            // Copy to buffer
+            for (c, &v) in input.row(r).iter().enumerate() {
+                scratch[c] = Complex::new(v, F::zero());
+            }
+            // FFT
+            fft_row_plan.process(&mut scratch[..cols]);
+            // Copy back
+            for c in 0..cols {
+                work_complex[[r, c]] = scratch[c];
+            }
+        }
 
-    // 2. Transform columns
-    for c in 0..cols {
-        // Extract column
-        for r in 0..rows {
-            scratch[r] = work_complex[[r, c]];
-        }
-        // FFT
-        fft_col_plan.process(&mut scratch[..rows]);
-        // Copy back
-        for r in 0..rows {
-            output[[r, c]] = scratch[r];
+        // 2. Transform columns
+        for c in 0..cols {
+            // Extract column
+            for r in 0..rows {
+                scratch[r] = work_complex[[r, c]];
+            }
+            // FFT
+            fft_col_plan.process(&mut scratch[..rows]);
+            // Copy back
+            for r in 0..rows {
+                output[[r, c]] = scratch[r];
+            }
         }
     }
 }
@@ -145,31 +171,60 @@ pub fn ifft2d_into<F: Bm3dFloat>(
     scratch: &mut [Complex<F>],
 ) {
     let (rows, cols) = input.dim();
-    assert_eq!(work_complex.dim(), (rows, cols));
-    assert_eq!(output.dim(), (rows, cols));
-    assert!(scratch.len() >= rows.max(cols));
+    debug_assert_eq!(work_complex.dim(), (rows, cols));
+    debug_assert_eq!(output.dim(), (rows, cols));
+    debug_assert!(scratch.len() >= rows.max(cols));
 
-    // 1. Transform columns in-place in complex workspace.
-    work_complex.assign(&input);
-    for c in 0..cols {
-        for r in 0..rows {
-            scratch[r] = work_complex[[r, c]];
+    if let (Some(input_data), Some(work_data), Some(output_data)) = (
+        input.as_slice_memory_order(),
+        work_complex.as_slice_memory_order_mut(),
+        output.as_slice_memory_order_mut(),
+    ) {
+        // 1. Transform columns in-place in complex workspace.
+        work_data.copy_from_slice(input_data);
+        for c in 0..cols {
+            for r in 0..rows {
+                scratch[r] = work_data[r * cols + c];
+            }
+            ifft_col_plan.process(&mut scratch[..rows]);
+            for r in 0..rows {
+                work_data[r * cols + c] = scratch[r];
+            }
         }
-        ifft_col_plan.process(&mut scratch[..rows]);
-        for r in 0..rows {
-            work_complex[[r, c]] = scratch[r];
-        }
-    }
 
-    // 2. Transform rows into real output.
-    let norm_factor = F::one() / F::usize_as(rows * cols);
-    for r in 0..rows {
-        for c in 0..cols {
-            scratch[c] = work_complex[[r, c]];
+        // 2. Transform rows into real output.
+        let norm_factor = F::one() / F::usize_as(rows * cols);
+        for r in 0..rows {
+            let row_base = r * cols;
+            scratch[..cols].copy_from_slice(&work_data[row_base..row_base + cols]);
+            ifft_row_plan.process(&mut scratch[..cols]);
+            for c in 0..cols {
+                output_data[row_base + c] = scratch[c].re * norm_factor;
+            }
         }
-        ifft_row_plan.process(&mut scratch[..cols]);
+    } else {
+        // 1. Transform columns in-place in complex workspace.
+        work_complex.assign(&input);
         for c in 0..cols {
-            output[[r, c]] = scratch[c].re * norm_factor;
+            for r in 0..rows {
+                scratch[r] = work_complex[[r, c]];
+            }
+            ifft_col_plan.process(&mut scratch[..rows]);
+            for r in 0..rows {
+                work_complex[[r, c]] = scratch[r];
+            }
+        }
+
+        // 2. Transform rows into real output.
+        let norm_factor = F::one() / F::usize_as(rows * cols);
+        for r in 0..rows {
+            for c in 0..cols {
+                scratch[c] = work_complex[[r, c]];
+            }
+            ifft_row_plan.process(&mut scratch[..cols]);
+            for c in 0..cols {
+                output[[r, c]] = scratch[c].re * norm_factor;
+            }
         }
     }
 }

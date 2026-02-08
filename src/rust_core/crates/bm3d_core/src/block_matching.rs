@@ -61,6 +61,24 @@ fn compute_squared_distance_at<F: Bm3dFloat>(
     sum_sq
 }
 
+/// Compute Integral Image (sum only).
+///
+/// Returns an array with shape `(h + 1, w + 1)`.
+pub fn compute_integral_sum_image<F: Bm3dFloat>(image: ArrayView2<F>) -> Array2<F> {
+    let (h, w) = image.dim();
+    let mut sum_img = Array2::<F>::zeros((h + 1, w + 1));
+
+    for r in 0..h {
+        let mut row_sum = F::zero();
+        for c in 0..w {
+            let val = image[[r, c]];
+            row_sum += val;
+            sum_img[[r + 1, c + 1]] = sum_img[[r, c + 1]] + row_sum;
+        }
+    }
+    sum_img
+}
+
 /// Compute Integral Images (Sum and Squared Sum).
 ///
 /// Integral Image I(x, y) = sum(i(x', y')) for x'<=x, y'<=y.
@@ -73,18 +91,15 @@ fn compute_squared_distance_at<F: Bm3dFloat>(
 /// Returns (Sum, SqSum). Indexing: [row+1, col+1].
 pub fn compute_integral_images<F: Bm3dFloat>(image: ArrayView2<F>) -> (Array2<F>, Array2<F>) {
     let (h, w) = image.dim();
-    let mut sum_img = Array2::<F>::zeros((h + 1, w + 1));
+    let sum_img = compute_integral_sum_image(image);
     let mut sq_sum_img = Array2::<F>::zeros((h + 1, w + 1));
 
     for r in 0..h {
-        let mut row_sum = F::zero();
         let mut row_sq_sum = F::zero();
         for c in 0..w {
             let val = image[[r, c]];
-            row_sum += val;
             row_sq_sum += val * val;
 
-            sum_img[[r + 1, c + 1]] = sum_img[[r, c + 1]] + row_sum;
             sq_sum_img[[r + 1, c + 1]] = sq_sum_img[[r, c + 1]] + row_sq_sum;
         }
     }
@@ -92,31 +107,19 @@ pub fn compute_integral_images<F: Bm3dFloat>(image: ArrayView2<F>) -> (Array2<F>
 }
 
 #[inline(always)]
-fn get_patch_sums<F: Bm3dFloat>(
-    sum_img: &Array2<F>,
-    sq_sum_img: &Array2<F>,
-    r: usize,
-    c: usize,
-    h: usize,
-    w: usize,
-) -> (F, F) {
+fn get_patch_sum<F: Bm3dFloat>(sum_img: &Array2<F>, r: usize, c: usize, h: usize, w: usize) -> F {
     let r1 = r;
     let c1 = c;
     let r2 = r + h;
     let c2 = c + w;
 
-    let sum = sum_img[[r2, c2]] - sum_img[[r1, c2]] - sum_img[[r2, c1]] + sum_img[[r1, c1]];
-    let sq_sum =
-        sq_sum_img[[r2, c2]] - sq_sum_img[[r1, c2]] - sq_sum_img[[r2, c1]] + sq_sum_img[[r1, c1]];
-
-    (sum, sq_sum)
+    sum_img[[r2, c2]] - sum_img[[r1, c2]] - sum_img[[r2, c1]] + sum_img[[r1, c1]]
 }
 
-/// Find similar patches within a search window using Integral Image Pre-Screening.
-pub fn find_similar_patches_in_place<F: Bm3dFloat>(
+/// Find similar patches within a search window using Integral Image pre-screening (sum bound).
+pub fn find_similar_patches_in_place_sum<F: Bm3dFloat>(
     image: ArrayView2<F>,
     integral_sum: &Array2<F>,
-    integral_sq_sum: &Array2<F>,
     ref_pos: (usize, usize),
     patch_size: (usize, usize),
     search_window: (usize, usize),
@@ -146,9 +149,8 @@ pub fn find_similar_patches_in_place<F: Bm3dFloat>(
         F::zero()
     };
 
-    // Pre-calculate Reference stats
-    let (ref_sum, _ref_sq_sum) =
-        get_patch_sums(integral_sum, integral_sq_sum, ref_r, ref_c, ph, pw);
+    // Pre-calculate reference patch sum.
+    let ref_sum = get_patch_sum(integral_sum, ref_r, ref_c, ph, pw);
     let inv_n = F::one() / F::usize_as(ph * pw);
 
     for r in (search_r_start..=search_r_end).step_by(step) {
@@ -162,8 +164,7 @@ pub fn find_similar_patches_in_place<F: Bm3dFloat>(
             // Bound 2: Norm Difference: (norm1 - norm2)^2
             // If Max(Bound) > threshold, skip.
 
-            let (cand_sum, _cand_sq_sum) =
-                get_patch_sums(integral_sum, integral_sq_sum, r, c, ph, pw);
+            let cand_sum = get_patch_sum(integral_sum, r, c, ph, pw);
             let check_threshold = threshold;
 
             // Mean Bound
@@ -225,6 +226,32 @@ pub fn find_similar_patches_in_place<F: Bm3dFloat>(
             .partial_cmp(&b.distance)
             .unwrap_or(Ordering::Equal)
     });
+}
+
+/// Backward-compatible in-place API.
+///
+/// `integral_sq_sum` is accepted for compatibility but no longer used.
+pub fn find_similar_patches_in_place<F: Bm3dFloat>(
+    image: ArrayView2<F>,
+    integral_sum: &Array2<F>,
+    _integral_sq_sum: &Array2<F>,
+    ref_pos: (usize, usize),
+    patch_size: (usize, usize),
+    search_window: (usize, usize),
+    max_matches: usize,
+    step: usize,
+    out_matches: &mut Vec<PatchMatch<F>>,
+) {
+    find_similar_patches_in_place_sum(
+        image,
+        integral_sum,
+        ref_pos,
+        patch_size,
+        search_window,
+        max_matches,
+        step,
+        out_matches,
+    );
 }
 
 /// Find similar patches within a search window using Integral Image Pre-Screening.

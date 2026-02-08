@@ -1,5 +1,6 @@
 use crate::float_trait::Bm3dFloat;
 use ndarray::{Array2, ArrayView2};
+use rayon::prelude::*;
 
 /// Daubechies-3 wavelet high-pass decomposition filter coefficients.
 /// These coefficients correspond to the decomposition high-pass filter (dec_hi).
@@ -71,18 +72,38 @@ fn gaussian_filter_1d_vertical<F: Bm3dFloat>(data: ArrayView2<F>, kernel: &[F]) 
     let radius = k_len / 2;
     let mut output = Array2::zeros((rows, cols));
 
-    // For large images, this could be parallelized, but keep simple for now
-    for c in 0..cols {
-        for r in 0..rows {
-            let mut sum = F::zero();
-            for (k, &k_val) in kernel.iter().enumerate() {
-                let k_idx = k as isize - radius as isize;
-                let src_r = (r as isize + k_idx).clamp(0, (rows - 1) as isize);
-                sum += data[[src_r as usize, c]] * k_val;
+    if let (Some(data_slice), Some(output_slice)) = (
+        data.as_slice_memory_order(),
+        output.as_slice_memory_order_mut(),
+    ) {
+        output_slice
+            .par_chunks_mut(cols)
+            .enumerate()
+            .for_each(|(r, out_row)| {
+                for (c, out_cell) in out_row.iter_mut().enumerate() {
+                    let mut sum = F::zero();
+                    for (k, &k_val) in kernel.iter().enumerate() {
+                        let k_idx = k as isize - radius as isize;
+                        let src_r = (r as isize + k_idx).clamp(0, (rows - 1) as isize) as usize;
+                        sum += data_slice[src_r * cols + c] * k_val;
+                    }
+                    *out_cell = sum;
+                }
+            });
+    } else {
+        for c in 0..cols {
+            for r in 0..rows {
+                let mut sum = F::zero();
+                for (k, &k_val) in kernel.iter().enumerate() {
+                    let k_idx = k as isize - radius as isize;
+                    let src_r = (r as isize + k_idx).clamp(0, (rows - 1) as isize);
+                    sum += data[[src_r as usize, c]] * k_val;
+                }
+                output[[r, c]] = sum;
             }
-            output[[r, c]] = sum;
         }
     }
+
     output
 }
 
@@ -92,17 +113,39 @@ fn convolve_1d_horizontal<F: Bm3dFloat>(data: ArrayView2<F>, kernel: &[F]) -> Ar
     let radius = k_len / 2;
     let mut output = Array2::zeros((rows, cols));
 
-    for r in 0..rows {
-        for c in 0..cols {
-            let mut sum = F::zero();
-            for (k, &k_val) in kernel.iter().enumerate() {
-                let k_idx = k as isize - radius as isize;
-                let src_c = (c as isize + k_idx).clamp(0, (cols - 1) as isize);
-                sum += data[[r, src_c as usize]] * k_val;
+    if let (Some(data_slice), Some(output_slice)) = (
+        data.as_slice_memory_order(),
+        output.as_slice_memory_order_mut(),
+    ) {
+        output_slice
+            .par_chunks_mut(cols)
+            .enumerate()
+            .for_each(|(r, out_row)| {
+                let row_base = r * cols;
+                for (c, out_cell) in out_row.iter_mut().enumerate() {
+                    let mut sum = F::zero();
+                    for (k, &k_val) in kernel.iter().enumerate() {
+                        let k_idx = k as isize - radius as isize;
+                        let src_c = (c as isize + k_idx).clamp(0, (cols - 1) as isize) as usize;
+                        sum += data_slice[row_base + src_c] * k_val;
+                    }
+                    *out_cell = sum;
+                }
+            });
+    } else {
+        for r in 0..rows {
+            for c in 0..cols {
+                let mut sum = F::zero();
+                for (k, &k_val) in kernel.iter().enumerate() {
+                    let k_idx = k as isize - radius as isize;
+                    let src_c = (c as isize + k_idx).clamp(0, (cols - 1) as isize);
+                    sum += data[[r, src_c as usize]] * k_val;
+                }
+                output[[r, c]] = sum;
             }
-            output[[r, c]] = sum;
         }
     }
+
     output
 }
 

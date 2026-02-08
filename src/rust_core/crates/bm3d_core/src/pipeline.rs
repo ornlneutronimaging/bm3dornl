@@ -4,8 +4,10 @@ use ndarray::{s, Array2, Array3, ArrayView2, ArrayView3, Axis};
 use rayon::prelude::*;
 use rustfft::num_complex::Complex;
 use rustfft::Fft;
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::time::Instant;
 
 use crate::block_matching::{self, PatchMatch};
 use crate::float_trait::Bm3dFloat;
@@ -35,6 +37,9 @@ const RAYON_MIN_CHUNK_LEN: usize = 64;
 /// Larger tiles reduce hashmap overhead; smaller tiles reduce per-worker memory.
 const AGGREGATION_TILE_SIZE: usize = 192;
 const AGGREGATION_TILE_SIZE_ENV: &str = "BM3D_AGGREGATION_TILE_SIZE";
+const TRANSFORM_CACHE_CAPACITY: usize = 1_024;
+const TRANSFORM_CACHE_CAPACITY_ENV: &str = "BM3D_TRANSFORM_CACHE_CAPACITY";
+const PROFILE_TIMING_ENV: &str = "BM3D_PROFILE_TIMING";
 const USE_HADAMARD_ENV: &str = "BM3D_USE_HADAMARD";
 static USE_HADAMARD_FAST_PATH: AtomicBool = AtomicBool::new(false);
 
@@ -115,52 +120,135 @@ impl<F: Bm3dFloat> Bm3dPlans<F> {
 // Helper Functions for BM3D Kernel Decomposition
 // =============================================================================
 
-/// Fill a preallocated patch group buffer from matched locations.
-///
-/// Writes only the first `matches.len()` entries of `out_group`.
-fn fill_patch_group<F: Bm3dFloat>(
-    input: ArrayView2<F>,
-    matches: &[PatchMatch<F>],
-    patch_size: usize,
-    out_group: &mut Array3<F>,
-) {
-    for (idx, m) in matches.iter().enumerate() {
-        let patch = input.slice(s![m.row..m.row + patch_size, m.col..m.col + patch_size]);
-        out_group.slice_mut(s![idx, .., ..]).assign(&patch);
-    }
-}
-
 struct Fft2dRefs<'a, F: Bm3dFloat> {
     row: &'a Arc<dyn Fft<F>>,
     col: &'a Arc<dyn Fft<F>>,
 }
 
-/// Apply 2D forward transform into a pre-allocated output buffer.
-fn apply_forward_2d_transform_into<F: Bm3dFloat>(
-    group: &Array3<F>,
-    k: usize,
-    use_hadamard: bool,
-    fft_2d: &Fft2dRefs<F>,
-    work_complex: &mut Array2<Complex<F>>,
-    scratch: &mut [Complex<F>],
-    out: &mut ndarray::Array3<Complex<F>>,
-) {
-    for i in 0..k {
-        let slice = group.slice(s![i, .., ..]);
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct PatchCoord {
+    row: usize,
+    col: usize,
+}
+
+struct PatchTransformCache<F: Bm3dFloat> {
+    patch_size: usize,
+    patch_area: usize,
+    capacity: usize,
+    next_slot: usize,
+    keys: Vec<Option<PatchCoord>>,
+    values: Vec<Complex<F>>,
+    indices: HashMap<PatchCoord, usize>,
+    hits: u64,
+    misses: u64,
+    evictions: u64,
+}
+
+impl<F: Bm3dFloat> PatchTransformCache<F> {
+    fn new(patch_size: usize, capacity: usize) -> Self {
+        let patch_area = patch_size * patch_size;
+        Self {
+            patch_size,
+            patch_area,
+            capacity,
+            next_slot: 0,
+            keys: vec![None; capacity],
+            values: vec![Complex::new(F::zero(), F::zero()); patch_area * capacity],
+            indices: HashMap::with_capacity(capacity.saturating_mul(2)),
+            hits: 0,
+            misses: 0,
+            evictions: 0,
+        }
+    }
+
+    fn stats(&self) -> (u64, u64, u64) {
+        (self.hits, self.misses, self.evictions)
+    }
+
+    fn write_transform_into(
+        &mut self,
+        image: ArrayView2<F>,
+        coord: PatchCoord,
+        use_hadamard: bool,
+        fft_2d: &Fft2dRefs<F>,
+        work_complex: &mut Array2<Complex<F>>,
+        scratch: &mut [Complex<F>],
+        out: &mut [Complex<F>],
+    ) {
+        if let Some(&slot) = self.indices.get(&coord) {
+            self.hits += 1;
+            let base = slot * self.patch_area;
+            out.copy_from_slice(&self.values[base..base + self.patch_area]);
+            return;
+        }
+
+        self.misses += 1;
+        let patch = image.slice(s![
+            coord.row..coord.row + self.patch_size,
+            coord.col..coord.col + self.patch_size
+        ]);
+        let out_view = ndarray::ArrayViewMut2::from_shape((self.patch_size, self.patch_size), out)
+            .expect("output transform slice shape should match patch size");
         if use_hadamard {
-            let out_slice = out.slice_mut(s![i, .., ..]);
-            transforms::wht2d_8x8_forward_into_view(slice, out_slice);
+            transforms::wht2d_8x8_forward_into_view(patch, out_view);
         } else {
-            let out_slice = out.slice_mut(s![i, .., ..]);
             transforms::fft2d_into(
-                slice,
+                patch,
                 fft_2d.row,
                 fft_2d.col,
                 work_complex,
-                out_slice,
+                out_view,
                 scratch,
             );
         }
+
+        if self.capacity == 0 {
+            return;
+        }
+
+        let slot = self.next_slot;
+        if let Some(old_key) = self.keys[slot] {
+            self.indices.remove(&old_key);
+            self.evictions += 1;
+        }
+        self.keys[slot] = Some(coord);
+        self.indices.insert(coord, slot);
+        let base = slot * self.patch_area;
+        self.values[base..base + self.patch_area].copy_from_slice(out);
+        self.next_slot = (self.next_slot + 1) % self.capacity;
+    }
+}
+
+fn fill_transformed_group_from_cache<F: Bm3dFloat>(
+    image: ArrayView2<F>,
+    matches: &[PatchMatch<F>],
+    k: usize,
+    patch_size: usize,
+    use_hadamard: bool,
+    fft_2d: &Fft2dRefs<F>,
+    cache: &mut PatchTransformCache<F>,
+    work_complex: &mut Array2<Complex<F>>,
+    scratch_2d: &mut [Complex<F>],
+    out: &mut ndarray::Array3<Complex<F>>,
+) {
+    let patch_area = patch_size * patch_size;
+    let out_data = out
+        .as_slice_memory_order_mut()
+        .expect("group output should be contiguous");
+    for (i, m) in matches.iter().enumerate().take(k) {
+        let base = i * patch_area;
+        cache.write_transform_into(
+            image,
+            PatchCoord {
+                row: m.row,
+                col: m.col,
+            },
+            use_hadamard,
+            fft_2d,
+            work_complex,
+            scratch_2d,
+            &mut out_data[base..base + patch_area],
+        );
     }
 }
 
@@ -172,14 +260,27 @@ fn apply_forward_1d_transform<F: Bm3dFloat>(
     fft_plan: &Arc<dyn Fft<F>>,
     scratch: &mut [Complex<F>],
 ) {
-    for r in 0..patch_size {
-        for c in 0..patch_size {
+    if let Some(group_data) = group.as_slice_memory_order_mut() {
+        let patch_area = patch_size * patch_size;
+        for rc in 0..patch_area {
             for i in 0..k {
-                scratch[i] = group[[i, r, c]];
+                scratch[i] = group_data[i * patch_area + rc];
             }
-            fft_plan.process(scratch);
+            fft_plan.process(&mut scratch[..k]);
             for i in 0..k {
-                group[[i, r, c]] = scratch[i];
+                group_data[i * patch_area + rc] = scratch[i];
+            }
+        }
+    } else {
+        for r in 0..patch_size {
+            for c in 0..patch_size {
+                for i in 0..k {
+                    scratch[i] = group[[i, r, c]];
+                }
+                fft_plan.process(&mut scratch[..k]);
+                for i in 0..k {
+                    group[[i, r, c]] = scratch[i];
+                }
             }
         }
     }
@@ -194,14 +295,27 @@ fn apply_inverse_1d_transform<F: Bm3dFloat>(
     scratch: &mut [Complex<F>],
 ) {
     let norm_k = F::one() / F::usize_as(k);
-    for r in 0..patch_size {
-        for c in 0..patch_size {
+    if let Some(group_data) = group.as_slice_memory_order_mut() {
+        let patch_area = patch_size * patch_size;
+        for rc in 0..patch_area {
             for i in 0..k {
-                scratch[i] = group[[i, r, c]];
+                scratch[i] = group_data[i * patch_area + rc];
             }
-            ifft_plan.process(scratch);
+            ifft_plan.process(&mut scratch[..k]);
             for i in 0..k {
-                group[[i, r, c]] = scratch[i] * norm_k;
+                group_data[i * patch_area + rc] = scratch[i] * norm_k;
+            }
+        }
+    } else {
+        for r in 0..patch_size {
+            for c in 0..patch_size {
+                for i in 0..k {
+                    scratch[i] = group[[i, r, c]];
+                }
+                ifft_plan.process(&mut scratch[..k]);
+                for i in 0..k {
+                    group[[i, r, c]] = scratch[i] * norm_k;
+                }
             }
         }
     }
@@ -209,8 +323,6 @@ fn apply_inverse_1d_transform<F: Bm3dFloat>(
 
 struct WorkerBuffers<F: Bm3dFloat> {
     matches: Vec<PatchMatch<F>>,
-    group_noisy: Array3<F>,
-    group_pilot: Array3<F>,
     g_noisy_c: ndarray::Array3<Complex<F>>,
     g_pilot_c: ndarray::Array3<Complex<F>>,
     spatial_patch: Array2<F>,
@@ -225,8 +337,6 @@ impl<F: Bm3dFloat> WorkerBuffers<F> {
         let patch_dim = (patch_size, patch_size);
         Self {
             matches: Vec::with_capacity(max_matches.max(1)),
-            group_noisy: Array3::<F>::zeros((max_matches, patch_size, patch_size)),
-            group_pilot: Array3::<F>::zeros((max_matches, patch_size, patch_size)),
             g_noisy_c: ndarray::Array3::<Complex<F>>::zeros((max_matches, patch_size, patch_size)),
             g_pilot_c: ndarray::Array3::<Complex<F>>::zeros((max_matches, patch_size, patch_size)),
             spatial_patch: Array2::<F>::zeros(patch_dim),
@@ -257,6 +367,66 @@ fn resolve_aggregation_tile_size(patch_size: usize) -> usize {
         .filter(|&v| v > 0)
         .map(|v| v.max(patch_size))
         .unwrap_or(AGGREGATION_TILE_SIZE.max(patch_size))
+}
+
+fn resolve_transform_cache_capacity() -> usize {
+    std::env::var(TRANSFORM_CACHE_CAPACITY_ENV)
+        .ok()
+        .and_then(|s| s.parse::<usize>().ok())
+        .unwrap_or(TRANSFORM_CACHE_CAPACITY)
+}
+
+fn resolve_profile_timing() -> bool {
+    std::env::var(PROFILE_TIMING_ENV)
+        .ok()
+        .map(|value| {
+            let v = value.trim();
+            v == "1"
+                || v.eq_ignore_ascii_case("true")
+                || v.eq_ignore_ascii_case("yes")
+                || v.eq_ignore_ascii_case("on")
+        })
+        .unwrap_or(false)
+}
+
+#[derive(Default, Clone, Copy)]
+struct KernelStageStats {
+    groups: u64,
+    matched_patches: u64,
+    block_matching_ns: u128,
+    forward_2d_ns: u128,
+    forward_1d_ns: u128,
+    filtering_ns: u128,
+    inverse_1d_ns: u128,
+    inverse_2d_aggregation_ns: u128,
+    noisy_cache_hits: u64,
+    noisy_cache_misses: u64,
+    noisy_cache_evictions: u64,
+    pilot_cache_hits: u64,
+    pilot_cache_misses: u64,
+    pilot_cache_evictions: u64,
+}
+
+impl KernelStageStats {
+    fn merge(self, other: Self) -> Self {
+        Self {
+            groups: self.groups + other.groups,
+            matched_patches: self.matched_patches + other.matched_patches,
+            block_matching_ns: self.block_matching_ns + other.block_matching_ns,
+            forward_2d_ns: self.forward_2d_ns + other.forward_2d_ns,
+            forward_1d_ns: self.forward_1d_ns + other.forward_1d_ns,
+            filtering_ns: self.filtering_ns + other.filtering_ns,
+            inverse_1d_ns: self.inverse_1d_ns + other.inverse_1d_ns,
+            inverse_2d_aggregation_ns: self.inverse_2d_aggregation_ns
+                + other.inverse_2d_aggregation_ns,
+            noisy_cache_hits: self.noisy_cache_hits + other.noisy_cache_hits,
+            noisy_cache_misses: self.noisy_cache_misses + other.noisy_cache_misses,
+            noisy_cache_evictions: self.noisy_cache_evictions + other.noisy_cache_evictions,
+            pilot_cache_hits: self.pilot_cache_hits + other.pilot_cache_hits,
+            pilot_cache_misses: self.pilot_cache_misses + other.pilot_cache_misses,
+            pilot_cache_evictions: self.pilot_cache_evictions + other.pilot_cache_evictions,
+        }
+    }
 }
 
 /// Enable or disable the 8x8 Hadamard fast path globally.
@@ -466,7 +636,7 @@ pub fn run_bm3d_kernel<F: Bm3dFloat>(
     let use_hadamard = resolve_use_hadamard(patch_size);
 
     // Pre-compute Integral Images for Block Matching acceleration
-    let (integral_sum, integral_sq_sum) = block_matching::compute_integral_images(input_pilot);
+    let integral_sum = block_matching::compute_integral_sum_image(input_pilot);
 
     let mut ref_coords = Vec::new();
     let r_end = rows.saturating_sub(patch_size) + 1;
@@ -504,8 +674,24 @@ pub fn run_bm3d_kernel<F: Bm3dFloat>(
         tile_cols,
     };
     let agg_eps = F::from_f64_c(AGGREGATION_EPSILON);
+    let profile_timing = resolve_profile_timing();
+    let transform_cache_capacity = resolve_transform_cache_capacity();
+    let kernel_started = profile_timing.then(Instant::now);
 
-    let final_tiles = if ref_coords.is_empty() {
+    macro_rules! timed {
+        ($enabled:expr, $acc:expr, $body:block) => {{
+            if $enabled {
+                let _t = Instant::now();
+                let _ret = { $body };
+                $acc += _t.elapsed().as_nanos();
+                _ret
+            } else {
+                $body
+            }
+        }};
+    }
+
+    let final_result = if ref_coords.is_empty() {
         None
     } else {
         // Use one coordinate chunk per Rayon worker to preserve throughput
@@ -522,24 +708,38 @@ pub fn run_bm3d_kernel<F: Bm3dFloat>(
                 let mut tile_accumulators: TileAccumulatorVec<F> =
                     (0..tile_count).map(|_| None).collect();
                 let mut worker = WorkerBuffers::<F>::new(max_matches, patch_size);
+                let mut noisy_transform_cache =
+                    PatchTransformCache::<F>::new(patch_size, transform_cache_capacity);
+                let mut pilot_transform_cache = if mode == Bm3dMode::Wiener {
+                    Some(PatchTransformCache::<F>::new(
+                        patch_size,
+                        transform_cache_capacity,
+                    ))
+                } else {
+                    None
+                };
+                let mut stats = KernelStageStats::default();
 
                 for &(ref_r, ref_c) in coord_chunk {
                     // 1. Block Matching
-                    block_matching::find_similar_patches_in_place(
-                        input_pilot,
-                        &integral_sum,
-                        &integral_sq_sum,
-                        (ref_r, ref_c),
-                        (patch_size, patch_size),
-                        (search_window, search_window),
-                        max_matches,
-                        step_size,
-                        &mut worker.matches,
-                    );
+                    timed!(profile_timing, stats.block_matching_ns, {
+                        block_matching::find_similar_patches_in_place_sum(
+                            input_pilot,
+                            &integral_sum,
+                            (ref_r, ref_c),
+                            (patch_size, patch_size),
+                            (search_window, search_window),
+                            max_matches,
+                            step_size,
+                            &mut worker.matches,
+                        );
+                    });
                     let k = worker.matches.len();
                     if k == 0 {
                         continue;
                     }
+                    stats.groups += 1;
+                    stats.matched_patches += k as u64;
 
                     // 1.5 Local Noise Level
                     let local_sigma_streak = if use_sigma_map_full {
@@ -550,73 +750,126 @@ pub fn run_bm3d_kernel<F: Bm3dFloat>(
                         F::zero()
                     };
 
-                    // Build noisy patch group (pilot group is only needed in Wiener mode).
-                    fill_patch_group(
-                        input_noisy,
-                        &worker.matches,
-                        patch_size,
-                        &mut worker.group_noisy,
-                    );
-
-                    // Forward 2D transforms
-                    apply_forward_2d_transform_into(
-                        &worker.group_noisy,
-                        k,
-                        use_hadamard,
-                        &fft_2d_refs,
-                        &mut worker.complex_work,
-                        &mut worker.scratch_2d,
-                        &mut worker.g_noisy_c,
-                    );
-                    if mode == Bm3dMode::Wiener {
-                        fill_patch_group(
-                            input_pilot,
+                    // Cached Forward 2D transforms
+                    timed!(profile_timing, stats.forward_2d_ns, {
+                        fill_transformed_group_from_cache(
+                            input_noisy,
                             &worker.matches,
-                            patch_size,
-                            &mut worker.group_pilot,
-                        );
-                        apply_forward_2d_transform_into(
-                            &worker.group_pilot,
                             k,
+                            patch_size,
                             use_hadamard,
                             &fft_2d_refs,
+                            &mut noisy_transform_cache,
                             &mut worker.complex_work,
                             &mut worker.scratch_2d,
-                            &mut worker.g_pilot_c,
+                            &mut worker.g_noisy_c,
                         );
-                    }
+                        if let Some(pilot_cache) = pilot_transform_cache.as_mut() {
+                            fill_transformed_group_from_cache(
+                                input_pilot,
+                                &worker.matches,
+                                k,
+                                patch_size,
+                                use_hadamard,
+                                &fft_2d_refs,
+                                pilot_cache,
+                                &mut worker.complex_work,
+                                &mut worker.scratch_2d,
+                                &mut worker.g_pilot_c,
+                            );
+                        }
+                    });
 
                     // Forward 1D transforms along group dimension
-                    let fft_k_plan = &fft_1d_plans_ref[k];
-                    apply_forward_1d_transform(
-                        &mut worker.g_noisy_c,
-                        k,
-                        patch_size,
-                        fft_k_plan,
-                        &mut worker.scratch_1d[..k],
-                    );
-                    if mode == Bm3dMode::Wiener {
+                    timed!(profile_timing, stats.forward_1d_ns, {
+                        let fft_k_plan = &fft_1d_plans_ref[k];
                         apply_forward_1d_transform(
-                            &mut worker.g_pilot_c,
+                            &mut worker.g_noisy_c,
                             k,
                             patch_size,
                             fft_k_plan,
                             &mut worker.scratch_1d[..k],
                         );
-                    }
+                        if mode == Bm3dMode::Wiener {
+                            apply_forward_1d_transform(
+                                &mut worker.g_pilot_c,
+                                k,
+                                patch_size,
+                                fft_k_plan,
+                                &mut worker.scratch_1d[..k],
+                            );
+                        }
+                    });
 
                     // Filtering
                     let mut weight_g = F::one();
                     let spatial_scale = F::usize_as(patch_size);
                     let spatial_scale_sq = spatial_scale * spatial_scale;
+                    timed!(profile_timing, stats.filtering_ns, {
+                        match mode {
+                            Bm3dMode::HardThreshold => {
+                                // Hard Thresholding
+                                let hard_thresholds = &mut worker.coeff_buffer;
+                                for r in 0..patch_size {
+                                    for c in 0..patch_size {
+                                        hard_thresholds[r * patch_size + c] = threshold * {
+                                            let sigma_s_dist = if use_colored_noise {
+                                                sigma_psd[[r, c]]
+                                            } else {
+                                                F::zero()
+                                            };
+                                            let effective_sigma_s =
+                                                sigma_s_dist * local_sigma_streak;
+                                            let k_f = F::usize_as(k);
+                                            let var_r = k_f * scalar_sigma_sq;
+                                            let var_s =
+                                                (k_f * k_f) * effective_sigma_s * effective_sigma_s;
+                                            (var_r + var_s).sqrt() * spatial_scale
+                                        };
+                                    }
+                                }
 
-                    match mode {
-                        Bm3dMode::HardThreshold => {
-                            // Hard Thresholding
-                            let hard_thresholds = &mut worker.coeff_buffer;
-                            for r in 0..patch_size {
-                                for c in 0..patch_size {
-                                    hard_thresholds[r * patch_size + c] = threshold * {
+                                let mut nz_count = 0usize;
+                                let patch_area = patch_size * patch_size;
+                                if let Some(noisy) = worker.g_noisy_c.as_slice_memory_order_mut() {
+                                    for i in 0..k {
+                                        let base = i * patch_area;
+                                        for rc in 0..patch_area {
+                                            let coeff = noisy[base + rc];
+                                            if coeff.norm() < hard_thresholds[rc] {
+                                                noisy[base + rc] =
+                                                    Complex::new(F::zero(), F::zero());
+                                            } else {
+                                                nz_count += 1;
+                                            }
+                                        }
+                                    }
+                                } else {
+                                    for i in 0..k {
+                                        for r in 0..patch_size {
+                                            for c in 0..patch_size {
+                                                let coeff = worker.g_noisy_c[[i, r, c]];
+                                                if coeff.norm()
+                                                    < hard_thresholds[r * patch_size + c]
+                                                {
+                                                    worker.g_noisy_c[[i, r, c]] =
+                                                        Complex::new(F::zero(), F::zero());
+                                                } else {
+                                                    nz_count += 1;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                if nz_count > 0 {
+                                    weight_g = F::one() / (F::usize_as(nz_count) + F::one());
+                                }
+                            }
+                            Bm3dMode::Wiener => {
+                                // Wiener Filtering
+                                let noise_vars = &mut worker.coeff_buffer;
+                                for r in 0..patch_size {
+                                    for c in 0..patch_size {
                                         let sigma_s_dist = if use_colored_noise {
                                             sigma_psd[[r, c]]
                                         } else {
@@ -627,113 +880,110 @@ pub fn run_bm3d_kernel<F: Bm3dFloat>(
                                         let var_r = k_f * scalar_sigma_sq;
                                         let var_s =
                                             (k_f * k_f) * effective_sigma_s * effective_sigma_s;
-                                        (var_r + var_s).sqrt() * spatial_scale
-                                    };
+                                        noise_vars[r * patch_size + c] =
+                                            (var_r + var_s) * spatial_scale_sq;
+                                    }
                                 }
-                            }
 
-                            let mut nz_count = 0usize;
-                            for i in 0..k {
-                                for r in 0..patch_size {
-                                    for c in 0..patch_size {
-                                        let coeff = worker.g_noisy_c[[i, r, c]];
-                                        if coeff.norm() < hard_thresholds[r * patch_size + c] {
-                                            worker.g_noisy_c[[i, r, c]] =
-                                                Complex::new(F::zero(), F::zero());
-                                        } else {
-                                            nz_count += 1;
+                                let mut wiener_sum = F::zero();
+                                let patch_area = patch_size * patch_size;
+                                if let (Some(noisy), Some(pilot)) = (
+                                    worker.g_noisy_c.as_slice_memory_order_mut(),
+                                    worker.g_pilot_c.as_slice_memory_order(),
+                                ) {
+                                    for i in 0..k {
+                                        let base = i * patch_area;
+                                        for rc in 0..patch_area {
+                                            let p_val = pilot[base + rc];
+                                            let p_pow = p_val.norm_sqr();
+                                            let n_val = noisy[base + rc];
+                                            let w = p_pow / (p_pow + noise_vars[rc] + wiener_eps);
+                                            noisy[base + rc] = n_val * w;
+                                            wiener_sum += w * w;
+                                        }
+                                    }
+                                } else {
+                                    for i in 0..k {
+                                        for r in 0..patch_size {
+                                            for c in 0..patch_size {
+                                                let p_val = worker.g_pilot_c[[i, r, c]];
+                                                let n_val = worker.g_noisy_c[[i, r, c]];
+                                                let w = p_val.norm_sqr()
+                                                    / (p_val.norm_sqr()
+                                                        + noise_vars[r * patch_size + c]
+                                                        + wiener_eps);
+                                                worker.g_noisy_c[[i, r, c]] = n_val * w;
+                                                wiener_sum += w * w;
+                                            }
                                         }
                                     }
                                 }
-                            }
-                            if nz_count > 0 {
-                                weight_g = F::one() / (F::usize_as(nz_count) + F::one());
-                            }
-                        }
-                        Bm3dMode::Wiener => {
-                            // Wiener Filtering
-                            let noise_vars = &mut worker.coeff_buffer;
-                            for r in 0..patch_size {
-                                for c in 0..patch_size {
-                                    let sigma_s_dist = if use_colored_noise {
-                                        sigma_psd[[r, c]]
-                                    } else {
-                                        F::zero()
-                                    };
-                                    let effective_sigma_s = sigma_s_dist * local_sigma_streak;
-                                    let k_f = F::usize_as(k);
-                                    let var_r = k_f * scalar_sigma_sq;
-                                    let var_s = (k_f * k_f) * effective_sigma_s * effective_sigma_s;
-                                    noise_vars[r * patch_size + c] =
-                                        (var_r + var_s) * spatial_scale_sq;
+                                weight_g = F::one() / (wiener_sum * scalar_sigma_sq + wiener_eps);
+                                if weight_g > max_wiener_weight {
+                                    weight_g = max_wiener_weight;
                                 }
                             }
-
-                            let mut wiener_sum = F::zero();
-                            for i in 0..k {
-                                for r in 0..patch_size {
-                                    for c in 0..patch_size {
-                                        let p_val = worker.g_pilot_c[[i, r, c]];
-                                        let n_val = worker.g_noisy_c[[i, r, c]];
-                                        let w = p_val.norm_sqr()
-                                            / (p_val.norm_sqr()
-                                                + noise_vars[r * patch_size + c]
-                                                + wiener_eps);
-                                        worker.g_noisy_c[[i, r, c]] = n_val * w;
-                                        wiener_sum += w * w;
-                                    }
-                                }
-                            }
-                            weight_g = F::one() / (wiener_sum * scalar_sigma_sq + wiener_eps);
-                            if weight_g > max_wiener_weight {
-                                weight_g = max_wiener_weight;
-                            }
                         }
-                    }
+                    });
 
                     // Inverse 1D transform along group dimension
-                    let ifft_k_plan = &ifft_1d_plans_ref[k];
-                    apply_inverse_1d_transform(
-                        &mut worker.g_noisy_c,
-                        k,
-                        patch_size,
-                        ifft_k_plan,
-                        &mut worker.scratch_1d[..k],
-                    );
+                    timed!(profile_timing, stats.inverse_1d_ns, {
+                        let ifft_k_plan = &ifft_1d_plans_ref[k];
+                        apply_inverse_1d_transform(
+                            &mut worker.g_noisy_c,
+                            k,
+                            patch_size,
+                            ifft_k_plan,
+                            &mut worker.scratch_1d[..k],
+                        );
+                    });
 
                     // Inverse 2D transforms and aggregation
-                    for (i, matched) in worker.matches.iter().enumerate().take(k) {
-                        let complex_slice = worker.g_noisy_c.slice(s![i, .., ..]);
-                        if use_hadamard {
-                            transforms::wht2d_8x8_inverse_into_view(
-                                complex_slice,
-                                &mut worker.spatial_patch,
-                            );
-                        } else {
-                            transforms::ifft2d_into(
-                                complex_slice,
-                                ifft_2d_row_ref,
-                                ifft_2d_col_ref,
-                                &mut worker.complex_work,
-                                &mut worker.spatial_patch,
-                                &mut worker.scratch_2d,
+                    timed!(profile_timing, stats.inverse_2d_aggregation_ns, {
+                        for (i, matched) in worker.matches.iter().enumerate().take(k) {
+                            let complex_slice = worker.g_noisy_c.slice(s![i, .., ..]);
+                            if use_hadamard {
+                                transforms::wht2d_8x8_inverse_into_view(
+                                    complex_slice,
+                                    &mut worker.spatial_patch,
+                                );
+                            } else {
+                                transforms::ifft2d_into(
+                                    complex_slice,
+                                    ifft_2d_row_ref,
+                                    ifft_2d_col_ref,
+                                    &mut worker.complex_work,
+                                    &mut worker.spatial_patch,
+                                    &mut worker.scratch_2d,
+                                );
+                            }
+                            aggregate_patch_into_tiles(
+                                &worker.spatial_patch,
+                                matched,
+                                weight_g,
+                                &patch_blend_weights,
+                                &tile_geom,
+                                &mut tile_accumulators,
                             );
                         }
-                        aggregate_patch_into_tiles(
-                            &worker.spatial_patch,
-                            matched,
-                            weight_g,
-                            &patch_blend_weights,
-                            &tile_geom,
-                            &mut tile_accumulators,
-                        );
-                    }
+                    });
                 }
 
-                tile_accumulators
+                let (hits, misses, evictions) = noisy_transform_cache.stats();
+                stats.noisy_cache_hits += hits;
+                stats.noisy_cache_misses += misses;
+                stats.noisy_cache_evictions += evictions;
+                if let Some(cache) = pilot_transform_cache.as_ref() {
+                    let (hits, misses, evictions) = cache.stats();
+                    stats.pilot_cache_hits += hits;
+                    stats.pilot_cache_misses += misses;
+                    stats.pilot_cache_evictions += evictions;
+                }
+
+                (tile_accumulators, stats)
             })
-            .reduce_with(|mut a, b| {
-                for (a_slot, b_slot) in a.iter_mut().zip(b.into_iter()) {
+            .reduce_with(|(mut a_tiles, a_stats), (b_tiles, b_stats)| {
+                for (a_slot, b_slot) in a_tiles.iter_mut().zip(b_tiles.into_iter()) {
                     if let Some((b_num, b_den)) = b_slot {
                         if let Some((a_num, a_den)) = a_slot.as_mut() {
                             *a_num += &b_num;
@@ -743,10 +993,13 @@ pub fn run_bm3d_kernel<F: Bm3dFloat>(
                         }
                     }
                 }
-                a
+                (a_tiles, a_stats.merge(b_stats))
             })
     };
-
+    let (final_tiles, stage_stats) = match final_result {
+        Some((tiles, stats)) => (Some(tiles), stats),
+        None => (None, KernelStageStats::default()),
+    };
     let mut output = input_noisy.to_owned();
     if let Some(tile_accumulators) = final_tiles {
         for (tile_id, tile_entry) in tile_accumulators.into_iter().enumerate() {
@@ -769,6 +1022,45 @@ pub fn run_bm3d_kernel<F: Bm3dFloat>(
             }
         }
     };
+
+    if profile_timing {
+        let total_ns = kernel_started
+            .map(|t| t.elapsed().as_nanos())
+            .unwrap_or_default();
+        let noisy_queries = stage_stats.noisy_cache_hits + stage_stats.noisy_cache_misses;
+        let noisy_hit_rate = if noisy_queries > 0 {
+            stage_stats.noisy_cache_hits as f64 / noisy_queries as f64
+        } else {
+            0.0
+        };
+        let pilot_queries = stage_stats.pilot_cache_hits + stage_stats.pilot_cache_misses;
+        let pilot_hit_rate = if pilot_queries > 0 {
+            stage_stats.pilot_cache_hits as f64 / pilot_queries as f64
+        } else {
+            0.0
+        };
+        eprintln!(
+            "bm3d_profile mode={:?} size={}x{} refs={} groups={} matched_patches={} cache_capacity={} noisy_hit_rate={:.3} pilot_hit_rate={:.3} cache_evictions=noisy:{} pilot:{} wall_ms={:.3} block_thread_ms={:.3} fwd2d_thread_ms={:.3} fwd1d_thread_ms={:.3} filter_thread_ms={:.3} inv1d_thread_ms={:.3} inv2d_agg_thread_ms={:.3}",
+            mode,
+            rows,
+            cols,
+            ref_coords.len(),
+            stage_stats.groups,
+            stage_stats.matched_patches,
+            transform_cache_capacity,
+            noisy_hit_rate,
+            pilot_hit_rate,
+            stage_stats.noisy_cache_evictions,
+            stage_stats.pilot_cache_evictions,
+            total_ns as f64 / 1_000_000.0,
+            stage_stats.block_matching_ns as f64 / 1_000_000.0,
+            stage_stats.forward_2d_ns as f64 / 1_000_000.0,
+            stage_stats.forward_1d_ns as f64 / 1_000_000.0,
+            stage_stats.filtering_ns as f64 / 1_000_000.0,
+            stage_stats.inverse_1d_ns as f64 / 1_000_000.0,
+            stage_stats.inverse_2d_aggregation_ns as f64 / 1_000_000.0,
+        );
+    }
 
     output
 }

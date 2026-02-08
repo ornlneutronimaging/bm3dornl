@@ -13,6 +13,7 @@
 //! - **Streak**: Streak pre-subtraction + anisotropic PSD for ring artifact removal
 
 use ndarray::{Array1, Array2, ArrayView2};
+use std::time::Instant;
 
 use crate::float_trait::Bm3dFloat;
 use crate::noise_estimation::estimate_noise_sigma;
@@ -73,6 +74,7 @@ const DEFAULT_NOTCH_WIDTH: f64 = 2.0;
 
 /// Small epsilon to avoid division by zero during normalization
 const NORMALIZATION_EPSILON: f64 = 1e-10;
+const PROFILE_TIMING_ENV: &str = "BM3D_PROFILE_TIMING";
 
 // =============================================================================
 // Types
@@ -196,6 +198,19 @@ impl<F: Bm3dFloat> Bm3dConfig<F> {
 // Helper Functions
 // =============================================================================
 
+fn profile_timing_enabled() -> bool {
+    std::env::var(PROFILE_TIMING_ENV)
+        .ok()
+        .map(|value| {
+            let v = value.trim();
+            v == "1"
+                || v.eq_ignore_ascii_case("true")
+                || v.eq_ignore_ascii_case("yes")
+                || v.eq_ignore_ascii_case("on")
+        })
+        .unwrap_or(false)
+}
+
 /// Compute the spatially adaptive sigma map from the input image.
 ///
 /// The sigma map captures local noise structure by:
@@ -295,6 +310,29 @@ pub fn bm3d_ring_artifact_removal_with_plans<F: Bm3dFloat>(
 ) -> Result<Array2<F>, String> {
     // Validate configuration
     config.validate()?;
+    let profile_timing = profile_timing_enabled();
+    let total_started = profile_timing.then(Instant::now);
+    let mut normalize_ns = 0u128;
+    let mut sigma_map_ns = 0u128;
+    let mut psd_ns = 0u128;
+    let mut prefilter_ns = 0u128;
+    let mut sigma_estimate_ns = 0u128;
+    let mut hard_pass_ns = 0u128;
+    let mut wiener_pass_ns = 0u128;
+    let mut denormalize_ns = 0u128;
+
+    macro_rules! timed {
+        ($enabled:expr, $acc:expr, $body:block) => {{
+            if $enabled {
+                let _t = Instant::now();
+                let _ret = { $body };
+                $acc += _t.elapsed().as_nanos();
+                _ret
+            } else {
+                $body
+            }
+        }};
+    }
 
     let (rows, cols) = sinogram.dim();
 
@@ -306,74 +344,85 @@ pub fn bm3d_ring_artifact_removal_with_plans<F: Bm3dFloat>(
         ));
     }
 
-    // Step 1: Compute global min/max for normalization
-    let d_min = sinogram
-        .iter()
-        .copied()
-        .fold(F::infinity(), |a, b| if b < a { b } else { a });
-    let d_max = sinogram
-        .iter()
-        .copied()
-        .fold(F::neg_infinity(), |a, b| if b > a { b } else { a });
+    let (d_min, _d_max, range, eps, mut z_norm) = timed!(profile_timing, normalize_ns, {
+        // Step 1: Compute global min/max for normalization
+        let d_min = sinogram
+            .iter()
+            .copied()
+            .fold(F::infinity(), |a, b| if b < a { b } else { a });
+        let d_max = sinogram
+            .iter()
+            .copied()
+            .fold(F::neg_infinity(), |a, b| if b > a { b } else { a });
 
-    let range = d_max - d_min;
-    let eps = F::from_f64_c(NORMALIZATION_EPSILON);
+        let range = d_max - d_min;
+        let eps = F::from_f64_c(NORMALIZATION_EPSILON);
 
-    // Step 2: Normalize to [0, 1]
-    let mut z_norm = if range > eps {
-        sinogram.mapv(|x| (x - d_min) / range)
-    } else {
-        // Constant image - just use zeros
-        Array2::zeros((rows, cols))
-    };
+        // Step 2: Normalize to [0, 1]
+        let z_norm = if range > eps {
+            sinogram.mapv(|x| (x - d_min) / range)
+        } else {
+            // Constant image - just use zeros
+            Array2::zeros((rows, cols))
+        };
+        (d_min, d_max, range, eps, z_norm)
+    });
 
     // Step 3: Compute sigma map
-    let sigma_map = compute_sigma_map(
-        z_norm.view(),
-        config.sigma_map_smoothing,
-        config.streak_sigma_scale,
-    );
+    let sigma_map = timed!(profile_timing, sigma_map_ns, {
+        compute_sigma_map(
+            z_norm.view(),
+            config.sigma_map_smoothing,
+            config.streak_sigma_scale,
+        )
+    });
 
     // Step 4: Prepare PSD based on mode
-    let sigma_psd = match mode {
-        RingRemovalMode::Generic => {
-            // Scalar PSD (no colored noise model)
-            Array2::zeros((1, 1))
+    let sigma_psd = timed!(profile_timing, psd_ns, {
+        match mode {
+            RingRemovalMode::Generic => {
+                // Scalar PSD (no colored noise model)
+                Array2::zeros((1, 1))
+            }
+            RingRemovalMode::Streak | RingRemovalMode::MultiscaleStreak => {
+                // Anisotropic PSD for streak modes
+                construct_psd(config.patch_size, config.psd_width)
+            }
+            RingRemovalMode::FourierSvd => {
+                // Fourier-SVD: No PSD needed (uses separate algorithm)
+                Array2::zeros((1, 1))
+            }
         }
-        RingRemovalMode::Streak | RingRemovalMode::MultiscaleStreak => {
-            // Anisotropic PSD for streak modes
-            construct_psd(config.patch_size, config.psd_width)
-        }
-        RingRemovalMode::FourierSvd => {
-            // Fourier-SVD: No PSD needed (uses separate algorithm)
-            Array2::zeros((1, 1))
-        }
-    };
+    });
 
     // Step 5: Streak pre-subtraction (streak modes) or Fourier-SVD
-    if mode == RingRemovalMode::Streak || mode == RingRemovalMode::MultiscaleStreak {
-        subtract_streak_profile(
-            &mut z_norm,
-            config.streak_sigma_smooth,
-            config.streak_iterations,
-        );
-    } else if mode == RingRemovalMode::FourierSvd {
-        // Fourier-SVD Streak Removal
-        z_norm = crate::fourier_svd::fourier_svd_removal(
-            z_norm.view(),
-            config.fft_alpha,
-            config.notch_width,
-        );
-    }
+    timed!(profile_timing, prefilter_ns, {
+        if mode == RingRemovalMode::Streak || mode == RingRemovalMode::MultiscaleStreak {
+            subtract_streak_profile(
+                &mut z_norm,
+                config.streak_sigma_smooth,
+                config.streak_iterations,
+            );
+        } else if mode == RingRemovalMode::FourierSvd {
+            // Fourier-SVD Streak Removal
+            z_norm = crate::fourier_svd::fourier_svd_removal(
+                z_norm.view(),
+                config.fft_alpha,
+                config.notch_width,
+            );
+        }
+    });
 
     // Step 5b: Auto-estimate sigma if not provided
     // If sigma_random is effectively 0, estimate from data.
-    let sigma_random = if config.sigma_random <= F::from_f64_c(1e-6) {
-        // Use z_norm for estimation (it has streaks removed if in Streak/FourierSvd mode)
-        estimate_noise_sigma(z_norm.view())
-    } else {
-        config.sigma_random
-    };
+    let sigma_random = timed!(profile_timing, sigma_estimate_ns, {
+        if config.sigma_random <= F::from_f64_c(1e-6) {
+            // Use z_norm for estimation (it has streaks removed if in Streak/FourierSvd mode)
+            estimate_noise_sigma(z_norm.view())
+        } else {
+            config.sigma_random
+        }
+    });
 
     // Step 6: BM3D Pass 1 - Hard Thresholding
     let hard_config = Bm3dKernelConfig {
@@ -384,15 +433,17 @@ pub fn bm3d_ring_artifact_removal_with_plans<F: Bm3dFloat>(
         search_window: config.search_window,
         max_matches: config.max_matches,
     };
-    let yhat_ht = run_bm3d_step(
-        z_norm.view(),
-        z_norm.view(), // pilot = noisy for first pass
-        Bm3dMode::HardThreshold,
-        sigma_psd.view(),
-        sigma_map.view(),
-        &hard_config,
-        plans,
-    )?;
+    let yhat_ht = timed!(profile_timing, hard_pass_ns, {
+        run_bm3d_step(
+            z_norm.view(),
+            z_norm.view(), // pilot = noisy for first pass
+            Bm3dMode::HardThreshold,
+            sigma_psd.view(),
+            sigma_map.view(),
+            &hard_config,
+            plans,
+        )
+    })?;
 
     // Step 7: BM3D Pass 2 - Wiener Filtering
     let wiener_config = Bm3dKernelConfig {
@@ -403,23 +454,48 @@ pub fn bm3d_ring_artifact_removal_with_plans<F: Bm3dFloat>(
         search_window: config.search_window,
         max_matches: config.max_matches,
     };
-    let yhat_final = run_bm3d_step(
-        z_norm.view(),
-        yhat_ht.view(), // pilot = HT result
-        Bm3dMode::Wiener,
-        sigma_psd.view(),
-        sigma_map.view(),
-        &wiener_config,
-        plans,
-    )?;
+    let yhat_final = timed!(profile_timing, wiener_pass_ns, {
+        run_bm3d_step(
+            z_norm.view(),
+            yhat_ht.view(), // pilot = HT result
+            Bm3dMode::Wiener,
+            sigma_psd.view(),
+            sigma_map.view(),
+            &wiener_config,
+            plans,
+        )
+    })?;
 
     // Step 8: Denormalize to original range
-    let output = if range > eps {
-        yhat_final.mapv(|x| x * range + d_min)
-    } else {
-        // Constant image - restore original mean/min
-        Array2::from_elem(yhat_final.raw_dim(), d_min)
-    };
+    let output = timed!(profile_timing, denormalize_ns, {
+        if range > eps {
+            yhat_final.mapv(|x| x * range + d_min)
+        } else {
+            // Constant image - restore original mean/min
+            Array2::from_elem(yhat_final.raw_dim(), d_min)
+        }
+    });
+
+    if profile_timing {
+        let total_ms = total_started
+            .map(|t| t.elapsed().as_secs_f64() * 1000.0)
+            .unwrap_or_default();
+        eprintln!(
+            "bm3d_orch_profile mode={:?} size={}x{} total_ms={:.3} normalize_ms={:.3} sigma_map_ms={:.3} psd_ms={:.3} prefilter_ms={:.3} sigma_est_ms={:.3} hard_ms={:.3} wiener_ms={:.3} denorm_ms={:.3}",
+            mode,
+            rows,
+            cols,
+            total_ms,
+            normalize_ns as f64 / 1_000_000.0,
+            sigma_map_ns as f64 / 1_000_000.0,
+            psd_ns as f64 / 1_000_000.0,
+            prefilter_ns as f64 / 1_000_000.0,
+            sigma_estimate_ns as f64 / 1_000_000.0,
+            hard_pass_ns as f64 / 1_000_000.0,
+            wiener_pass_ns as f64 / 1_000_000.0,
+            denormalize_ns as f64 / 1_000_000.0,
+        );
+    }
 
     Ok(output)
 }

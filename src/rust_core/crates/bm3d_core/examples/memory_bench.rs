@@ -46,7 +46,7 @@ fn main() {
     let max_matches = parse_arg(&args, "--max-matches", 16usize);
 
     println!(
-        "issue93 bench start rows={} cols={} sigma_random={} patch={} step={} search_window={} max_matches={} tile_env={:?}",
+        "memory bench start rows={} cols={} sigma_random={} patch={} step={} search_window={} max_matches={} tile_env={:?} cache_env={:?} profile_env={:?}",
         rows,
         cols,
         sigma_random,
@@ -54,7 +54,9 @@ fn main() {
         step_size,
         search_window,
         max_matches,
-        std::env::var("BM3D_AGGREGATION_TILE_SIZE").ok()
+        std::env::var("BM3D_AGGREGATION_TILE_SIZE").ok(),
+        std::env::var("BM3D_TRANSFORM_CACHE_CAPACITY").ok(),
+        std::env::var("BM3D_PROFILE_TIMING").ok(),
     );
 
     let sinogram = build_sinogram(rows, cols);
@@ -83,7 +85,7 @@ fn main() {
         .sum();
 
     println!(
-        "issue93 bench done elapsed_s={:.3} checksum={:.9} rss_before_mb={:.1} rss_peak_mb={:.1}",
+        "memory bench done elapsed_s={:.3} checksum={:.9} rss_before_mb={:.1} rss_peak_mb={:.1}",
         elapsed.as_secs_f64(),
         checksum,
         rss_before_mb,
