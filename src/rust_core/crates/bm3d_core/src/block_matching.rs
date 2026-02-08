@@ -147,8 +147,8 @@ pub fn find_similar_patches_in_place<F: Bm3dFloat>(
     };
 
     // Pre-calculate Reference stats
-    let (ref_sum, ref_sq_sum) = get_patch_sums(integral_sum, integral_sq_sum, ref_r, ref_c, ph, pw);
-    let ref_norm = ref_sq_sum.max(F::zero()).sqrt();
+    let (ref_sum, _ref_sq_sum) =
+        get_patch_sums(integral_sum, integral_sq_sum, ref_r, ref_c, ph, pw);
     let inv_n = F::one() / F::usize_as(ph * pw);
 
     for r in (search_r_start..=search_r_end).step_by(step) {
@@ -162,7 +162,7 @@ pub fn find_similar_patches_in_place<F: Bm3dFloat>(
             // Bound 2: Norm Difference: (norm1 - norm2)^2
             // If Max(Bound) > threshold, skip.
 
-            let (cand_sum, cand_sq_sum) =
+            let (cand_sum, _cand_sq_sum) =
                 get_patch_sums(integral_sum, integral_sq_sum, r, c, ph, pw);
             let check_threshold = threshold;
 
@@ -170,14 +170,6 @@ pub fn find_similar_patches_in_place<F: Bm3dFloat>(
             let diff_sum = cand_sum - ref_sum;
             let lb_mean = (diff_sum * diff_sum) * inv_n;
             if lb_mean >= check_threshold {
-                continue;
-            }
-
-            // Norm Bound
-            let cand_norm = cand_sq_sum.max(F::zero()).sqrt();
-            let diff_norm = (cand_norm - ref_norm).abs();
-            let lb_norm = diff_norm * diff_norm;
-            if lb_norm >= check_threshold {
                 continue;
             }
 
