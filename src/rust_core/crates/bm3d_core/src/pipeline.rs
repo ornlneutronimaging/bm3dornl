@@ -398,7 +398,8 @@ struct KernelStageStats {
     forward_1d_ns: u128,
     filtering_ns: u128,
     inverse_1d_ns: u128,
-    inverse_2d_aggregation_ns: u128,
+    inverse_2d_ns: u128,
+    aggregation_ns: u128,
     noisy_cache_hits: u64,
     noisy_cache_misses: u64,
     noisy_cache_evictions: u64,
@@ -417,8 +418,8 @@ impl KernelStageStats {
             forward_1d_ns: self.forward_1d_ns + other.forward_1d_ns,
             filtering_ns: self.filtering_ns + other.filtering_ns,
             inverse_1d_ns: self.inverse_1d_ns + other.inverse_1d_ns,
-            inverse_2d_aggregation_ns: self.inverse_2d_aggregation_ns
-                + other.inverse_2d_aggregation_ns,
+            inverse_2d_ns: self.inverse_2d_ns + other.inverse_2d_ns,
+            aggregation_ns: self.aggregation_ns + other.aggregation_ns,
             noisy_cache_hits: self.noisy_cache_hits + other.noisy_cache_hits,
             noisy_cache_misses: self.noisy_cache_misses + other.noisy_cache_misses,
             noisy_cache_evictions: self.noisy_cache_evictions + other.noisy_cache_evictions,
@@ -534,6 +535,8 @@ fn aggregate_patch_into_tiles<F: Bm3dFloat>(
     geom: &TileAggregationGeometry,
     tile_accumulators: &mut TileAccumulatorVec<F>,
 ) {
+    let spatial_data = spatial.as_slice_memory_order();
+    let blend_data = patch_blend_weights.as_slice_memory_order();
     let patch_end_r = m.row + geom.patch_size - 1;
     let patch_end_c = m.col + geom.patch_size - 1;
     let start_tile_row = m.row / geom.tile_size;
@@ -561,15 +564,27 @@ fn aggregate_patch_into_tiles<F: Bm3dFloat>(
             geom.tile_size,
         );
 
-        for pr in 0..geom.patch_size {
-            let tr = m.row + pr;
-            if tr >= geom.rows {
-                continue;
+        let tile_w = num_tile.dim().1;
+        if let (Some(num_data), Some(den_data), Some(spatial_vals), Some(blend_vals)) = (
+            num_tile.as_slice_memory_order_mut(),
+            den_tile.as_slice_memory_order_mut(),
+            spatial_data,
+            blend_data,
+        ) {
+            for pr in 0..geom.patch_size {
+                let src_base = pr * geom.patch_size;
+                let dst_base = (local_r0 + pr) * tile_w + local_c0;
+                for pc in 0..geom.patch_size {
+                    let s = spatial_vals[src_base + pc];
+                    let w = weight * blend_vals[src_base + pc];
+                    num_data[dst_base + pc] += s * w;
+                    den_data[dst_base + pc] += w;
+                }
             }
-            let local_r = local_r0 + pr;
-            for pc in 0..geom.patch_size {
-                let tc = m.col + pc;
-                if tc < geom.cols {
+        } else {
+            for pr in 0..geom.patch_size {
+                let local_r = local_r0 + pr;
+                for pc in 0..geom.patch_size {
                     let local_c = local_c0 + pc;
                     let w = weight * patch_blend_weights[[pr, pc]];
                     num_tile[[local_r, local_c]] += spatial[[pr, pc]] * w;
@@ -584,29 +599,27 @@ fn aggregate_patch_into_tiles<F: Bm3dFloat>(
         for pc in 0..geom.patch_size {
             let tr = m.row + pr;
             let tc = m.col + pc;
-            if tr < geom.rows && tc < geom.cols {
-                let tile_row = tr / geom.tile_size;
-                let tile_col = tc / geom.tile_size;
-                let tile_id = tile_row * geom.tile_cols + tile_col;
-                let row_start = tile_row * geom.tile_size;
-                let col_start = tile_col * geom.tile_size;
-                let local_r = tr - row_start;
-                let local_c = tc - col_start;
+            let tile_row = tr / geom.tile_size;
+            let tile_col = tc / geom.tile_size;
+            let tile_id = tile_row * geom.tile_cols + tile_col;
+            let row_start = tile_row * geom.tile_size;
+            let col_start = tile_col * geom.tile_size;
+            let local_r = tr - row_start;
+            let local_c = tc - col_start;
 
-                let (num_tile, den_tile) = get_or_insert_tile(
-                    tile_accumulators,
-                    tile_id,
-                    tile_row,
-                    tile_col,
-                    geom.rows,
-                    geom.cols,
-                    geom.tile_size,
-                );
+            let (num_tile, den_tile) = get_or_insert_tile(
+                tile_accumulators,
+                tile_id,
+                tile_row,
+                tile_col,
+                geom.rows,
+                geom.cols,
+                geom.tile_size,
+            );
 
-                let w = weight * patch_blend_weights[[pr, pc]];
-                num_tile[[local_r, local_c]] += spatial[[pr, pc]] * w;
-                den_tile[[local_r, local_c]] += w;
-            }
+            let w = weight * patch_blend_weights[[pr, pc]];
+            num_tile[[local_r, local_c]] += spatial[[pr, pc]] * w;
+            den_tile[[local_r, local_c]] += w;
         }
     }
 }
@@ -939,9 +952,9 @@ pub fn run_bm3d_kernel<F: Bm3dFloat>(
                     });
 
                     // Inverse 2D transforms and aggregation
-                    timed!(profile_timing, stats.inverse_2d_aggregation_ns, {
-                        for (i, matched) in worker.matches.iter().enumerate().take(k) {
-                            let complex_slice = worker.g_noisy_c.slice(s![i, .., ..]);
+                    for (i, matched) in worker.matches.iter().enumerate().take(k) {
+                        let complex_slice = worker.g_noisy_c.slice(s![i, .., ..]);
+                        timed!(profile_timing, stats.inverse_2d_ns, {
                             if use_hadamard {
                                 transforms::wht2d_8x8_inverse_into_view(
                                     complex_slice,
@@ -957,6 +970,8 @@ pub fn run_bm3d_kernel<F: Bm3dFloat>(
                                     &mut worker.scratch_2d,
                                 );
                             }
+                        });
+                        timed!(profile_timing, stats.aggregation_ns, {
                             aggregate_patch_into_tiles(
                                 &worker.spatial_patch,
                                 matched,
@@ -965,8 +980,8 @@ pub fn run_bm3d_kernel<F: Bm3dFloat>(
                                 &tile_geom,
                                 &mut tile_accumulators,
                             );
-                        }
-                    });
+                        });
+                    }
                 }
 
                 let (hits, misses, evictions) = noisy_transform_cache.stats();
@@ -1040,7 +1055,7 @@ pub fn run_bm3d_kernel<F: Bm3dFloat>(
             0.0
         };
         eprintln!(
-            "bm3d_profile mode={:?} size={}x{} refs={} groups={} matched_patches={} cache_capacity={} noisy_hit_rate={:.3} pilot_hit_rate={:.3} cache_evictions=noisy:{} pilot:{} wall_ms={:.3} block_thread_ms={:.3} fwd2d_thread_ms={:.3} fwd1d_thread_ms={:.3} filter_thread_ms={:.3} inv1d_thread_ms={:.3} inv2d_agg_thread_ms={:.3}",
+            "bm3d_profile mode={:?} size={}x{} refs={} groups={} matched_patches={} cache_capacity={} noisy_hit_rate={:.3} pilot_hit_rate={:.3} cache_evictions=noisy:{} pilot:{} wall_ms={:.3} block_thread_ms={:.3} fwd2d_thread_ms={:.3} fwd1d_thread_ms={:.3} filter_thread_ms={:.3} inv1d_thread_ms={:.3} inv2d_thread_ms={:.3} agg_thread_ms={:.3}",
             mode,
             rows,
             cols,
@@ -1058,7 +1073,8 @@ pub fn run_bm3d_kernel<F: Bm3dFloat>(
             stage_stats.forward_1d_ns as f64 / 1_000_000.0,
             stage_stats.filtering_ns as f64 / 1_000_000.0,
             stage_stats.inverse_1d_ns as f64 / 1_000_000.0,
-            stage_stats.inverse_2d_aggregation_ns as f64 / 1_000_000.0,
+            stage_stats.inverse_2d_ns as f64 / 1_000_000.0,
+            stage_stats.aggregation_ns as f64 / 1_000_000.0,
         );
     }
 

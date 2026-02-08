@@ -59,11 +59,11 @@ pub fn fft2d_into<F: Bm3dFloat>(
         // 1. Transform rows
         for r in 0..rows {
             let row_base = r * cols;
+            let row = &mut work_data[row_base..row_base + cols];
             for c in 0..cols {
-                scratch[c] = Complex::new(input_data[row_base + c], F::zero());
+                row[c] = Complex::new(input_data[row_base + c], F::zero());
             }
-            fft_row_plan.process(&mut scratch[..cols]);
-            work_data[row_base..row_base + cols].copy_from_slice(&scratch[..cols]);
+            fft_row_plan.process(row);
         }
         // 2. Transform columns
         for c in 0..cols {
@@ -196,10 +196,10 @@ pub fn ifft2d_into<F: Bm3dFloat>(
         let norm_factor = F::one() / F::usize_as(rows * cols);
         for r in 0..rows {
             let row_base = r * cols;
-            scratch[..cols].copy_from_slice(&work_data[row_base..row_base + cols]);
-            ifft_row_plan.process(&mut scratch[..cols]);
+            let row = &mut work_data[row_base..row_base + cols];
+            ifft_row_plan.process(row);
             for c in 0..cols {
-                output_data[row_base + c] = scratch[c].re * norm_factor;
+                output_data[row_base + c] = row[c].re * norm_factor;
             }
         }
     } else {
