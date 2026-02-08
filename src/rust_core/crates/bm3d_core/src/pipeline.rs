@@ -271,13 +271,23 @@ fn apply_forward_1d_transform<F: Bm3dFloat>(
     fft_plan: &Arc<dyn Fft<F>>,
     scratch: &mut [Complex<F>],
 ) {
+    let fft_scratch_len = fft_plan.get_inplace_scratch_len();
+    let mut fft_scratch = if fft_scratch_len > 0 {
+        vec![Complex::new(F::zero(), F::zero()); fft_scratch_len]
+    } else {
+        Vec::new()
+    };
     if let Some(group_data) = group.as_slice_memory_order_mut() {
         let patch_area = patch_size * patch_size;
         for rc in 0..patch_area {
             for i in 0..k {
                 scratch[i] = group_data[i * patch_area + rc];
             }
-            fft_plan.process(&mut scratch[..k]);
+            if fft_scratch_len == 0 {
+                fft_plan.process_with_scratch(&mut scratch[..k], &mut []);
+            } else {
+                fft_plan.process_with_scratch(&mut scratch[..k], &mut fft_scratch);
+            }
             for i in 0..k {
                 group_data[i * patch_area + rc] = scratch[i];
             }
@@ -288,7 +298,11 @@ fn apply_forward_1d_transform<F: Bm3dFloat>(
                 for i in 0..k {
                     scratch[i] = group[[i, r, c]];
                 }
-                fft_plan.process(&mut scratch[..k]);
+                if fft_scratch_len == 0 {
+                    fft_plan.process_with_scratch(&mut scratch[..k], &mut []);
+                } else {
+                    fft_plan.process_with_scratch(&mut scratch[..k], &mut fft_scratch);
+                }
                 for i in 0..k {
                     group[[i, r, c]] = scratch[i];
                 }
@@ -306,13 +320,23 @@ fn apply_inverse_1d_transform<F: Bm3dFloat>(
     scratch: &mut [Complex<F>],
 ) {
     let norm_k = F::one() / F::usize_as(k);
+    let ifft_scratch_len = ifft_plan.get_inplace_scratch_len();
+    let mut ifft_scratch = if ifft_scratch_len > 0 {
+        vec![Complex::new(F::zero(), F::zero()); ifft_scratch_len]
+    } else {
+        Vec::new()
+    };
     if let Some(group_data) = group.as_slice_memory_order_mut() {
         let patch_area = patch_size * patch_size;
         for rc in 0..patch_area {
             for i in 0..k {
                 scratch[i] = group_data[i * patch_area + rc];
             }
-            ifft_plan.process(&mut scratch[..k]);
+            if ifft_scratch_len == 0 {
+                ifft_plan.process_with_scratch(&mut scratch[..k], &mut []);
+            } else {
+                ifft_plan.process_with_scratch(&mut scratch[..k], &mut ifft_scratch);
+            }
             for i in 0..k {
                 group_data[i * patch_area + rc] = scratch[i] * norm_k;
             }
@@ -323,7 +347,11 @@ fn apply_inverse_1d_transform<F: Bm3dFloat>(
                 for i in 0..k {
                     scratch[i] = group[[i, r, c]];
                 }
-                ifft_plan.process(&mut scratch[..k]);
+                if ifft_scratch_len == 0 {
+                    ifft_plan.process_with_scratch(&mut scratch[..k], &mut []);
+                } else {
+                    ifft_plan.process_with_scratch(&mut scratch[..k], &mut ifft_scratch);
+                }
                 for i in 0..k {
                     group[[i, r, c]] = scratch[i] * norm_k;
                 }

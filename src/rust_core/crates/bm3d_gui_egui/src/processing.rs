@@ -1,14 +1,29 @@
 use bm3d_core::orchestration::bm3d_ring_artifact_removal_with_plans;
 use bm3d_core::{
-    bm3d_ring_artifact_removal, fourier_svd::fourier_svd_removal, multiscale_bm3d_streak_removal,
-    multiscale_bm3d_streak_removal_with_plans, Bm3dConfig, Bm3dPlans, MultiscaleConfig,
-    RingRemovalMode,
+    bm3d_ring_artifact_removal, estimate_noise_sigma, fourier_svd::fourier_svd_removal,
+    multiscale_bm3d_streak_removal, multiscale_bm3d_streak_removal_with_plans, Bm3dConfig,
+    Bm3dPlans, MultiscaleConfig, RingRemovalMode,
 };
 use ndarray::{Array2, Array3, Axis};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
+
+const REUSE_VOLUME_SIGMA_ENV: &str = "BM3D_REUSE_VOLUME_SIGMA";
+
+fn resolve_reuse_volume_sigma() -> bool {
+    std::env::var(REUSE_VOLUME_SIGMA_ENV)
+        .ok()
+        .map(|value| {
+            let v = value.trim();
+            v == "1"
+                || v.eq_ignore_ascii_case("true")
+                || v.eq_ignore_ascii_case("yes")
+                || v.eq_ignore_ascii_case("on")
+        })
+        .unwrap_or(false)
+}
 
 /// Progress update from processing thread.
 #[derive(Debug, Clone)]
@@ -222,6 +237,7 @@ fn process_volume_worker(
     tx: Sender<ProcessingProgress>,
     cancel_flag: Arc<AtomicBool>,
 ) {
+    let mut config = config;
     let shape = input.shape();
     let num_slices = shape[slice_axis];
     let shared_plans = if mode != RingRemovalMode::FourierSvd {
@@ -232,6 +248,15 @@ fn process_volume_worker(
     } else {
         None
     };
+    if mode != RingRemovalMode::FourierSvd
+        && config.bm3d_config.sigma_random <= 1e-6
+        && num_slices > 0
+        && resolve_reuse_volume_sigma()
+    {
+        let first_slice = input.index_axis(Axis(slice_axis), 0);
+        let estimated = estimate_noise_sigma(first_slice).max(1e-3);
+        config.bm3d_config.sigma_random = estimated;
+    }
 
     // Send start message
     if tx

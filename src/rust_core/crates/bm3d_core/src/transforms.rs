@@ -51,6 +51,19 @@ pub fn fft2d_into<F: Bm3dFloat>(
     debug_assert_eq!(output.dim(), (rows, cols));
     debug_assert!(scratch.len() >= rows.max(cols));
 
+    let row_scratch_len = fft_row_plan.get_inplace_scratch_len();
+    let col_scratch_len = fft_col_plan.get_inplace_scratch_len();
+    let mut row_fft_scratch = if row_scratch_len > 0 {
+        vec![Complex::new(F::zero(), F::zero()); row_scratch_len]
+    } else {
+        Vec::new()
+    };
+    let mut col_fft_scratch = if col_scratch_len > 0 {
+        vec![Complex::new(F::zero(), F::zero()); col_scratch_len]
+    } else {
+        Vec::new()
+    };
+
     if let (Some(input_data), Some(work_data), Some(output_data)) = (
         input.as_slice_memory_order(),
         work_complex.as_slice_memory_order_mut(),
@@ -63,14 +76,22 @@ pub fn fft2d_into<F: Bm3dFloat>(
             for c in 0..cols {
                 row[c] = Complex::new(input_data[row_base + c], F::zero());
             }
-            fft_row_plan.process(row);
+            if row_scratch_len == 0 {
+                fft_row_plan.process_with_scratch(row, &mut []);
+            } else {
+                fft_row_plan.process_with_scratch(row, &mut row_fft_scratch);
+            }
         }
         // 2. Transform columns
         for c in 0..cols {
             for r in 0..rows {
                 scratch[r] = work_data[r * cols + c];
             }
-            fft_col_plan.process(&mut scratch[..rows]);
+            if col_scratch_len == 0 {
+                fft_col_plan.process_with_scratch(&mut scratch[..rows], &mut []);
+            } else {
+                fft_col_plan.process_with_scratch(&mut scratch[..rows], &mut col_fft_scratch);
+            }
             for r in 0..rows {
                 output_data[r * cols + c] = scratch[r];
             }
@@ -83,7 +104,11 @@ pub fn fft2d_into<F: Bm3dFloat>(
                 scratch[c] = Complex::new(v, F::zero());
             }
             // FFT
-            fft_row_plan.process(&mut scratch[..cols]);
+            if row_scratch_len == 0 {
+                fft_row_plan.process_with_scratch(&mut scratch[..cols], &mut []);
+            } else {
+                fft_row_plan.process_with_scratch(&mut scratch[..cols], &mut row_fft_scratch);
+            }
             // Copy back
             for c in 0..cols {
                 work_complex[[r, c]] = scratch[c];
@@ -97,7 +122,11 @@ pub fn fft2d_into<F: Bm3dFloat>(
                 scratch[r] = work_complex[[r, c]];
             }
             // FFT
-            fft_col_plan.process(&mut scratch[..rows]);
+            if col_scratch_len == 0 {
+                fft_col_plan.process_with_scratch(&mut scratch[..rows], &mut []);
+            } else {
+                fft_col_plan.process_with_scratch(&mut scratch[..rows], &mut col_fft_scratch);
+            }
             // Copy back
             for r in 0..rows {
                 output[[r, c]] = scratch[r];
@@ -124,6 +153,18 @@ pub fn ifft2d_view<F: Bm3dFloat>(
     ifft_col_plan: &Arc<dyn Fft<F>>,
 ) -> Array2<F> {
     let (rows, cols) = input.dim();
+    let col_scratch_len = ifft_col_plan.get_inplace_scratch_len();
+    let row_scratch_len = ifft_row_plan.get_inplace_scratch_len();
+    let mut col_fft_scratch = if col_scratch_len > 0 {
+        vec![Complex::new(F::zero(), F::zero()); col_scratch_len]
+    } else {
+        Vec::new()
+    };
+    let mut row_fft_scratch = if row_scratch_len > 0 {
+        vec![Complex::new(F::zero(), F::zero()); row_scratch_len]
+    } else {
+        Vec::new()
+    };
 
     // 1. Transform columns
     let mut intermediate = input.to_owned();
@@ -133,7 +174,11 @@ pub fn ifft2d_view<F: Bm3dFloat>(
         for r in 0..rows {
             col_vec[r] = intermediate[[r, c]];
         }
-        ifft_col_plan.process(&mut col_vec);
+        if col_scratch_len == 0 {
+            ifft_col_plan.process_with_scratch(&mut col_vec, &mut []);
+        } else {
+            ifft_col_plan.process_with_scratch(&mut col_vec, &mut col_fft_scratch);
+        }
         for r in 0..rows {
             intermediate[[r, c]] = col_vec[r];
         }
@@ -148,7 +193,11 @@ pub fn ifft2d_view<F: Bm3dFloat>(
         for c in 0..cols {
             row_vec[c] = intermediate[[r, c]];
         }
-        ifft_row_plan.process(&mut row_vec);
+        if row_scratch_len == 0 {
+            ifft_row_plan.process_with_scratch(&mut row_vec, &mut []);
+        } else {
+            ifft_row_plan.process_with_scratch(&mut row_vec, &mut row_fft_scratch);
+        }
         for c in 0..cols {
             output[[r, c]] = row_vec[c].re * norm_factor;
         }
@@ -175,6 +224,19 @@ pub fn ifft2d_into<F: Bm3dFloat>(
     debug_assert_eq!(output.dim(), (rows, cols));
     debug_assert!(scratch.len() >= rows.max(cols));
 
+    let col_scratch_len = ifft_col_plan.get_inplace_scratch_len();
+    let row_scratch_len = ifft_row_plan.get_inplace_scratch_len();
+    let mut col_fft_scratch = if col_scratch_len > 0 {
+        vec![Complex::new(F::zero(), F::zero()); col_scratch_len]
+    } else {
+        Vec::new()
+    };
+    let mut row_fft_scratch = if row_scratch_len > 0 {
+        vec![Complex::new(F::zero(), F::zero()); row_scratch_len]
+    } else {
+        Vec::new()
+    };
+
     if let (Some(input_data), Some(work_data), Some(output_data)) = (
         input.as_slice_memory_order(),
         work_complex.as_slice_memory_order_mut(),
@@ -186,7 +248,11 @@ pub fn ifft2d_into<F: Bm3dFloat>(
             for r in 0..rows {
                 scratch[r] = work_data[r * cols + c];
             }
-            ifft_col_plan.process(&mut scratch[..rows]);
+            if col_scratch_len == 0 {
+                ifft_col_plan.process_with_scratch(&mut scratch[..rows], &mut []);
+            } else {
+                ifft_col_plan.process_with_scratch(&mut scratch[..rows], &mut col_fft_scratch);
+            }
             for r in 0..rows {
                 work_data[r * cols + c] = scratch[r];
             }
@@ -197,7 +263,11 @@ pub fn ifft2d_into<F: Bm3dFloat>(
         for r in 0..rows {
             let row_base = r * cols;
             let row = &mut work_data[row_base..row_base + cols];
-            ifft_row_plan.process(row);
+            if row_scratch_len == 0 {
+                ifft_row_plan.process_with_scratch(row, &mut []);
+            } else {
+                ifft_row_plan.process_with_scratch(row, &mut row_fft_scratch);
+            }
             for c in 0..cols {
                 output_data[row_base + c] = row[c].re * norm_factor;
             }
@@ -209,7 +279,11 @@ pub fn ifft2d_into<F: Bm3dFloat>(
             for r in 0..rows {
                 scratch[r] = work_complex[[r, c]];
             }
-            ifft_col_plan.process(&mut scratch[..rows]);
+            if col_scratch_len == 0 {
+                ifft_col_plan.process_with_scratch(&mut scratch[..rows], &mut []);
+            } else {
+                ifft_col_plan.process_with_scratch(&mut scratch[..rows], &mut col_fft_scratch);
+            }
             for r in 0..rows {
                 work_complex[[r, c]] = scratch[r];
             }
@@ -221,7 +295,11 @@ pub fn ifft2d_into<F: Bm3dFloat>(
             for c in 0..cols {
                 scratch[c] = work_complex[[r, c]];
             }
-            ifft_row_plan.process(&mut scratch[..cols]);
+            if row_scratch_len == 0 {
+                ifft_row_plan.process_with_scratch(&mut scratch[..cols], &mut []);
+            } else {
+                ifft_row_plan.process_with_scratch(&mut scratch[..cols], &mut row_fft_scratch);
+            }
             for c in 0..cols {
                 output[[r, c]] = scratch[c].re * norm_factor;
             }
