@@ -183,6 +183,8 @@ impl<F: Bm3dFloat> PatchTransformCache<F> {
         fft_2d: &Fft2dRefs<F>,
         work_complex: &mut Array2<Complex<F>>,
         scratch: &mut [Complex<F>],
+        row_fft_scratch: &mut [Complex<F>],
+        col_fft_scratch: &mut [Complex<F>],
         out: &mut [Complex<F>],
     ) {
         let key = patch_coord_key(coord);
@@ -203,13 +205,15 @@ impl<F: Bm3dFloat> PatchTransformCache<F> {
         if use_hadamard {
             transforms::wht2d_8x8_forward_into_view(patch, out_view);
         } else {
-            transforms::fft2d_into(
+            transforms::fft2d_into_with_plan_scratch(
                 patch,
                 fft_2d.row,
                 fft_2d.col,
                 work_complex,
                 out_view,
                 scratch,
+                row_fft_scratch,
+                col_fft_scratch,
             );
         }
 
@@ -240,6 +244,8 @@ fn fill_transformed_group_from_cache<F: Bm3dFloat>(
     cache: &mut PatchTransformCache<F>,
     work_complex: &mut Array2<Complex<F>>,
     scratch_2d: &mut [Complex<F>],
+    row_fft_scratch: &mut [Complex<F>],
+    col_fft_scratch: &mut [Complex<F>],
     out: &mut ndarray::Array3<Complex<F>>,
 ) {
     let patch_area = patch_size * patch_size;
@@ -258,6 +264,8 @@ fn fill_transformed_group_from_cache<F: Bm3dFloat>(
             fft_2d,
             work_complex,
             scratch_2d,
+            row_fft_scratch,
+            col_fft_scratch,
             &mut out_data[base..base + patch_area],
         );
     }
@@ -270,13 +278,10 @@ fn apply_forward_1d_transform<F: Bm3dFloat>(
     patch_size: usize,
     fft_plan: &Arc<dyn Fft<F>>,
     scratch: &mut [Complex<F>],
+    fft_plan_scratch: &mut [Complex<F>],
 ) {
     let fft_scratch_len = fft_plan.get_inplace_scratch_len();
-    let mut fft_scratch = if fft_scratch_len > 0 {
-        vec![Complex::new(F::zero(), F::zero()); fft_scratch_len]
-    } else {
-        Vec::new()
-    };
+    debug_assert!(fft_plan_scratch.len() >= fft_scratch_len);
     if let Some(group_data) = group.as_slice_memory_order_mut() {
         let patch_area = patch_size * patch_size;
         for rc in 0..patch_area {
@@ -286,7 +291,7 @@ fn apply_forward_1d_transform<F: Bm3dFloat>(
             if fft_scratch_len == 0 {
                 fft_plan.process_with_scratch(&mut scratch[..k], &mut []);
             } else {
-                fft_plan.process_with_scratch(&mut scratch[..k], &mut fft_scratch);
+                fft_plan.process_with_scratch(&mut scratch[..k], fft_plan_scratch);
             }
             for i in 0..k {
                 group_data[i * patch_area + rc] = scratch[i];
@@ -301,7 +306,7 @@ fn apply_forward_1d_transform<F: Bm3dFloat>(
                 if fft_scratch_len == 0 {
                     fft_plan.process_with_scratch(&mut scratch[..k], &mut []);
                 } else {
-                    fft_plan.process_with_scratch(&mut scratch[..k], &mut fft_scratch);
+                    fft_plan.process_with_scratch(&mut scratch[..k], fft_plan_scratch);
                 }
                 for i in 0..k {
                     group[[i, r, c]] = scratch[i];
@@ -318,14 +323,11 @@ fn apply_inverse_1d_transform<F: Bm3dFloat>(
     patch_size: usize,
     ifft_plan: &Arc<dyn Fft<F>>,
     scratch: &mut [Complex<F>],
+    ifft_plan_scratch: &mut [Complex<F>],
 ) {
     let norm_k = F::one() / F::usize_as(k);
     let ifft_scratch_len = ifft_plan.get_inplace_scratch_len();
-    let mut ifft_scratch = if ifft_scratch_len > 0 {
-        vec![Complex::new(F::zero(), F::zero()); ifft_scratch_len]
-    } else {
-        Vec::new()
-    };
+    debug_assert!(ifft_plan_scratch.len() >= ifft_scratch_len);
     if let Some(group_data) = group.as_slice_memory_order_mut() {
         let patch_area = patch_size * patch_size;
         for rc in 0..patch_area {
@@ -335,7 +337,7 @@ fn apply_inverse_1d_transform<F: Bm3dFloat>(
             if ifft_scratch_len == 0 {
                 ifft_plan.process_with_scratch(&mut scratch[..k], &mut []);
             } else {
-                ifft_plan.process_with_scratch(&mut scratch[..k], &mut ifft_scratch);
+                ifft_plan.process_with_scratch(&mut scratch[..k], ifft_plan_scratch);
             }
             for i in 0..k {
                 group_data[i * patch_area + rc] = scratch[i] * norm_k;
@@ -350,7 +352,7 @@ fn apply_inverse_1d_transform<F: Bm3dFloat>(
                 if ifft_scratch_len == 0 {
                     ifft_plan.process_with_scratch(&mut scratch[..k], &mut []);
                 } else {
-                    ifft_plan.process_with_scratch(&mut scratch[..k], &mut ifft_scratch);
+                    ifft_plan.process_with_scratch(&mut scratch[..k], ifft_plan_scratch);
                 }
                 for i in 0..k {
                     group[[i, r, c]] = scratch[i] * norm_k;
@@ -369,10 +371,26 @@ struct WorkerBuffers<F: Bm3dFloat> {
     coeff_buffer: Vec<F>,
     scratch_1d: Vec<Complex<F>>,
     scratch_2d: Vec<Complex<F>>,
+    fft2d_row_plan_scratch: Vec<Complex<F>>,
+    fft2d_col_plan_scratch: Vec<Complex<F>>,
+    ifft2d_row_plan_scratch: Vec<Complex<F>>,
+    ifft2d_col_plan_scratch: Vec<Complex<F>>,
+    fft1d_plan_scratch: Vec<Complex<F>>,
+    ifft1d_plan_scratch: Vec<Complex<F>>,
 }
 
 impl<F: Bm3dFloat> WorkerBuffers<F> {
-    fn new(max_matches: usize, patch_size: usize) -> Self {
+    #[allow(clippy::too_many_arguments)]
+    fn new(
+        max_matches: usize,
+        patch_size: usize,
+        fft2d_row_plan_scratch_len: usize,
+        fft2d_col_plan_scratch_len: usize,
+        ifft2d_row_plan_scratch_len: usize,
+        ifft2d_col_plan_scratch_len: usize,
+        fft1d_plan_scratch_len: usize,
+        ifft1d_plan_scratch_len: usize,
+    ) -> Self {
         let patch_dim = (patch_size, patch_size);
         Self {
             matches: Vec::with_capacity(max_matches.max(1)),
@@ -383,6 +401,24 @@ impl<F: Bm3dFloat> WorkerBuffers<F> {
             coeff_buffer: vec![F::zero(); patch_size * patch_size],
             scratch_1d: vec![Complex::new(F::zero(), F::zero()); max_matches.max(1)],
             scratch_2d: vec![Complex::new(F::zero(), F::zero()); patch_size.max(1)],
+            fft2d_row_plan_scratch: vec![
+                Complex::new(F::zero(), F::zero());
+                fft2d_row_plan_scratch_len
+            ],
+            fft2d_col_plan_scratch: vec![
+                Complex::new(F::zero(), F::zero());
+                fft2d_col_plan_scratch_len
+            ],
+            ifft2d_row_plan_scratch: vec![
+                Complex::new(F::zero(), F::zero());
+                ifft2d_row_plan_scratch_len
+            ],
+            ifft2d_col_plan_scratch: vec![
+                Complex::new(F::zero(), F::zero());
+                ifft2d_col_plan_scratch_len
+            ],
+            fft1d_plan_scratch: vec![Complex::new(F::zero(), F::zero()); fft1d_plan_scratch_len],
+            ifft1d_plan_scratch: vec![Complex::new(F::zero(), F::zero()); ifft1d_plan_scratch_len],
         }
     }
 }
@@ -714,6 +750,20 @@ pub fn run_bm3d_kernel<F: Bm3dFloat>(
     };
     let fft_1d_plans_ref = &plans.fft_1d_plans;
     let ifft_1d_plans_ref = &plans.ifft_1d_plans;
+    let fft2d_row_plan_scratch_len = fft_2d_row_ref.get_inplace_scratch_len();
+    let fft2d_col_plan_scratch_len = fft_2d_col_ref.get_inplace_scratch_len();
+    let ifft2d_row_plan_scratch_len = ifft_2d_row_ref.get_inplace_scratch_len();
+    let ifft2d_col_plan_scratch_len = ifft_2d_col_ref.get_inplace_scratch_len();
+    let fft1d_plan_scratch_len = fft_1d_plans_ref
+        .iter()
+        .map(|p| p.get_inplace_scratch_len())
+        .max()
+        .unwrap_or(0);
+    let ifft1d_plan_scratch_len = ifft_1d_plans_ref
+        .iter()
+        .map(|p| p.get_inplace_scratch_len())
+        .max()
+        .unwrap_or(0);
 
     let wiener_eps = F::from_f64_c(WIENER_EPSILON);
     let max_wiener_weight = F::from_f64_c(MAX_WIENER_WEIGHT);
@@ -763,7 +813,16 @@ pub fn run_bm3d_kernel<F: Bm3dFloat>(
                 let chunk_end = (chunk_start + chunk_len).min(total_refs);
                 let mut tile_accumulators: TileAccumulatorVec<F> =
                     (0..tile_count).map(|_| None).collect();
-                let mut worker = WorkerBuffers::<F>::new(max_matches, patch_size);
+                let mut worker = WorkerBuffers::<F>::new(
+                    max_matches,
+                    patch_size,
+                    fft2d_row_plan_scratch_len,
+                    fft2d_col_plan_scratch_len,
+                    ifft2d_row_plan_scratch_len,
+                    ifft2d_col_plan_scratch_len,
+                    fft1d_plan_scratch_len,
+                    ifft1d_plan_scratch_len,
+                );
                 let mut noisy_transform_cache =
                     PatchTransformCache::<F>::new(patch_size, transform_cache_capacity);
                 let mut pilot_transform_cache = if mode == Bm3dMode::Wiener {
@@ -820,6 +879,8 @@ pub fn run_bm3d_kernel<F: Bm3dFloat>(
                             &mut noisy_transform_cache,
                             &mut worker.complex_work,
                             &mut worker.scratch_2d,
+                            &mut worker.fft2d_row_plan_scratch,
+                            &mut worker.fft2d_col_plan_scratch,
                             &mut worker.g_noisy_c,
                         );
                         if let Some(pilot_cache) = pilot_transform_cache.as_mut() {
@@ -833,6 +894,8 @@ pub fn run_bm3d_kernel<F: Bm3dFloat>(
                                 pilot_cache,
                                 &mut worker.complex_work,
                                 &mut worker.scratch_2d,
+                                &mut worker.fft2d_row_plan_scratch,
+                                &mut worker.fft2d_col_plan_scratch,
                                 &mut worker.g_pilot_c,
                             );
                         }
@@ -847,6 +910,7 @@ pub fn run_bm3d_kernel<F: Bm3dFloat>(
                             patch_size,
                             fft_k_plan,
                             &mut worker.scratch_1d[..k],
+                            &mut worker.fft1d_plan_scratch,
                         );
                         if mode == Bm3dMode::Wiener {
                             apply_forward_1d_transform(
@@ -855,6 +919,7 @@ pub fn run_bm3d_kernel<F: Bm3dFloat>(
                                 patch_size,
                                 fft_k_plan,
                                 &mut worker.scratch_1d[..k],
+                                &mut worker.fft1d_plan_scratch,
                             );
                         }
                     });
@@ -993,6 +1058,7 @@ pub fn run_bm3d_kernel<F: Bm3dFloat>(
                             patch_size,
                             ifft_k_plan,
                             &mut worker.scratch_1d[..k],
+                            &mut worker.ifft1d_plan_scratch,
                         );
                     });
 
@@ -1006,13 +1072,15 @@ pub fn run_bm3d_kernel<F: Bm3dFloat>(
                                     &mut worker.spatial_patch,
                                 );
                             } else {
-                                transforms::ifft2d_into(
+                                transforms::ifft2d_into_with_plan_scratch(
                                     complex_slice,
                                     ifft_2d_row_ref,
                                     ifft_2d_col_ref,
                                     &mut worker.complex_work,
                                     &mut worker.spatial_patch,
                                     &mut worker.scratch_2d,
+                                    &mut worker.ifft2d_row_plan_scratch,
+                                    &mut worker.ifft2d_col_plan_scratch,
                                 );
                             }
                         });
