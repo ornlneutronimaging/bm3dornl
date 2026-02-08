@@ -34,7 +34,7 @@ const RAYON_MIN_CHUNK_LEN: usize = 64;
 
 /// Aggregation tile size for memory-bounded partial accumulation.
 /// Larger tiles reduce hashmap overhead; smaller tiles reduce per-worker memory.
-const AGGREGATION_TILE_SIZE: usize = 192;
+const AGGREGATION_TILE_SIZE: usize = 128;
 const AGGREGATION_TILE_SIZE_ENV: &str = "BM3D_AGGREGATION_TILE_SIZE";
 const TRANSFORM_CACHE_CAPACITY: usize = 1_024;
 const TRANSFORM_CACHE_CAPACITY_ENV: &str = "BM3D_TRANSFORM_CACHE_CAPACITY";
