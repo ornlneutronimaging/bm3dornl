@@ -61,6 +61,73 @@ fn compute_squared_distance_at<F: Bm3dFloat>(
     sum_sq
 }
 
+#[inline(always)]
+fn compute_squared_distance_at_strided<F: Bm3dFloat>(
+    image_data: &[F],
+    image_cols: usize,
+    ref_r: usize,
+    ref_c: usize,
+    cand_r: usize,
+    cand_c: usize,
+    ph: usize,
+    pw: usize,
+    threshold: F,
+) -> F {
+    let mut sum_sq = F::zero();
+    for dr in 0..ph {
+        let ref_base = (ref_r + dr) * image_cols + ref_c;
+        let cand_base = (cand_r + dr) * image_cols + cand_c;
+        for dc in 0..pw {
+            let diff = image_data[ref_base + dc] - image_data[cand_base + dc];
+            sum_sq += diff * diff;
+        }
+        if sum_sq >= threshold {
+            return sum_sq;
+        }
+    }
+    sum_sq
+}
+
+#[inline(always)]
+fn compute_squared_distance_at_strided_8x8<F: Bm3dFloat>(
+    image_data: &[F],
+    image_cols: usize,
+    ref_r: usize,
+    ref_c: usize,
+    cand_r: usize,
+    cand_c: usize,
+    threshold: F,
+) -> F {
+    let mut sum_sq = F::zero();
+    for dr in 0..8 {
+        let ref_base = (ref_r + dr) * image_cols + ref_c;
+        let cand_base = (cand_r + dr) * image_cols + cand_c;
+
+        let d0 = image_data[ref_base] - image_data[cand_base];
+        let d1 = image_data[ref_base + 1] - image_data[cand_base + 1];
+        let d2 = image_data[ref_base + 2] - image_data[cand_base + 2];
+        let d3 = image_data[ref_base + 3] - image_data[cand_base + 3];
+        let d4 = image_data[ref_base + 4] - image_data[cand_base + 4];
+        let d5 = image_data[ref_base + 5] - image_data[cand_base + 5];
+        let d6 = image_data[ref_base + 6] - image_data[cand_base + 6];
+        let d7 = image_data[ref_base + 7] - image_data[cand_base + 7];
+
+        sum_sq += d0 * d0;
+        sum_sq += d1 * d1;
+        sum_sq += d2 * d2;
+        sum_sq += d3 * d3;
+        sum_sq += d4 * d4;
+        sum_sq += d5 * d5;
+        sum_sq += d6 * d6;
+        sum_sq += d7 * d7;
+
+        if sum_sq >= threshold {
+            return sum_sq;
+        }
+    }
+    sum_sq
+}
+
 /// Compute Integral Image (sum only).
 ///
 /// Returns an array with shape `(h + 1, w + 1)`.
@@ -116,6 +183,23 @@ fn get_patch_sum<F: Bm3dFloat>(sum_img: &Array2<F>, r: usize, c: usize, h: usize
     sum_img[[r2, c2]] - sum_img[[r1, c2]] - sum_img[[r2, c1]] + sum_img[[r1, c1]]
 }
 
+#[inline(always)]
+fn get_patch_sum_strided<F: Bm3dFloat>(
+    sum_data: &[F],
+    sum_stride: usize,
+    r: usize,
+    c: usize,
+    h: usize,
+    w: usize,
+) -> F {
+    let r1 = r;
+    let c1 = c;
+    let r2 = r + h;
+    let c2 = c + w;
+    sum_data[r2 * sum_stride + c2] - sum_data[r1 * sum_stride + c2] - sum_data[r2 * sum_stride + c1]
+        + sum_data[r1 * sum_stride + c1]
+}
+
 /// Find similar patches within a search window using Integral Image pre-screening (sum bound).
 pub fn find_similar_patches_in_place_sum<F: Bm3dFloat>(
     image: ArrayView2<F>,
@@ -149,42 +233,58 @@ pub fn find_similar_patches_in_place_sum<F: Bm3dFloat>(
         F::zero()
     };
 
-    // Pre-calculate reference patch sum.
-    let ref_sum = get_patch_sum(integral_sum, ref_r, ref_c, ph, pw);
     let inv_n = F::one() / F::usize_as(ph * pw);
+    if let (Some(image_data), Some(sum_data)) = (
+        image.as_slice_memory_order(),
+        integral_sum.as_slice_memory_order(),
+    ) {
+        let sum_stride = integral_sum.dim().1;
+        let image_cols = w;
+        let ref_sum = get_patch_sum_strided(sum_data, sum_stride, ref_r, ref_c, ph, pw);
+        for r in (search_r_start..=search_r_end).step_by(step) {
+            for c in (search_c_start..=search_c_end).step_by(step) {
+                if r == ref_r && c == ref_c {
+                    continue;
+                }
 
-    for r in (search_r_start..=search_r_end).step_by(step) {
-        for c in (search_c_start..=search_c_end).step_by(step) {
-            if r == ref_r && c == ref_c {
-                continue;
-            }
+                let cand_sum = get_patch_sum_strided(sum_data, sum_stride, r, c, ph, pw);
+                let check_threshold = threshold;
 
-            // 1. Pre-Screening (Bounds Check)
-            // Bound 1: Mean Difference: (sum1 - sum2)^2 / N
-            // Bound 2: Norm Difference: (norm1 - norm2)^2
-            // If Max(Bound) > threshold, skip.
+                let diff_sum = cand_sum - ref_sum;
+                let lb_mean = (diff_sum * diff_sum) * inv_n;
+                if lb_mean >= check_threshold {
+                    continue;
+                }
 
-            let cand_sum = get_patch_sum(integral_sum, r, c, ph, pw);
-            let check_threshold = threshold;
+                let dist = if ph == 8 && pw == 8 {
+                    compute_squared_distance_at_strided_8x8(
+                        image_data, image_cols, ref_r, ref_c, r, c, threshold,
+                    )
+                } else {
+                    compute_squared_distance_at_strided(
+                        image_data, image_cols, ref_r, ref_c, r, c, ph, pw, threshold,
+                    )
+                };
 
-            // Mean Bound
-            let diff_sum = cand_sum - ref_sum;
-            let lb_mean = (diff_sum * diff_sum) * inv_n;
-            if lb_mean >= check_threshold {
-                continue;
-            }
-
-            // 2. Full Distance Calculation
-            let dist = compute_squared_distance_at(image, ref_r, ref_c, r, c, ph, pw, threshold);
-
-            if dist < threshold {
-                if out_matches.len() < max_matches {
-                    out_matches.push(PatchMatch {
-                        row: r,
-                        col: c,
-                        distance: dist,
-                    });
-                    if out_matches.len() == max_matches {
+                if dist < threshold {
+                    if out_matches.len() < max_matches {
+                        out_matches.push(PatchMatch {
+                            row: r,
+                            col: c,
+                            distance: dist,
+                        });
+                        if out_matches.len() == max_matches {
+                            let mut worst_idx = 0usize;
+                            let mut worst_dist = out_matches[0].distance;
+                            for (idx, m) in out_matches.iter().enumerate().skip(1) {
+                                if m.distance > worst_dist {
+                                    worst_idx = idx;
+                                    worst_dist = m.distance;
+                                }
+                            }
+                            threshold = out_matches[worst_idx].distance;
+                        }
+                    } else {
                         let mut worst_idx = 0usize;
                         let mut worst_dist = out_matches[0].distance;
                         for (idx, m) in out_matches.iter().enumerate().skip(1) {
@@ -193,35 +293,89 @@ pub fn find_similar_patches_in_place_sum<F: Bm3dFloat>(
                                 worst_dist = m.distance;
                             }
                         }
-                        threshold = out_matches[worst_idx].distance;
-                    }
-                } else {
-                    let mut worst_idx = 0usize;
-                    let mut worst_dist = out_matches[0].distance;
-                    for (idx, m) in out_matches.iter().enumerate().skip(1) {
-                        if m.distance > worst_dist {
-                            worst_idx = idx;
-                            worst_dist = m.distance;
+                        out_matches[worst_idx] = PatchMatch {
+                            row: r,
+                            col: c,
+                            distance: dist,
+                        };
+                        let mut next_worst = out_matches[0].distance;
+                        for m in out_matches.iter().skip(1) {
+                            if m.distance > next_worst {
+                                next_worst = m.distance;
+                            }
                         }
+                        threshold = next_worst;
                     }
-                    out_matches[worst_idx] = PatchMatch {
-                        row: r,
-                        col: c,
-                        distance: dist,
-                    };
-                    let mut next_worst = out_matches[0].distance;
-                    for m in out_matches.iter().skip(1) {
-                        if m.distance > next_worst {
-                            next_worst = m.distance;
+                }
+            }
+        }
+    } else {
+        // Fallback for non-contiguous views.
+        let ref_sum = get_patch_sum(integral_sum, ref_r, ref_c, ph, pw);
+        for r in (search_r_start..=search_r_end).step_by(step) {
+            for c in (search_c_start..=search_c_end).step_by(step) {
+                if r == ref_r && c == ref_c {
+                    continue;
+                }
+
+                let cand_sum = get_patch_sum(integral_sum, r, c, ph, pw);
+                let check_threshold = threshold;
+
+                let diff_sum = cand_sum - ref_sum;
+                let lb_mean = (diff_sum * diff_sum) * inv_n;
+                if lb_mean >= check_threshold {
+                    continue;
+                }
+
+                let dist =
+                    compute_squared_distance_at(image, ref_r, ref_c, r, c, ph, pw, threshold);
+
+                if dist < threshold {
+                    if out_matches.len() < max_matches {
+                        out_matches.push(PatchMatch {
+                            row: r,
+                            col: c,
+                            distance: dist,
+                        });
+                        if out_matches.len() == max_matches {
+                            let mut worst_idx = 0usize;
+                            let mut worst_dist = out_matches[0].distance;
+                            for (idx, m) in out_matches.iter().enumerate().skip(1) {
+                                if m.distance > worst_dist {
+                                    worst_idx = idx;
+                                    worst_dist = m.distance;
+                                }
+                            }
+                            threshold = out_matches[worst_idx].distance;
                         }
+                    } else {
+                        let mut worst_idx = 0usize;
+                        let mut worst_dist = out_matches[0].distance;
+                        for (idx, m) in out_matches.iter().enumerate().skip(1) {
+                            if m.distance > worst_dist {
+                                worst_idx = idx;
+                                worst_dist = m.distance;
+                            }
+                        }
+                        out_matches[worst_idx] = PatchMatch {
+                            row: r,
+                            col: c,
+                            distance: dist,
+                        };
+                        let mut next_worst = out_matches[0].distance;
+                        for m in out_matches.iter().skip(1) {
+                            if m.distance > next_worst {
+                                next_worst = m.distance;
+                            }
+                        }
+                        threshold = next_worst;
                     }
-                    threshold = next_worst;
                 }
             }
         }
     }
 
-    out_matches.sort_by(|a, b| {
+    out_matches.sort_unstable_by(|a, b| {
         a.distance
             .partial_cmp(&b.distance)
             .unwrap_or(Ordering::Equal)
