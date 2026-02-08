@@ -697,6 +697,22 @@ pub fn multiscale_bm3d_streak_removal<F: Bm3dFloat>(
     sinogram: ArrayView2<F>,
     config: &MultiscaleConfig<F>,
 ) -> Result<Array2<F>, String> {
+    let plans = crate::pipeline::Bm3dPlans::new(
+        config.bm3d_config.patch_size,
+        config.bm3d_config.max_matches,
+    );
+    multiscale_bm3d_streak_removal_with_plans(sinogram, config, &plans)
+}
+
+/// Multi-scale BM3D streak removal for 2D sinograms using precomputed BM3D plans.
+///
+/// Reusing `plans` across many calls (for example, one plan set per volume) avoids
+/// repeated FFT planning overhead and improves throughput for stack processing.
+pub fn multiscale_bm3d_streak_removal_with_plans<F: Bm3dFloat>(
+    sinogram: ArrayView2<F>,
+    config: &MultiscaleConfig<F>,
+    plans: &crate::pipeline::Bm3dPlans<F>,
+) -> Result<Array2<F>, String> {
     // Validate configuration
     config.validate()?;
 
@@ -791,14 +807,6 @@ pub fn multiscale_bm3d_streak_removal<F: Bm3dFloat>(
     // Normalization is ONLY applied immediately before/after BM3D call.
     let mut denoised: Option<Array2<F>> = None;
 
-    // Create FFT plans once used for all scales
-    // Since patch_size and max_matches don't change across scales, we can reuse this.
-    // This removes the ~30-40ms overhead per scale.
-    let plans = crate::pipeline::Bm3dPlans::new(
-        config.bm3d_config.patch_size,
-        config.bm3d_config.max_matches,
-    );
-
     for scale in (0..=num_scales).rev() {
         // Get working image at this scale (in original scaled space)
         let img = pyramid_work[scale].clone();
@@ -878,7 +886,7 @@ pub fn multiscale_bm3d_streak_removal<F: Bm3dFloat>(
             img_normalized.view(),
             RingRemovalMode::Streak,
             &scale_config,
-            &plans,
+            plans,
         )?;
 
         // === DENORMALIZE immediately after BM3D ===

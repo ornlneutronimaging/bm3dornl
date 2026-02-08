@@ -24,7 +24,9 @@ pub mod utils;
 // Re-export commonly used types at the crate root
 pub use block_matching::PatchMatch;
 pub use float_trait::Bm3dFloat;
-pub use multiscale::{multiscale_bm3d_streak_removal, MultiscaleConfig};
+pub use multiscale::{
+    multiscale_bm3d_streak_removal, multiscale_bm3d_streak_removal_with_plans, MultiscaleConfig,
+};
 pub use noise_estimation::estimate_noise_sigma;
 pub use orchestration::{bm3d_ring_artifact_removal, Bm3dConfig, RingRemovalMode};
 pub use pipeline::{

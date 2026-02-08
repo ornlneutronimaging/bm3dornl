@@ -19,7 +19,7 @@ const DB3_DEC_HI: [f64; 6] = [
 ///
 /// For very wide sinograms, sampling evenly spaced columns preserves
 /// robust scale estimation while reducing runtime significantly.
-const DEFAULT_SIGMA_EST_MAX_COLUMNS: usize = 2048;
+const DEFAULT_SIGMA_EST_MAX_COLUMNS: usize = 1024;
 const SIGMA_EST_MAX_COLUMNS_ENV: &str = "BM3D_SIGMA_EST_MAX_COLUMNS";
 
 fn resolve_sigma_est_max_columns() -> Option<usize> {

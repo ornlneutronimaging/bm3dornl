@@ -651,15 +651,19 @@ pub fn run_bm3d_kernel<F: Bm3dFloat>(
     // Pre-compute Integral Images for Block Matching acceleration
     let integral_sum = block_matching::compute_integral_sum_image(input_pilot);
 
-    let mut ref_coords = Vec::new();
     let r_end = rows.saturating_sub(patch_size) + 1;
     let c_end = cols.saturating_sub(patch_size) + 1;
-
-    for r in (0..r_end).step_by(step_size) {
-        for c in (0..c_end).step_by(step_size) {
-            ref_coords.push((r, c));
-        }
-    }
+    let ref_rows = if r_end == 0 {
+        0
+    } else {
+        (r_end - 1) / step_size + 1
+    };
+    let ref_cols = if c_end == 0 {
+        0
+    } else {
+        (c_end - 1) / step_size + 1
+    };
+    let total_refs = ref_rows * ref_cols;
 
     let fft_2d_row_ref = &plans.fft_2d_row;
     let fft_2d_col_ref = &plans.fft_2d_col;
@@ -704,20 +708,20 @@ pub fn run_bm3d_kernel<F: Bm3dFloat>(
         }};
     }
 
-    let final_result = if ref_coords.is_empty() {
+    let final_result = if total_refs == 0 {
         None
     } else {
         // Use one coordinate chunk per Rayon worker to preserve throughput
         // while keeping partial aggregation memory tile-bounded.
-        let partial_count = ref_coords.len().min(rayon::current_num_threads().max(1));
-        let chunk_len = ref_coords
-            .len()
-            .div_ceil(partial_count)
-            .max(RAYON_MIN_CHUNK_LEN);
+        let partial_count = total_refs.min(rayon::current_num_threads().max(1));
+        let chunk_len = total_refs.div_ceil(partial_count).max(RAYON_MIN_CHUNK_LEN);
+        let chunk_count = total_refs.div_ceil(chunk_len);
 
-        ref_coords
-            .par_chunks(chunk_len)
-            .map(|coord_chunk| {
+        (0..chunk_count)
+            .into_par_iter()
+            .map(|chunk_idx| {
+                let chunk_start = chunk_idx * chunk_len;
+                let chunk_end = (chunk_start + chunk_len).min(total_refs);
                 let mut tile_accumulators: TileAccumulatorVec<F> =
                     (0..tile_count).map(|_| None).collect();
                 let mut worker = WorkerBuffers::<F>::new(max_matches, patch_size);
@@ -733,7 +737,9 @@ pub fn run_bm3d_kernel<F: Bm3dFloat>(
                 };
                 let mut stats = KernelStageStats::default();
 
-                for &(ref_r, ref_c) in coord_chunk {
+                for ref_index in chunk_start..chunk_end {
+                    let ref_r = (ref_index / ref_cols) * step_size;
+                    let ref_c = (ref_index % ref_cols) * step_size;
                     // 1. Block Matching
                     timed!(profile_timing, stats.block_matching_ns, {
                         block_matching::find_similar_patches_in_place_sum(
@@ -1059,7 +1065,7 @@ pub fn run_bm3d_kernel<F: Bm3dFloat>(
             mode,
             rows,
             cols,
-            ref_coords.len(),
+            total_refs,
             stage_stats.groups,
             stage_stats.matched_patches,
             transform_cache_capacity,
