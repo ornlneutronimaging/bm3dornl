@@ -429,6 +429,126 @@ pub fn ifft2d_into_with_plan_scratch<F: Bm3dFloat>(
     }
 }
 
+/// Compute 2D inverse FFT in-place on complex input, writing real output.
+///
+/// Compared to `ifft2d_into_with_plan_scratch`, this avoids copying input into
+/// a separate complex workspace. The complex input is overwritten.
+pub fn ifft2d_inplace_to_real_with_plan_scratch<F: Bm3dFloat>(
+    mut input_output: ArrayViewMut2<Complex<F>>,
+    ifft_row_plan: &Arc<dyn Fft<F>>,
+    ifft_col_plan: &Arc<dyn Fft<F>>,
+    output: &mut Array2<F>,
+    scratch: &mut [Complex<F>],
+    row_fft_scratch: &mut [Complex<F>],
+    col_fft_scratch: &mut [Complex<F>],
+) {
+    let (rows, cols) = input_output.dim();
+    debug_assert_eq!(output.dim(), (rows, cols));
+    debug_assert!(scratch.len() >= rows.max(cols));
+    debug_assert!(row_fft_scratch.len() >= ifft_row_plan.get_inplace_scratch_len());
+    debug_assert!(col_fft_scratch.len() >= ifft_col_plan.get_inplace_scratch_len());
+
+    let col_scratch_len = ifft_col_plan.get_inplace_scratch_len();
+    let row_scratch_len = ifft_row_plan.get_inplace_scratch_len();
+
+    if let (Some(data), Some(output_data)) = (
+        input_output.as_slice_memory_order_mut(),
+        output.as_slice_memory_order_mut(),
+    ) {
+        // 1. Transform columns in-place in complex input/output buffer.
+        if col_scratch_len == 0 {
+            for c in 0..cols {
+                for r in 0..rows {
+                    scratch[r] = data[r * cols + c];
+                }
+                ifft_col_plan.process_with_scratch(&mut scratch[..rows], &mut []);
+                for r in 0..rows {
+                    data[r * cols + c] = scratch[r];
+                }
+            }
+        } else {
+            for c in 0..cols {
+                for r in 0..rows {
+                    scratch[r] = data[r * cols + c];
+                }
+                ifft_col_plan.process_with_scratch(&mut scratch[..rows], col_fft_scratch);
+                for r in 0..rows {
+                    data[r * cols + c] = scratch[r];
+                }
+            }
+        }
+
+        // 2. Transform rows into real output.
+        let norm_factor = F::one() / F::usize_as(rows * cols);
+        if row_scratch_len == 0 {
+            for r in 0..rows {
+                let row_base = r * cols;
+                let row = &mut data[row_base..row_base + cols];
+                ifft_row_plan.process_with_scratch(row, &mut []);
+                for c in 0..cols {
+                    output_data[row_base + c] = row[c].re * norm_factor;
+                }
+            }
+        } else {
+            for r in 0..rows {
+                let row_base = r * cols;
+                let row = &mut data[row_base..row_base + cols];
+                ifft_row_plan.process_with_scratch(row, row_fft_scratch);
+                for c in 0..cols {
+                    output_data[row_base + c] = row[c].re * norm_factor;
+                }
+            }
+        }
+    } else {
+        // 1. Transform columns in-place in complex input/output buffer.
+        if col_scratch_len == 0 {
+            for c in 0..cols {
+                for r in 0..rows {
+                    scratch[r] = input_output[[r, c]];
+                }
+                ifft_col_plan.process_with_scratch(&mut scratch[..rows], &mut []);
+                for r in 0..rows {
+                    input_output[[r, c]] = scratch[r];
+                }
+            }
+        } else {
+            for c in 0..cols {
+                for r in 0..rows {
+                    scratch[r] = input_output[[r, c]];
+                }
+                ifft_col_plan.process_with_scratch(&mut scratch[..rows], col_fft_scratch);
+                for r in 0..rows {
+                    input_output[[r, c]] = scratch[r];
+                }
+            }
+        }
+
+        // 2. Transform rows into real output.
+        let norm_factor = F::one() / F::usize_as(rows * cols);
+        if row_scratch_len == 0 {
+            for r in 0..rows {
+                for c in 0..cols {
+                    scratch[c] = input_output[[r, c]];
+                }
+                ifft_row_plan.process_with_scratch(&mut scratch[..cols], &mut []);
+                for c in 0..cols {
+                    output[[r, c]] = scratch[c].re * norm_factor;
+                }
+            }
+        } else {
+            for r in 0..rows {
+                for c in 0..cols {
+                    scratch[c] = input_output[[r, c]];
+                }
+                ifft_row_plan.process_with_scratch(&mut scratch[..cols], row_fft_scratch);
+                for c in 0..cols {
+                    output[[r, c]] = scratch[c].re * norm_factor;
+                }
+            }
+        }
+    }
+}
+
 /// In-place Fast Walsh-Hadamard Transform (Natural Order) for 8 elements.
 /// Uses a butterfly network with only additions and subtractions.
 /// Complexity: 8 log2(8) = 24 ops.
@@ -1291,6 +1411,41 @@ mod tests {
         assert!(
             arrays_approx_equal_f32(&expected, &output, 1e-6),
             "ifft2d_into should match ifft2d"
+        );
+    }
+
+    #[test]
+    fn test_ifft2d_inplace_to_real_matches_ifft2d() {
+        let input = random_matrix_f32(8, 8, 987654);
+        let mut planner = FftPlanner::new();
+        let fft_row = planner.plan_fft_forward(8);
+        let fft_col = planner.plan_fft_forward(8);
+        let ifft_row = planner.plan_fft_inverse(8);
+        let ifft_col = planner.plan_fft_inverse(8);
+
+        let mut freq = fft2d(input.view(), &fft_row, &fft_col);
+        let expected = ifft2d(&freq, &ifft_row, &ifft_col);
+
+        let mut output = Array2::<f32>::zeros((8, 8));
+        let mut scratch = vec![Complex::new(0.0f32, 0.0f32); 8];
+        let row_scratch_len = ifft_row.get_inplace_scratch_len();
+        let col_scratch_len = ifft_col.get_inplace_scratch_len();
+        let mut row_fft_scratch = vec![Complex::new(0.0f32, 0.0f32); row_scratch_len];
+        let mut col_fft_scratch = vec![Complex::new(0.0f32, 0.0f32); col_scratch_len];
+
+        ifft2d_inplace_to_real_with_plan_scratch(
+            freq.view_mut(),
+            &ifft_row,
+            &ifft_col,
+            &mut output,
+            &mut scratch,
+            &mut row_fft_scratch,
+            &mut col_fft_scratch,
+        );
+
+        assert!(
+            arrays_approx_equal_f32(&expected, &output, 1e-6),
+            "ifft2d_inplace_to_real_with_plan_scratch should match ifft2d"
         );
     }
 

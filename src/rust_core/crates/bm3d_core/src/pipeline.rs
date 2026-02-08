@@ -1095,20 +1095,20 @@ pub fn run_bm3d_kernel<F: Bm3dFloat>(
                     });
 
                     // Inverse 2D transforms and aggregation
-                    for (i, matched) in worker.matches.iter().enumerate().take(k) {
-                        let complex_slice = worker.g_noisy_c.slice(s![i, .., ..]);
+                    for i in 0..k {
+                        let matched = &worker.matches[i];
+                        let complex_slice = worker.g_noisy_c.slice_mut(s![i, .., ..]);
                         timed!(profile_timing, stats.inverse_2d_ns, {
                             if use_hadamard {
                                 transforms::wht2d_8x8_inverse_into_view(
-                                    complex_slice,
+                                    complex_slice.view(),
                                     &mut worker.spatial_patch,
                                 );
                             } else {
-                                transforms::ifft2d_into_with_plan_scratch(
+                                transforms::ifft2d_inplace_to_real_with_plan_scratch(
                                     complex_slice,
                                     ifft_2d_row_ref,
                                     ifft_2d_col_ref,
-                                    &mut worker.complex_work,
                                     &mut worker.spatial_patch,
                                     &mut worker.scratch_2d,
                                     &mut worker.ifft2d_row_plan_scratch,
