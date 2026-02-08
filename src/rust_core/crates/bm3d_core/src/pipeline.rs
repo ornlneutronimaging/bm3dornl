@@ -1297,32 +1297,27 @@ pub fn run_bm3d_step_stack<F: Bm3dFloat>(
         ));
     }
 
-    let results: Vec<Array2<F>> = (0..n)
-        .into_par_iter()
-        .map(|i| {
-            let noisy_slice = input_noisy.index_axis(Axis(0), i);
-            let pilot_slice = input_pilot.index_axis(Axis(0), i);
-            let map_slice = if sigma_map.dim() == (1, 1, 1) {
-                sigma_map.index_axis(Axis(0), 0) // Dummy view
-            } else {
-                sigma_map.index_axis(Axis(0), i)
-            };
-
-            run_bm3d_kernel(
-                noisy_slice,
-                pilot_slice,
-                mode,
-                sigma_psd,
-                map_slice,
-                config,
-                plans,
-            )
-        })
-        .collect();
-
-    // Consolidate
     let mut output = Array3::<F>::zeros((n, rows, cols));
-    for (i, res) in results.into_iter().enumerate() {
+    // Process one slice at a time: avoids nested Rayon scheduling (stack + kernel)
+    // and avoids materializing an intermediate Vec<Array2<_>> of all slice outputs.
+    for i in 0..n {
+        let noisy_slice = input_noisy.index_axis(Axis(0), i);
+        let pilot_slice = input_pilot.index_axis(Axis(0), i);
+        let map_slice = if sigma_map.dim() == (1, 1, 1) {
+            sigma_map.index_axis(Axis(0), 0) // Dummy view
+        } else {
+            sigma_map.index_axis(Axis(0), i)
+        };
+
+        let res = run_bm3d_kernel(
+            noisy_slice,
+            pilot_slice,
+            mode,
+            sigma_psd,
+            map_slice,
+            config,
+            plans,
+        );
         output.slice_mut(s![i, .., ..]).assign(&res);
     }
     Ok(output)
