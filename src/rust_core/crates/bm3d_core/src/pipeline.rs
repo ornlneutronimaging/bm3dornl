@@ -2,9 +2,9 @@
 
 use ndarray::{s, Array2, Array3, ArrayView2, ArrayView3, Axis};
 use rayon::prelude::*;
+use rustc_hash::FxHashMap;
 use rustfft::num_complex::Complex;
 use rustfft::Fft;
-use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
@@ -125,10 +125,17 @@ struct Fft2dRefs<'a, F: Bm3dFloat> {
     col: &'a Arc<dyn Fft<F>>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct PatchCoord {
     row: usize,
     col: usize,
+}
+
+#[inline(always)]
+fn patch_coord_key(coord: PatchCoord) -> u64 {
+    debug_assert!(coord.row <= u32::MAX as usize);
+    debug_assert!(coord.col <= u32::MAX as usize);
+    ((coord.row as u64) << 32) | (coord.col as u64)
 }
 
 struct PatchTransformCache<F: Bm3dFloat> {
@@ -136,9 +143,9 @@ struct PatchTransformCache<F: Bm3dFloat> {
     patch_area: usize,
     capacity: usize,
     next_slot: usize,
-    keys: Vec<Option<PatchCoord>>,
+    keys: Vec<Option<u64>>,
     values: Vec<Complex<F>>,
-    indices: HashMap<PatchCoord, usize>,
+    indices: FxHashMap<u64, usize>,
     hits: u64,
     misses: u64,
     evictions: u64,
@@ -154,7 +161,10 @@ impl<F: Bm3dFloat> PatchTransformCache<F> {
             next_slot: 0,
             keys: vec![None; capacity],
             values: vec![Complex::new(F::zero(), F::zero()); patch_area * capacity],
-            indices: HashMap::with_capacity(capacity.saturating_mul(2)),
+            indices: FxHashMap::with_capacity_and_hasher(
+                capacity.saturating_mul(2),
+                Default::default(),
+            ),
             hits: 0,
             misses: 0,
             evictions: 0,
@@ -175,7 +185,8 @@ impl<F: Bm3dFloat> PatchTransformCache<F> {
         scratch: &mut [Complex<F>],
         out: &mut [Complex<F>],
     ) {
-        if let Some(&slot) = self.indices.get(&coord) {
+        let key = patch_coord_key(coord);
+        if let Some(&slot) = self.indices.get(&key) {
             self.hits += 1;
             let base = slot * self.patch_area;
             out.copy_from_slice(&self.values[base..base + self.patch_area]);
@@ -211,8 +222,8 @@ impl<F: Bm3dFloat> PatchTransformCache<F> {
             self.indices.remove(&old_key);
             self.evictions += 1;
         }
-        self.keys[slot] = Some(coord);
-        self.indices.insert(coord, slot);
+        self.keys[slot] = Some(key);
+        self.indices.insert(key, slot);
         let base = slot * self.patch_area;
         self.values[base..base + self.patch_area].copy_from_slice(out);
         self.next_slot = (self.next_slot + 1) % self.capacity;

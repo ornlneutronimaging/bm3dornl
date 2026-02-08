@@ -245,6 +245,12 @@ fn process_volume_worker(
 
     // Allocate output with same shape as input
     let mut output = Array3::<f32>::zeros(input.raw_dim());
+    let mut slice_buffer = if num_slices > 0 {
+        let first_slice = input.index_axis(Axis(slice_axis), 0);
+        Array2::<f32>::zeros(first_slice.dim())
+    } else {
+        Array2::<f32>::zeros((0, 0))
+    };
 
     // Process slice by slice along the specified axis
     for slice_idx in 0..num_slices {
@@ -257,8 +263,8 @@ fn process_volume_worker(
         // Extract 2D slice along the slice_axis
         let slice_2d = input.index_axis(Axis(slice_axis), slice_idx);
 
-        // Convert to owned Array2 for processing
-        let slice_owned: Array2<f32> = slice_2d.to_owned();
+        slice_buffer.assign(&slice_2d);
+        let slice_view = slice_buffer.view();
 
         // Process slice
         let result = match mode {
@@ -266,49 +272,45 @@ fn process_volume_worker(
             RingRemovalMode::Generic => {
                 if let Some(plans) = shared_plans.as_ref() {
                     bm3d_ring_artifact_removal_with_plans(
-                        slice_owned.view(),
+                        slice_view,
                         mode,
                         &config.bm3d_config,
                         plans,
                     )
                 } else {
-                    bm3d_ring_artifact_removal(slice_owned.view(), mode, &config.bm3d_config)
+                    bm3d_ring_artifact_removal(slice_view, mode, &config.bm3d_config)
                 }
             }
             // Streak mode can use Multiscale if enabled via use_multiscale flag
             RingRemovalMode::Streak => {
                 if use_multiscale {
                     if let Some(plans) = shared_plans.as_ref() {
-                        multiscale_bm3d_streak_removal_with_plans(
-                            slice_owned.view(),
-                            &config,
-                            plans,
-                        )
+                        multiscale_bm3d_streak_removal_with_plans(slice_view, &config, plans)
                     } else {
-                        multiscale_bm3d_streak_removal(slice_owned.view(), &config)
+                        multiscale_bm3d_streak_removal(slice_view, &config)
                     }
                 } else if let Some(plans) = shared_plans.as_ref() {
                     bm3d_ring_artifact_removal_with_plans(
-                        slice_owned.view(),
+                        slice_view,
                         mode,
                         &config.bm3d_config,
                         plans,
                     )
                 } else {
-                    bm3d_ring_artifact_removal(slice_owned.view(), mode, &config.bm3d_config)
+                    bm3d_ring_artifact_removal(slice_view, mode, &config.bm3d_config)
                 }
             }
             // MultiscaleStreak mode always uses multiscale processing
             RingRemovalMode::MultiscaleStreak => {
                 if let Some(plans) = shared_plans.as_ref() {
-                    multiscale_bm3d_streak_removal_with_plans(slice_owned.view(), &config, plans)
+                    multiscale_bm3d_streak_removal_with_plans(slice_view, &config, plans)
                 } else {
-                    multiscale_bm3d_streak_removal(slice_owned.view(), &config)
+                    multiscale_bm3d_streak_removal(slice_view, &config)
                 }
             }
             RingRemovalMode::FourierSvd => {
                 // Fourier-SVD requires f64 for precision
-                let slice_f64 = slice_owned.mapv(|x| x as f64);
+                let slice_f64 = slice_view.mapv(|x| x as f64);
                 let fft_alpha = config.bm3d_config.fft_alpha as f64;
                 let notch_width = config.bm3d_config.notch_width as f64;
                 let result_f64 = fourier_svd_removal(slice_f64.view(), fft_alpha, notch_width);

@@ -223,14 +223,14 @@ fn median_of_slice<F: Bm3dFloat>(data: &mut [F]) -> F {
 }
 
 fn compute_mad<F: Bm3dFloat>(data: ArrayView2<F>) -> F {
-    // Flatten array
-    let mut flat_data: Vec<F> = data.iter().cloned().collect();
-    let median = median_of_slice(&mut flat_data);
-
-    // Compute absolute deviations
-    let mut deviations: Vec<F> = flat_data.iter().map(|&x| (x - median).abs()).collect();
-
-    median_of_slice(&mut deviations)
+    // Flatten once and reuse the same buffer for absolute deviations to reduce
+    // transient memory and allocation overhead in the hot auto-sigma path.
+    let mut values: Vec<F> = data.iter().copied().collect();
+    let median = median_of_slice(&mut values);
+    for v in &mut values {
+        *v = (*v - median).abs();
+    }
+    median_of_slice(&mut values)
 }
 
 #[cfg(test)]
