@@ -11,6 +11,26 @@ use crate::float_trait::Bm3dFloat;
 // Note: WHT normalization scale is now computed at runtime using F::usize_as(64)
 // to support both f32 and f64 precision.
 
+#[inline(always)]
+fn transpose_square_in_place<T>(data: &mut [T], n: usize) {
+    for r in 0..n {
+        let row_base = r * n;
+        for c in (r + 1)..n {
+            data.swap(row_base + c, c * n + r);
+        }
+    }
+}
+
+#[inline(always)]
+fn transpose_square_copy<T: Copy>(src: &[T], dst: &mut [T], n: usize) {
+    for r in 0..n {
+        let src_base = r * n;
+        for c in 0..n {
+            dst[c * n + r] = src[src_base + c];
+        }
+    }
+}
+
 /// Compute 2D FFT of a square patch using pre-computed plans.
 /// Returns unnormalized FFT.
 pub fn fft2d<F: Bm3dFloat>(
@@ -96,28 +116,29 @@ pub fn fft2d_into_with_plan_scratch<F: Bm3dFloat>(
         work_complex.as_slice_memory_order_mut(),
         output.as_slice_memory_order_mut(),
     ) {
-        // 1. Transform rows
-        if row_scratch_len == 0 {
-            for r in 0..rows {
-                let row_base = r * cols;
-                let row = &mut work_data[row_base..row_base + cols];
-                for c in 0..cols {
-                    row[c] = Complex::new(input_data[row_base + c], F::zero());
-                }
-                fft_row_plan.process_with_scratch(row, &mut []);
-            }
-        } else {
-            for r in 0..rows {
-                let row_base = r * cols;
-                let row = &mut work_data[row_base..row_base + cols];
-                for c in 0..cols {
-                    row[c] = Complex::new(input_data[row_base + c], F::zero());
-                }
-                fft_row_plan.process_with_scratch(row, row_fft_scratch);
+        // 1. Transform rows (batched across all rows in one call).
+        for r in 0..rows {
+            let row_base = r * cols;
+            let row = &mut work_data[row_base..row_base + cols];
+            for c in 0..cols {
+                row[c] = Complex::new(input_data[row_base + c], F::zero());
             }
         }
+        if row_scratch_len == 0 {
+            fft_row_plan.process_with_scratch(work_data, &mut []);
+        } else {
+            fft_row_plan.process_with_scratch(work_data, row_fft_scratch);
+        }
         // 2. Transform columns
-        if col_scratch_len == 0 {
+        if rows == cols {
+            transpose_square_copy(work_data, output_data, rows);
+            if col_scratch_len == 0 {
+                fft_col_plan.process_with_scratch(output_data, &mut []);
+            } else {
+                fft_col_plan.process_with_scratch(output_data, col_fft_scratch);
+            }
+            transpose_square_in_place(output_data, rows);
+        } else if col_scratch_len == 0 {
             for c in 0..cols {
                 for r in 0..rows {
                     scratch[r] = work_data[r * cols + c];
@@ -335,7 +356,15 @@ pub fn ifft2d_into_with_plan_scratch<F: Bm3dFloat>(
     ) {
         // 1. Transform columns in-place in complex workspace.
         work_data.copy_from_slice(input_data);
-        if col_scratch_len == 0 {
+        if rows == cols {
+            transpose_square_in_place(work_data, rows);
+            if col_scratch_len == 0 {
+                ifft_col_plan.process_with_scratch(work_data, &mut []);
+            } else {
+                ifft_col_plan.process_with_scratch(work_data, col_fft_scratch);
+            }
+            transpose_square_in_place(work_data, rows);
+        } else if col_scratch_len == 0 {
             for c in 0..cols {
                 for r in 0..rows {
                     scratch[r] = work_data[r * cols + c];
@@ -357,25 +386,17 @@ pub fn ifft2d_into_with_plan_scratch<F: Bm3dFloat>(
             }
         }
 
-        // 2. Transform rows into real output.
+        // 2. Transform rows into real output (batched across all rows).
         let norm_factor = F::one() / F::usize_as(rows * cols);
         if row_scratch_len == 0 {
-            for r in 0..rows {
-                let row_base = r * cols;
-                let row = &mut work_data[row_base..row_base + cols];
-                ifft_row_plan.process_with_scratch(row, &mut []);
-                for c in 0..cols {
-                    output_data[row_base + c] = row[c].re * norm_factor;
-                }
+            ifft_row_plan.process_with_scratch(work_data, &mut []);
+            for idx in 0..rows * cols {
+                output_data[idx] = work_data[idx].re * norm_factor;
             }
         } else {
-            for r in 0..rows {
-                let row_base = r * cols;
-                let row = &mut work_data[row_base..row_base + cols];
-                ifft_row_plan.process_with_scratch(row, row_fft_scratch);
-                for c in 0..cols {
-                    output_data[row_base + c] = row[c].re * norm_factor;
-                }
+            ifft_row_plan.process_with_scratch(work_data, row_fft_scratch);
+            for idx in 0..rows * cols {
+                output_data[idx] = work_data[idx].re * norm_factor;
             }
         }
     } else {
@@ -456,7 +477,15 @@ pub fn ifft2d_inplace_to_real_with_plan_scratch<F: Bm3dFloat>(
         output.as_slice_memory_order_mut(),
     ) {
         // 1. Transform columns in-place in complex input/output buffer.
-        if col_scratch_len == 0 {
+        if rows == cols {
+            transpose_square_in_place(data, rows);
+            if col_scratch_len == 0 {
+                ifft_col_plan.process_with_scratch(data, &mut []);
+            } else {
+                ifft_col_plan.process_with_scratch(data, col_fft_scratch);
+            }
+            transpose_square_in_place(data, rows);
+        } else if col_scratch_len == 0 {
             for c in 0..cols {
                 for r in 0..rows {
                     scratch[r] = data[r * cols + c];
@@ -478,25 +507,17 @@ pub fn ifft2d_inplace_to_real_with_plan_scratch<F: Bm3dFloat>(
             }
         }
 
-        // 2. Transform rows into real output.
+        // 2. Transform rows into real output (batched across all rows).
         let norm_factor = F::one() / F::usize_as(rows * cols);
         if row_scratch_len == 0 {
-            for r in 0..rows {
-                let row_base = r * cols;
-                let row = &mut data[row_base..row_base + cols];
-                ifft_row_plan.process_with_scratch(row, &mut []);
-                for c in 0..cols {
-                    output_data[row_base + c] = row[c].re * norm_factor;
-                }
+            ifft_row_plan.process_with_scratch(data, &mut []);
+            for idx in 0..rows * cols {
+                output_data[idx] = data[idx].re * norm_factor;
             }
         } else {
-            for r in 0..rows {
-                let row_base = r * cols;
-                let row = &mut data[row_base..row_base + cols];
-                ifft_row_plan.process_with_scratch(row, row_fft_scratch);
-                for c in 0..cols {
-                    output_data[row_base + c] = row[c].re * norm_factor;
-                }
+            ifft_row_plan.process_with_scratch(data, row_fft_scratch);
+            for idx in 0..rows * cols {
+                output_data[idx] = data[idx].re * norm_factor;
             }
         }
     } else {

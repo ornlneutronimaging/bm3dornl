@@ -278,51 +278,37 @@ fn fft2d_strided_patch_into_with_plan_scratch<F: Bm3dFloat>(
     let row_scratch_len = fft_2d.row.get_inplace_scratch_len();
     let col_scratch_len = fft_2d.col.get_inplace_scratch_len();
 
-    if row_scratch_len == 0 {
-        for r in 0..patch_size {
-            let src_base = (top + r) * image_cols + left;
-            let dst_base = r * patch_size;
-            let row = &mut work_data[dst_base..dst_base + patch_size];
-            for c in 0..patch_size {
-                row[c] = Complex::new(image_data[src_base + c], F::zero());
-            }
-            fft_2d.row.process_with_scratch(row, &mut []);
-        }
-    } else {
-        for r in 0..patch_size {
-            let src_base = (top + r) * image_cols + left;
-            let dst_base = r * patch_size;
-            let row = &mut work_data[dst_base..dst_base + patch_size];
-            for c in 0..patch_size {
-                row[c] = Complex::new(image_data[src_base + c], F::zero());
-            }
-            fft_2d.row.process_with_scratch(row, row_fft_scratch);
+    for r in 0..patch_size {
+        let src_base = (top + r) * image_cols + left;
+        let dst_base = r * patch_size;
+        let row = &mut work_data[dst_base..dst_base + patch_size];
+        for c in 0..patch_size {
+            row[c] = Complex::new(image_data[src_base + c], F::zero());
         }
     }
-
-    if col_scratch_len == 0 {
-        for c in 0..patch_size {
-            for r in 0..patch_size {
-                scratch[r] = work_data[r * patch_size + c];
-            }
-            fft_2d
-                .col
-                .process_with_scratch(&mut scratch[..patch_size], &mut []);
-            for r in 0..patch_size {
-                out[r * patch_size + c] = scratch[r];
-            }
-        }
+    if row_scratch_len == 0 {
+        fft_2d.row.process_with_scratch(work_data, &mut []);
     } else {
+        fft_2d.row.process_with_scratch(work_data, row_fft_scratch);
+    }
+
+    for r in 0..patch_size {
+        let src_base = r * patch_size;
         for c in 0..patch_size {
-            for r in 0..patch_size {
-                scratch[r] = work_data[r * patch_size + c];
-            }
-            fft_2d
-                .col
-                .process_with_scratch(&mut scratch[..patch_size], col_fft_scratch);
-            for r in 0..patch_size {
-                out[r * patch_size + c] = scratch[r];
-            }
+            out[c * patch_size + r] = work_data[src_base + c];
+        }
+    }
+    if col_scratch_len == 0 {
+        fft_2d.col.process_with_scratch(out, &mut []);
+    } else {
+        fft_2d.col.process_with_scratch(out, col_fft_scratch);
+    }
+    for r in 0..patch_size {
+        let row_base = r * patch_size;
+        for c in (r + 1)..patch_size {
+            let idx_a = row_base + c;
+            let idx_b = c * patch_size + r;
+            out.swap(idx_a, idx_b);
         }
     }
 }
