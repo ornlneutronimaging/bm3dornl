@@ -196,15 +196,37 @@ impl<F: Bm3dFloat> PatchTransformCache<F> {
         }
 
         self.misses += 1;
-        let patch = image.slice(s![
-            coord.row..coord.row + self.patch_size,
-            coord.col..coord.col + self.patch_size
-        ]);
-        let out_view = ndarray::ArrayViewMut2::from_shape((self.patch_size, self.patch_size), out)
-            .expect("output transform slice shape should match patch size");
         if use_hadamard {
+            let patch = image.slice(s![
+                coord.row..coord.row + self.patch_size,
+                coord.col..coord.col + self.patch_size
+            ]);
+            let out_view =
+                ndarray::ArrayViewMut2::from_shape((self.patch_size, self.patch_size), out)
+                    .expect("output transform slice shape should match patch size");
             transforms::wht2d_8x8_forward_into_view(patch, out_view);
+        } else if let Some(image_data) = image.as_slice_memory_order() {
+            fft2d_strided_patch_into_with_plan_scratch(
+                image_data,
+                image.dim().1,
+                coord.row,
+                coord.col,
+                self.patch_size,
+                fft_2d,
+                work_complex,
+                scratch,
+                row_fft_scratch,
+                col_fft_scratch,
+                out,
+            );
         } else {
+            let patch = image.slice(s![
+                coord.row..coord.row + self.patch_size,
+                coord.col..coord.col + self.patch_size
+            ]);
+            let out_view =
+                ndarray::ArrayViewMut2::from_shape((self.patch_size, self.patch_size), out)
+                    .expect("output transform slice shape should match patch size");
             transforms::fft2d_into_with_plan_scratch(
                 patch,
                 fft_2d.row,
@@ -231,6 +253,78 @@ impl<F: Bm3dFloat> PatchTransformCache<F> {
         let base = slot * self.patch_area;
         self.values[base..base + self.patch_area].copy_from_slice(out);
         self.next_slot = (self.next_slot + 1) % self.capacity;
+    }
+}
+
+#[inline(always)]
+fn fft2d_strided_patch_into_with_plan_scratch<F: Bm3dFloat>(
+    image_data: &[F],
+    image_cols: usize,
+    top: usize,
+    left: usize,
+    patch_size: usize,
+    fft_2d: &Fft2dRefs<F>,
+    work_complex: &mut Array2<Complex<F>>,
+    scratch: &mut [Complex<F>],
+    row_fft_scratch: &mut [Complex<F>],
+    col_fft_scratch: &mut [Complex<F>],
+    out: &mut [Complex<F>],
+) {
+    let patch_area = patch_size * patch_size;
+    debug_assert_eq!(out.len(), patch_area);
+    debug_assert!(scratch.len() >= patch_size);
+    let work_data = work_complex
+        .as_slice_memory_order_mut()
+        .expect("fft workspace should be contiguous");
+    let row_scratch_len = fft_2d.row.get_inplace_scratch_len();
+    let col_scratch_len = fft_2d.col.get_inplace_scratch_len();
+
+    if row_scratch_len == 0 {
+        for r in 0..patch_size {
+            let src_base = (top + r) * image_cols + left;
+            let dst_base = r * patch_size;
+            let row = &mut work_data[dst_base..dst_base + patch_size];
+            for c in 0..patch_size {
+                row[c] = Complex::new(image_data[src_base + c], F::zero());
+            }
+            fft_2d.row.process_with_scratch(row, &mut []);
+        }
+    } else {
+        for r in 0..patch_size {
+            let src_base = (top + r) * image_cols + left;
+            let dst_base = r * patch_size;
+            let row = &mut work_data[dst_base..dst_base + patch_size];
+            for c in 0..patch_size {
+                row[c] = Complex::new(image_data[src_base + c], F::zero());
+            }
+            fft_2d.row.process_with_scratch(row, row_fft_scratch);
+        }
+    }
+
+    if col_scratch_len == 0 {
+        for c in 0..patch_size {
+            for r in 0..patch_size {
+                scratch[r] = work_data[r * patch_size + c];
+            }
+            fft_2d
+                .col
+                .process_with_scratch(&mut scratch[..patch_size], &mut []);
+            for r in 0..patch_size {
+                out[r * patch_size + c] = scratch[r];
+            }
+        }
+    } else {
+        for c in 0..patch_size {
+            for r in 0..patch_size {
+                scratch[r] = work_data[r * patch_size + c];
+            }
+            fft_2d
+                .col
+                .process_with_scratch(&mut scratch[..patch_size], col_fft_scratch);
+            for r in 0..patch_size {
+                out[r * patch_size + c] = scratch[r];
+            }
+        }
     }
 }
 
