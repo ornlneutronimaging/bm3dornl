@@ -97,66 +97,103 @@ pub fn fft2d_into_with_plan_scratch<F: Bm3dFloat>(
         output.as_slice_memory_order_mut(),
     ) {
         // 1. Transform rows
-        for r in 0..rows {
-            let row_base = r * cols;
-            let row = &mut work_data[row_base..row_base + cols];
-            for c in 0..cols {
-                row[c] = Complex::new(input_data[row_base + c], F::zero());
-            }
-            if row_scratch_len == 0 {
+        if row_scratch_len == 0 {
+            for r in 0..rows {
+                let row_base = r * cols;
+                let row = &mut work_data[row_base..row_base + cols];
+                for c in 0..cols {
+                    row[c] = Complex::new(input_data[row_base + c], F::zero());
+                }
                 fft_row_plan.process_with_scratch(row, &mut []);
-            } else {
+            }
+        } else {
+            for r in 0..rows {
+                let row_base = r * cols;
+                let row = &mut work_data[row_base..row_base + cols];
+                for c in 0..cols {
+                    row[c] = Complex::new(input_data[row_base + c], F::zero());
+                }
                 fft_row_plan.process_with_scratch(row, row_fft_scratch);
             }
         }
         // 2. Transform columns
-        for c in 0..cols {
-            for r in 0..rows {
-                scratch[r] = work_data[r * cols + c];
-            }
-            if col_scratch_len == 0 {
+        if col_scratch_len == 0 {
+            for c in 0..cols {
+                for r in 0..rows {
+                    scratch[r] = work_data[r * cols + c];
+                }
                 fft_col_plan.process_with_scratch(&mut scratch[..rows], &mut []);
-            } else {
-                fft_col_plan.process_with_scratch(&mut scratch[..rows], col_fft_scratch);
+                for r in 0..rows {
+                    output_data[r * cols + c] = scratch[r];
+                }
             }
-            for r in 0..rows {
-                output_data[r * cols + c] = scratch[r];
+        } else {
+            for c in 0..cols {
+                for r in 0..rows {
+                    scratch[r] = work_data[r * cols + c];
+                }
+                fft_col_plan.process_with_scratch(&mut scratch[..rows], col_fft_scratch);
+                for r in 0..rows {
+                    output_data[r * cols + c] = scratch[r];
+                }
             }
         }
     } else {
         // 1. Transform rows
-        for r in 0..rows {
-            // Copy to buffer
-            for (c, &v) in input.row(r).iter().enumerate() {
-                scratch[c] = Complex::new(v, F::zero());
-            }
-            // FFT
-            if row_scratch_len == 0 {
+        if row_scratch_len == 0 {
+            for r in 0..rows {
+                // Copy to buffer
+                for (c, &v) in input.row(r).iter().enumerate() {
+                    scratch[c] = Complex::new(v, F::zero());
+                }
+                // FFT
                 fft_row_plan.process_with_scratch(&mut scratch[..cols], &mut []);
-            } else {
-                fft_row_plan.process_with_scratch(&mut scratch[..cols], row_fft_scratch);
+                // Copy back
+                for c in 0..cols {
+                    work_complex[[r, c]] = scratch[c];
+                }
             }
-            // Copy back
-            for c in 0..cols {
-                work_complex[[r, c]] = scratch[c];
+        } else {
+            for r in 0..rows {
+                // Copy to buffer
+                for (c, &v) in input.row(r).iter().enumerate() {
+                    scratch[c] = Complex::new(v, F::zero());
+                }
+                // FFT
+                fft_row_plan.process_with_scratch(&mut scratch[..cols], row_fft_scratch);
+                // Copy back
+                for c in 0..cols {
+                    work_complex[[r, c]] = scratch[c];
+                }
             }
         }
 
         // 2. Transform columns
-        for c in 0..cols {
-            // Extract column
-            for r in 0..rows {
-                scratch[r] = work_complex[[r, c]];
-            }
-            // FFT
-            if col_scratch_len == 0 {
+        if col_scratch_len == 0 {
+            for c in 0..cols {
+                // Extract column
+                for r in 0..rows {
+                    scratch[r] = work_complex[[r, c]];
+                }
+                // FFT
                 fft_col_plan.process_with_scratch(&mut scratch[..rows], &mut []);
-            } else {
-                fft_col_plan.process_with_scratch(&mut scratch[..rows], col_fft_scratch);
+                // Copy back
+                for r in 0..rows {
+                    output[[r, c]] = scratch[r];
+                }
             }
-            // Copy back
-            for r in 0..rows {
-                output[[r, c]] = scratch[r];
+        } else {
+            for c in 0..cols {
+                // Extract column
+                for r in 0..rows {
+                    scratch[r] = work_complex[[r, c]];
+                }
+                // FFT
+                fft_col_plan.process_with_scratch(&mut scratch[..rows], col_fft_scratch);
+                // Copy back
+                for r in 0..rows {
+                    output[[r, c]] = scratch[r];
+                }
             }
         }
     }
@@ -298,64 +335,95 @@ pub fn ifft2d_into_with_plan_scratch<F: Bm3dFloat>(
     ) {
         // 1. Transform columns in-place in complex workspace.
         work_data.copy_from_slice(input_data);
-        for c in 0..cols {
-            for r in 0..rows {
-                scratch[r] = work_data[r * cols + c];
-            }
-            if col_scratch_len == 0 {
+        if col_scratch_len == 0 {
+            for c in 0..cols {
+                for r in 0..rows {
+                    scratch[r] = work_data[r * cols + c];
+                }
                 ifft_col_plan.process_with_scratch(&mut scratch[..rows], &mut []);
-            } else {
-                ifft_col_plan.process_with_scratch(&mut scratch[..rows], col_fft_scratch);
+                for r in 0..rows {
+                    work_data[r * cols + c] = scratch[r];
+                }
             }
-            for r in 0..rows {
-                work_data[r * cols + c] = scratch[r];
+        } else {
+            for c in 0..cols {
+                for r in 0..rows {
+                    scratch[r] = work_data[r * cols + c];
+                }
+                ifft_col_plan.process_with_scratch(&mut scratch[..rows], col_fft_scratch);
+                for r in 0..rows {
+                    work_data[r * cols + c] = scratch[r];
+                }
             }
         }
 
         // 2. Transform rows into real output.
         let norm_factor = F::one() / F::usize_as(rows * cols);
-        for r in 0..rows {
-            let row_base = r * cols;
-            let row = &mut work_data[row_base..row_base + cols];
-            if row_scratch_len == 0 {
+        if row_scratch_len == 0 {
+            for r in 0..rows {
+                let row_base = r * cols;
+                let row = &mut work_data[row_base..row_base + cols];
                 ifft_row_plan.process_with_scratch(row, &mut []);
-            } else {
-                ifft_row_plan.process_with_scratch(row, row_fft_scratch);
+                for c in 0..cols {
+                    output_data[row_base + c] = row[c].re * norm_factor;
+                }
             }
-            for c in 0..cols {
-                output_data[row_base + c] = row[c].re * norm_factor;
+        } else {
+            for r in 0..rows {
+                let row_base = r * cols;
+                let row = &mut work_data[row_base..row_base + cols];
+                ifft_row_plan.process_with_scratch(row, row_fft_scratch);
+                for c in 0..cols {
+                    output_data[row_base + c] = row[c].re * norm_factor;
+                }
             }
         }
     } else {
         // 1. Transform columns in-place in complex workspace.
         work_complex.assign(&input);
-        for c in 0..cols {
-            for r in 0..rows {
-                scratch[r] = work_complex[[r, c]];
-            }
-            if col_scratch_len == 0 {
+        if col_scratch_len == 0 {
+            for c in 0..cols {
+                for r in 0..rows {
+                    scratch[r] = work_complex[[r, c]];
+                }
                 ifft_col_plan.process_with_scratch(&mut scratch[..rows], &mut []);
-            } else {
-                ifft_col_plan.process_with_scratch(&mut scratch[..rows], col_fft_scratch);
+                for r in 0..rows {
+                    work_complex[[r, c]] = scratch[r];
+                }
             }
-            for r in 0..rows {
-                work_complex[[r, c]] = scratch[r];
+        } else {
+            for c in 0..cols {
+                for r in 0..rows {
+                    scratch[r] = work_complex[[r, c]];
+                }
+                ifft_col_plan.process_with_scratch(&mut scratch[..rows], col_fft_scratch);
+                for r in 0..rows {
+                    work_complex[[r, c]] = scratch[r];
+                }
             }
         }
 
         // 2. Transform rows into real output.
         let norm_factor = F::one() / F::usize_as(rows * cols);
-        for r in 0..rows {
-            for c in 0..cols {
-                scratch[c] = work_complex[[r, c]];
-            }
-            if row_scratch_len == 0 {
+        if row_scratch_len == 0 {
+            for r in 0..rows {
+                for c in 0..cols {
+                    scratch[c] = work_complex[[r, c]];
+                }
                 ifft_row_plan.process_with_scratch(&mut scratch[..cols], &mut []);
-            } else {
-                ifft_row_plan.process_with_scratch(&mut scratch[..cols], row_fft_scratch);
+                for c in 0..cols {
+                    output[[r, c]] = scratch[c].re * norm_factor;
+                }
             }
-            for c in 0..cols {
-                output[[r, c]] = scratch[c].re * norm_factor;
+        } else {
+            for r in 0..rows {
+                for c in 0..cols {
+                    scratch[c] = work_complex[[r, c]];
+                }
+                ifft_row_plan.process_with_scratch(&mut scratch[..cols], row_fft_scratch);
+                for c in 0..cols {
+                    output[[r, c]] = scratch[c].re * norm_factor;
+                }
             }
         }
     }

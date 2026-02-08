@@ -284,17 +284,37 @@ fn apply_forward_1d_transform<F: Bm3dFloat>(
     debug_assert!(fft_plan_scratch.len() >= fft_scratch_len);
     if let Some(group_data) = group.as_slice_memory_order_mut() {
         let patch_area = patch_size * patch_size;
-        for rc in 0..patch_area {
-            for i in 0..k {
-                scratch[i] = group_data[i * patch_area + rc];
-            }
-            if fft_scratch_len == 0 {
+        if fft_scratch_len == 0 {
+            for rc in 0..patch_area {
+                for i in 0..k {
+                    scratch[i] = group_data[i * patch_area + rc];
+                }
                 fft_plan.process_with_scratch(&mut scratch[..k], &mut []);
-            } else {
-                fft_plan.process_with_scratch(&mut scratch[..k], fft_plan_scratch);
+                for i in 0..k {
+                    group_data[i * patch_area + rc] = scratch[i];
+                }
             }
-            for i in 0..k {
-                group_data[i * patch_area + rc] = scratch[i];
+        } else {
+            for rc in 0..patch_area {
+                for i in 0..k {
+                    scratch[i] = group_data[i * patch_area + rc];
+                }
+                fft_plan.process_with_scratch(&mut scratch[..k], fft_plan_scratch);
+                for i in 0..k {
+                    group_data[i * patch_area + rc] = scratch[i];
+                }
+            }
+        }
+    } else if fft_scratch_len == 0 {
+        for r in 0..patch_size {
+            for c in 0..patch_size {
+                for i in 0..k {
+                    scratch[i] = group[[i, r, c]];
+                }
+                fft_plan.process_with_scratch(&mut scratch[..k], &mut []);
+                for i in 0..k {
+                    group[[i, r, c]] = scratch[i];
+                }
             }
         }
     } else {
@@ -303,11 +323,7 @@ fn apply_forward_1d_transform<F: Bm3dFloat>(
                 for i in 0..k {
                     scratch[i] = group[[i, r, c]];
                 }
-                if fft_scratch_len == 0 {
-                    fft_plan.process_with_scratch(&mut scratch[..k], &mut []);
-                } else {
-                    fft_plan.process_with_scratch(&mut scratch[..k], fft_plan_scratch);
-                }
+                fft_plan.process_with_scratch(&mut scratch[..k], fft_plan_scratch);
                 for i in 0..k {
                     group[[i, r, c]] = scratch[i];
                 }
@@ -330,17 +346,37 @@ fn apply_inverse_1d_transform<F: Bm3dFloat>(
     debug_assert!(ifft_plan_scratch.len() >= ifft_scratch_len);
     if let Some(group_data) = group.as_slice_memory_order_mut() {
         let patch_area = patch_size * patch_size;
-        for rc in 0..patch_area {
-            for i in 0..k {
-                scratch[i] = group_data[i * patch_area + rc];
-            }
-            if ifft_scratch_len == 0 {
+        if ifft_scratch_len == 0 {
+            for rc in 0..patch_area {
+                for i in 0..k {
+                    scratch[i] = group_data[i * patch_area + rc];
+                }
                 ifft_plan.process_with_scratch(&mut scratch[..k], &mut []);
-            } else {
-                ifft_plan.process_with_scratch(&mut scratch[..k], ifft_plan_scratch);
+                for i in 0..k {
+                    group_data[i * patch_area + rc] = scratch[i] * norm_k;
+                }
             }
-            for i in 0..k {
-                group_data[i * patch_area + rc] = scratch[i] * norm_k;
+        } else {
+            for rc in 0..patch_area {
+                for i in 0..k {
+                    scratch[i] = group_data[i * patch_area + rc];
+                }
+                ifft_plan.process_with_scratch(&mut scratch[..k], ifft_plan_scratch);
+                for i in 0..k {
+                    group_data[i * patch_area + rc] = scratch[i] * norm_k;
+                }
+            }
+        }
+    } else if ifft_scratch_len == 0 {
+        for r in 0..patch_size {
+            for c in 0..patch_size {
+                for i in 0..k {
+                    scratch[i] = group[[i, r, c]];
+                }
+                ifft_plan.process_with_scratch(&mut scratch[..k], &mut []);
+                for i in 0..k {
+                    group[[i, r, c]] = scratch[i] * norm_k;
+                }
             }
         }
     } else {
@@ -349,11 +385,7 @@ fn apply_inverse_1d_transform<F: Bm3dFloat>(
                 for i in 0..k {
                     scratch[i] = group[[i, r, c]];
                 }
-                if ifft_scratch_len == 0 {
-                    ifft_plan.process_with_scratch(&mut scratch[..k], &mut []);
-                } else {
-                    ifft_plan.process_with_scratch(&mut scratch[..k], ifft_plan_scratch);
-                }
+                ifft_plan.process_with_scratch(&mut scratch[..k], ifft_plan_scratch);
                 for i in 0..k {
                     group[[i, r, c]] = scratch[i] * norm_k;
                 }
