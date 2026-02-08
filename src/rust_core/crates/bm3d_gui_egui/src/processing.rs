@@ -17,36 +17,12 @@ fn resolve_reuse_volume_sigma() -> bool {
         .ok()
         .map(|value| {
             let v = value.trim();
-            !(v == "0"
-                || v.eq_ignore_ascii_case("false")
-                || v.eq_ignore_ascii_case("no")
-                || v.eq_ignore_ascii_case("off"))
+            v == "1"
+                || v.eq_ignore_ascii_case("true")
+                || v.eq_ignore_ascii_case("yes")
+                || v.eq_ignore_ascii_case("on")
         })
-        .unwrap_or(true)
-}
-
-fn estimate_volume_sigma(input: &Array3<f32>, slice_axis: usize) -> f32 {
-    let num_slices = input.shape()[slice_axis];
-    if num_slices == 0 {
-        return 1e-3;
-    }
-
-    let mut sample_indices = vec![0usize];
-    if num_slices > 2 {
-        sample_indices.push(num_slices / 2);
-    }
-    if num_slices > 1 {
-        sample_indices.push(num_slices - 1);
-    }
-    sample_indices.sort_unstable();
-    sample_indices.dedup();
-
-    let mut estimates: Vec<f32> = sample_indices
-        .into_iter()
-        .map(|idx| estimate_noise_sigma(input.index_axis(Axis(slice_axis), idx)))
-        .collect();
-    estimates.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-    estimates[estimates.len() / 2].max(1e-3)
+        .unwrap_or(false)
 }
 
 /// Progress update from processing thread.
@@ -277,7 +253,9 @@ fn process_volume_worker(
         && num_slices > 0
         && resolve_reuse_volume_sigma()
     {
-        config.bm3d_config.sigma_random = estimate_volume_sigma(&input, slice_axis);
+        let first_slice = input.index_axis(Axis(slice_axis), 0);
+        let estimated = estimate_noise_sigma(first_slice).max(1e-3);
+        config.bm3d_config.sigma_random = estimated;
     }
 
     // Send start message
