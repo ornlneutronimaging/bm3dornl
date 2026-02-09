@@ -1182,6 +1182,7 @@ fn run_bm3d_kernel_with_scratch<F: Bm3dFloat>(
                     let mut weight_g = F::one();
                     let spatial_scale = F::usize_as(patch_size);
                     let spatial_scale_sq = spatial_scale * spatial_scale;
+                    let threshold_sq = threshold * threshold;
                     timed!(profile_timing, stats.filtering_ns, {
                         match mode {
                             Bm3dMode::HardThreshold => {
@@ -1190,10 +1191,10 @@ fn run_bm3d_kernel_with_scratch<F: Bm3dFloat>(
                                 if use_colored_noise {
                                     // Hard threshold map varies per coefficient when colored
                                     // noise PSD is enabled.
-                                    let hard_thresholds = &mut worker.coeff_buffer;
+                                    let hard_thresholds_sq = &mut worker.coeff_buffer;
                                     for r in 0..patch_size {
                                         for c in 0..patch_size {
-                                            hard_thresholds[r * patch_size + c] = threshold * {
+                                            hard_thresholds_sq[r * patch_size + c] = {
                                                 let sigma_s_dist = sigma_psd[[r, c]];
                                                 let effective_sigma_s =
                                                     sigma_s_dist * local_sigma_streak;
@@ -1202,7 +1203,7 @@ fn run_bm3d_kernel_with_scratch<F: Bm3dFloat>(
                                                 let var_s = (k_f * k_f)
                                                     * effective_sigma_s
                                                     * effective_sigma_s;
-                                                (var_r + var_s).sqrt() * spatial_scale
+                                                threshold_sq * (var_r + var_s) * spatial_scale_sq
                                             };
                                         }
                                     }
@@ -1214,7 +1215,7 @@ fn run_bm3d_kernel_with_scratch<F: Bm3dFloat>(
                                             let base = i * patch_area;
                                             for rc in 0..patch_area {
                                                 let coeff = noisy[base + rc];
-                                                if coeff.norm() < hard_thresholds[rc] {
+                                                if coeff.norm_sqr() < hard_thresholds_sq[rc] {
                                                     noisy[base + rc] =
                                                         Complex::new(F::zero(), F::zero());
                                                 } else {
@@ -1227,8 +1228,8 @@ fn run_bm3d_kernel_with_scratch<F: Bm3dFloat>(
                                             for r in 0..patch_size {
                                                 for c in 0..patch_size {
                                                     let coeff = worker.g_noisy_c[[i, r, c]];
-                                                    if coeff.norm()
-                                                        < hard_thresholds[r * patch_size + c]
+                                                    if coeff.norm_sqr()
+                                                        < hard_thresholds_sq[r * patch_size + c]
                                                     {
                                                         worker.g_noisy_c[[i, r, c]] =
                                                             Complex::new(F::zero(), F::zero());
@@ -1241,8 +1242,8 @@ fn run_bm3d_kernel_with_scratch<F: Bm3dFloat>(
                                     }
                                 } else {
                                     let k_f = F::usize_as(k);
-                                    let hard_threshold_scalar =
-                                        threshold * (k_f * scalar_sigma_sq).sqrt() * spatial_scale;
+                                    let hard_threshold_sq_scalar =
+                                        threshold_sq * (k_f * scalar_sigma_sq) * spatial_scale_sq;
                                     if let Some(noisy) =
                                         worker.g_noisy_c.as_slice_memory_order_mut()
                                     {
@@ -1250,7 +1251,7 @@ fn run_bm3d_kernel_with_scratch<F: Bm3dFloat>(
                                             let base = i * patch_area;
                                             for rc in 0..patch_area {
                                                 let coeff = noisy[base + rc];
-                                                if coeff.norm() < hard_threshold_scalar {
+                                                if coeff.norm_sqr() < hard_threshold_sq_scalar {
                                                     noisy[base + rc] =
                                                         Complex::new(F::zero(), F::zero());
                                                 } else {
@@ -1263,7 +1264,7 @@ fn run_bm3d_kernel_with_scratch<F: Bm3dFloat>(
                                             for r in 0..patch_size {
                                                 for c in 0..patch_size {
                                                     let coeff = worker.g_noisy_c[[i, r, c]];
-                                                    if coeff.norm() < hard_threshold_scalar {
+                                                    if coeff.norm_sqr() < hard_threshold_sq_scalar {
                                                         worker.g_noisy_c[[i, r, c]] =
                                                             Complex::new(F::zero(), F::zero());
                                                     } else {
