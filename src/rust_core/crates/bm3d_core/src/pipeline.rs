@@ -36,7 +36,9 @@ const RAYON_MIN_CHUNK_LEN: usize = 64;
 /// Larger tiles reduce hashmap overhead; smaller tiles reduce per-worker memory.
 const AGGREGATION_TILE_SIZE: usize = 128;
 const AGGREGATION_TILE_SIZE_ENV: &str = "BM3D_AGGREGATION_TILE_SIZE";
-const TRANSFORM_CACHE_CAPACITY: usize = 1_024;
+// 512 gives better cache locality than 1024 on large production-like workloads
+// while still capturing enough patch reuse to avoid excessive FFT recomputation.
+const TRANSFORM_CACHE_CAPACITY: usize = 512;
 const TRANSFORM_CACHE_CAPACITY_ENV: &str = "BM3D_TRANSFORM_CACHE_CAPACITY";
 const PROFILE_TIMING_ENV: &str = "BM3D_PROFILE_TIMING";
 const USE_HADAMARD_ENV: &str = "BM3D_USE_HADAMARD";
@@ -1183,54 +1185,90 @@ fn run_bm3d_kernel_with_scratch<F: Bm3dFloat>(
                     timed!(profile_timing, stats.filtering_ns, {
                         match mode {
                             Bm3dMode::HardThreshold => {
-                                // Hard Thresholding
-                                let hard_thresholds = &mut worker.coeff_buffer;
-                                for r in 0..patch_size {
-                                    for c in 0..patch_size {
-                                        hard_thresholds[r * patch_size + c] = threshold * {
-                                            let sigma_s_dist = if use_colored_noise {
-                                                sigma_psd[[r, c]]
-                                            } else {
-                                                F::zero()
-                                            };
-                                            let effective_sigma_s =
-                                                sigma_s_dist * local_sigma_streak;
-                                            let k_f = F::usize_as(k);
-                                            let var_r = k_f * scalar_sigma_sq;
-                                            let var_s =
-                                                (k_f * k_f) * effective_sigma_s * effective_sigma_s;
-                                            (var_r + var_s).sqrt() * spatial_scale
-                                        };
-                                    }
-                                }
-
                                 let mut nz_count = 0usize;
                                 let patch_area = patch_size * patch_size;
-                                if let Some(noisy) = worker.g_noisy_c.as_slice_memory_order_mut() {
-                                    for i in 0..k {
-                                        let base = i * patch_area;
-                                        for rc in 0..patch_area {
-                                            let coeff = noisy[base + rc];
-                                            if coeff.norm() < hard_thresholds[rc] {
-                                                noisy[base + rc] =
-                                                    Complex::new(F::zero(), F::zero());
-                                            } else {
-                                                nz_count += 1;
+                                if use_colored_noise {
+                                    // Hard threshold map varies per coefficient when colored
+                                    // noise PSD is enabled.
+                                    let hard_thresholds = &mut worker.coeff_buffer;
+                                    for r in 0..patch_size {
+                                        for c in 0..patch_size {
+                                            hard_thresholds[r * patch_size + c] = threshold * {
+                                                let sigma_s_dist = sigma_psd[[r, c]];
+                                                let effective_sigma_s =
+                                                    sigma_s_dist * local_sigma_streak;
+                                                let k_f = F::usize_as(k);
+                                                let var_r = k_f * scalar_sigma_sq;
+                                                let var_s = (k_f * k_f)
+                                                    * effective_sigma_s
+                                                    * effective_sigma_s;
+                                                (var_r + var_s).sqrt() * spatial_scale
+                                            };
+                                        }
+                                    }
+
+                                    if let Some(noisy) =
+                                        worker.g_noisy_c.as_slice_memory_order_mut()
+                                    {
+                                        for i in 0..k {
+                                            let base = i * patch_area;
+                                            for rc in 0..patch_area {
+                                                let coeff = noisy[base + rc];
+                                                if coeff.norm() < hard_thresholds[rc] {
+                                                    noisy[base + rc] =
+                                                        Complex::new(F::zero(), F::zero());
+                                                } else {
+                                                    nz_count += 1;
+                                                }
+                                            }
+                                        }
+                                    } else {
+                                        for i in 0..k {
+                                            for r in 0..patch_size {
+                                                for c in 0..patch_size {
+                                                    let coeff = worker.g_noisy_c[[i, r, c]];
+                                                    if coeff.norm()
+                                                        < hard_thresholds[r * patch_size + c]
+                                                    {
+                                                        worker.g_noisy_c[[i, r, c]] =
+                                                            Complex::new(F::zero(), F::zero());
+                                                    } else {
+                                                        nz_count += 1;
+                                                    }
+                                                }
                                             }
                                         }
                                     }
                                 } else {
-                                    for i in 0..k {
-                                        for r in 0..patch_size {
-                                            for c in 0..patch_size {
-                                                let coeff = worker.g_noisy_c[[i, r, c]];
-                                                if coeff.norm()
-                                                    < hard_thresholds[r * patch_size + c]
-                                                {
-                                                    worker.g_noisy_c[[i, r, c]] =
+                                    let k_f = F::usize_as(k);
+                                    let hard_threshold_scalar =
+                                        threshold * (k_f * scalar_sigma_sq).sqrt() * spatial_scale;
+                                    if let Some(noisy) =
+                                        worker.g_noisy_c.as_slice_memory_order_mut()
+                                    {
+                                        for i in 0..k {
+                                            let base = i * patch_area;
+                                            for rc in 0..patch_area {
+                                                let coeff = noisy[base + rc];
+                                                if coeff.norm() < hard_threshold_scalar {
+                                                    noisy[base + rc] =
                                                         Complex::new(F::zero(), F::zero());
                                                 } else {
                                                     nz_count += 1;
+                                                }
+                                            }
+                                        }
+                                    } else {
+                                        for i in 0..k {
+                                            for r in 0..patch_size {
+                                                for c in 0..patch_size {
+                                                    let coeff = worker.g_noisy_c[[i, r, c]];
+                                                    if coeff.norm() < hard_threshold_scalar {
+                                                        worker.g_noisy_c[[i, r, c]] =
+                                                            Complex::new(F::zero(), F::zero());
+                                                    } else {
+                                                        nz_count += 1;
+                                                    }
                                                 }
                                             }
                                         }
@@ -1241,54 +1279,89 @@ fn run_bm3d_kernel_with_scratch<F: Bm3dFloat>(
                                 }
                             }
                             Bm3dMode::Wiener => {
-                                // Wiener Filtering
-                                let noise_vars = &mut worker.coeff_buffer;
-                                for r in 0..patch_size {
-                                    for c in 0..patch_size {
-                                        let sigma_s_dist = if use_colored_noise {
-                                            sigma_psd[[r, c]]
-                                        } else {
-                                            F::zero()
-                                        };
-                                        let effective_sigma_s = sigma_s_dist * local_sigma_streak;
-                                        let k_f = F::usize_as(k);
-                                        let var_r = k_f * scalar_sigma_sq;
-                                        let var_s =
-                                            (k_f * k_f) * effective_sigma_s * effective_sigma_s;
-                                        noise_vars[r * patch_size + c] =
-                                            (var_r + var_s) * spatial_scale_sq;
-                                    }
-                                }
-
                                 let mut wiener_sum = F::zero();
                                 let patch_area = patch_size * patch_size;
-                                if let (Some(noisy), Some(pilot)) = (
-                                    worker.g_noisy_c.as_slice_memory_order_mut(),
-                                    worker.g_pilot_c.as_slice_memory_order(),
-                                ) {
-                                    for i in 0..k {
-                                        let base = i * patch_area;
-                                        for rc in 0..patch_area {
-                                            let p_val = pilot[base + rc];
-                                            let p_pow = p_val.norm_sqr();
-                                            let n_val = noisy[base + rc];
-                                            let w = p_pow / (p_pow + noise_vars[rc] + wiener_eps);
-                                            noisy[base + rc] = n_val * w;
-                                            wiener_sum += w * w;
+                                if use_colored_noise {
+                                    // Wiener noise variance map varies per coefficient when
+                                    // colored noise PSD is enabled.
+                                    let noise_vars = &mut worker.coeff_buffer;
+                                    for r in 0..patch_size {
+                                        for c in 0..patch_size {
+                                            let sigma_s_dist = sigma_psd[[r, c]];
+                                            let effective_sigma_s =
+                                                sigma_s_dist * local_sigma_streak;
+                                            let k_f = F::usize_as(k);
+                                            let var_r = k_f * scalar_sigma_sq;
+                                            let var_s =
+                                                (k_f * k_f) * effective_sigma_s * effective_sigma_s;
+                                            noise_vars[r * patch_size + c] =
+                                                (var_r + var_s) * spatial_scale_sq;
+                                        }
+                                    }
+
+                                    if let (Some(noisy), Some(pilot)) = (
+                                        worker.g_noisy_c.as_slice_memory_order_mut(),
+                                        worker.g_pilot_c.as_slice_memory_order(),
+                                    ) {
+                                        for i in 0..k {
+                                            let base = i * patch_area;
+                                            for rc in 0..patch_area {
+                                                let p_val = pilot[base + rc];
+                                                let p_pow = p_val.norm_sqr();
+                                                let n_val = noisy[base + rc];
+                                                let w =
+                                                    p_pow / (p_pow + noise_vars[rc] + wiener_eps);
+                                                noisy[base + rc] = n_val * w;
+                                                wiener_sum += w * w;
+                                            }
+                                        }
+                                    } else {
+                                        for i in 0..k {
+                                            for r in 0..patch_size {
+                                                for c in 0..patch_size {
+                                                    let p_val = worker.g_pilot_c[[i, r, c]];
+                                                    let n_val = worker.g_noisy_c[[i, r, c]];
+                                                    let w = p_val.norm_sqr()
+                                                        / (p_val.norm_sqr()
+                                                            + noise_vars[r * patch_size + c]
+                                                            + wiener_eps);
+                                                    worker.g_noisy_c[[i, r, c]] = n_val * w;
+                                                    wiener_sum += w * w;
+                                                }
+                                            }
                                         }
                                     }
                                 } else {
-                                    for i in 0..k {
-                                        for r in 0..patch_size {
-                                            for c in 0..patch_size {
-                                                let p_val = worker.g_pilot_c[[i, r, c]];
-                                                let n_val = worker.g_noisy_c[[i, r, c]];
-                                                let w = p_val.norm_sqr()
-                                                    / (p_val.norm_sqr()
-                                                        + noise_vars[r * patch_size + c]
-                                                        + wiener_eps);
-                                                worker.g_noisy_c[[i, r, c]] = n_val * w;
+                                    let noise_var_scalar =
+                                        (F::usize_as(k) * scalar_sigma_sq) * spatial_scale_sq;
+                                    if let (Some(noisy), Some(pilot)) = (
+                                        worker.g_noisy_c.as_slice_memory_order_mut(),
+                                        worker.g_pilot_c.as_slice_memory_order(),
+                                    ) {
+                                        for i in 0..k {
+                                            let base = i * patch_area;
+                                            for rc in 0..patch_area {
+                                                let p_val = pilot[base + rc];
+                                                let p_pow = p_val.norm_sqr();
+                                                let n_val = noisy[base + rc];
+                                                let w =
+                                                    p_pow / (p_pow + noise_var_scalar + wiener_eps);
+                                                noisy[base + rc] = n_val * w;
                                                 wiener_sum += w * w;
+                                            }
+                                        }
+                                    } else {
+                                        for i in 0..k {
+                                            for r in 0..patch_size {
+                                                for c in 0..patch_size {
+                                                    let p_val = worker.g_pilot_c[[i, r, c]];
+                                                    let n_val = worker.g_noisy_c[[i, r, c]];
+                                                    let p_pow = p_val.norm_sqr();
+                                                    let w = p_pow
+                                                        / (p_pow + noise_var_scalar + wiener_eps);
+                                                    worker.g_noisy_c[[i, r, c]] = n_val * w;
+                                                    wiener_sum += w * w;
+                                                }
                                             }
                                         }
                                     }
