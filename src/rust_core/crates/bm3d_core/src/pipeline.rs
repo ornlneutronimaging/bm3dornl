@@ -278,6 +278,11 @@ fn fft2d_strided_patch_into_with_plan_scratch<F: Bm3dFloat>(
     col_fft_scratch: &mut [Complex<F>],
     out: &mut [Complex<F>],
 ) {
+    if patch_size == 8 {
+        fft2d_8x8_strided_patch_into(image_data, image_cols, top, left, out);
+        return;
+    }
+
     let patch_area = patch_size * patch_size;
     debug_assert_eq!(out.len(), patch_area);
     debug_assert!(scratch.len() >= patch_size);
@@ -320,6 +325,190 @@ fn fft2d_strided_patch_into_with_plan_scratch<F: Bm3dFloat>(
             out.swap(idx_a, idx_b);
         }
     }
+}
+
+#[inline(always)]
+fn mul_complex<F: Bm3dFloat>(a: Complex<F>, b: Complex<F>) -> Complex<F> {
+    Complex::new(a.re * b.re - a.im * b.im, a.re * b.im + a.im * b.re)
+}
+
+#[inline(always)]
+fn mul_neg_i<F: Bm3dFloat>(z: Complex<F>) -> Complex<F> {
+    Complex::new(z.im, -z.re)
+}
+
+#[inline(always)]
+fn mul_pos_i<F: Bm3dFloat>(z: Complex<F>) -> Complex<F> {
+    Complex::new(-z.im, z.re)
+}
+
+#[inline(always)]
+fn fft4_forward_inplace<F: Bm3dFloat>(x: &mut [Complex<F>; 4]) {
+    let a0 = x[0] + x[2];
+    let a1 = x[0] - x[2];
+    let b0 = x[1] + x[3];
+    let b1 = x[1] - x[3];
+    x[0] = a0 + b0;
+    x[2] = a0 - b0;
+    let t = mul_neg_i(b1);
+    x[1] = a1 + t;
+    x[3] = a1 - t;
+}
+
+#[inline(always)]
+fn fft4_inverse_inplace<F: Bm3dFloat>(x: &mut [Complex<F>; 4]) {
+    let a0 = x[0] + x[2];
+    let a1 = x[0] - x[2];
+    let b0 = x[1] + x[3];
+    let b1 = x[1] - x[3];
+    x[0] = a0 + b0;
+    x[2] = a0 - b0;
+    let t = mul_pos_i(b1);
+    x[1] = a1 + t;
+    x[3] = a1 - t;
+}
+
+#[inline(always)]
+fn fft8_forward_inplace<F: Bm3dFloat>(x: &mut [Complex<F>; 8]) {
+    let mut e = [Complex::new(F::zero(), F::zero()); 4];
+    let mut o = [Complex::new(F::zero(), F::zero()); 4];
+    e[0] = x[0];
+    e[1] = x[2];
+    e[2] = x[4];
+    e[3] = x[6];
+    o[0] = x[1];
+    o[1] = x[3];
+    o[2] = x[5];
+    o[3] = x[7];
+    fft4_forward_inplace(&mut e);
+    fft4_forward_inplace(&mut o);
+
+    let c = F::from_f64_c(std::f64::consts::FRAC_1_SQRT_2);
+    let w1 = Complex::new(c, -c);
+    let w3 = Complex::new(-c, -c);
+    let t0 = o[0];
+    let t1 = mul_complex(o[1], w1);
+    let t2 = mul_neg_i(o[2]);
+    let t3 = mul_complex(o[3], w3);
+
+    x[0] = e[0] + t0;
+    x[4] = e[0] - t0;
+    x[1] = e[1] + t1;
+    x[5] = e[1] - t1;
+    x[2] = e[2] + t2;
+    x[6] = e[2] - t2;
+    x[3] = e[3] + t3;
+    x[7] = e[3] - t3;
+}
+
+#[inline(always)]
+fn fft8_inverse_inplace<F: Bm3dFloat>(x: &mut [Complex<F>; 8]) {
+    let mut e = [Complex::new(F::zero(), F::zero()); 4];
+    let mut o = [Complex::new(F::zero(), F::zero()); 4];
+    e[0] = x[0];
+    e[1] = x[2];
+    e[2] = x[4];
+    e[3] = x[6];
+    o[0] = x[1];
+    o[1] = x[3];
+    o[2] = x[5];
+    o[3] = x[7];
+    fft4_inverse_inplace(&mut e);
+    fft4_inverse_inplace(&mut o);
+
+    let c = F::from_f64_c(std::f64::consts::FRAC_1_SQRT_2);
+    let w1 = Complex::new(c, c);
+    let w3 = Complex::new(-c, c);
+    let t0 = o[0];
+    let t1 = mul_complex(o[1], w1);
+    let t2 = mul_pos_i(o[2]);
+    let t3 = mul_complex(o[3], w3);
+
+    x[0] = e[0] + t0;
+    x[4] = e[0] - t0;
+    x[1] = e[1] + t1;
+    x[5] = e[1] - t1;
+    x[2] = e[2] + t2;
+    x[6] = e[2] - t2;
+    x[3] = e[3] + t3;
+    x[7] = e[3] - t3;
+}
+
+#[inline(always)]
+fn fft2d_8x8_inplace<F: Bm3dFloat>(data: &mut [Complex<F>]) {
+    debug_assert_eq!(data.len(), 64);
+    for r in 0..8 {
+        let base = r * 8;
+        let mut row = [Complex::new(F::zero(), F::zero()); 8];
+        row.copy_from_slice(&data[base..base + 8]);
+        fft8_forward_inplace(&mut row);
+        data[base..base + 8].copy_from_slice(&row);
+    }
+    for c in 0..8 {
+        let mut col = [Complex::new(F::zero(), F::zero()); 8];
+        for r in 0..8 {
+            col[r] = data[r * 8 + c];
+        }
+        fft8_forward_inplace(&mut col);
+        for r in 0..8 {
+            data[r * 8 + c] = col[r];
+        }
+    }
+}
+
+#[inline(always)]
+fn ifft2d_8x8_inplace_to_real<F: Bm3dFloat>(data: &mut [Complex<F>], out: &mut Array2<F>) {
+    debug_assert_eq!(data.len(), 64);
+    debug_assert_eq!(out.dim(), (8, 8));
+    for c in 0..8 {
+        let mut col = [Complex::new(F::zero(), F::zero()); 8];
+        for r in 0..8 {
+            col[r] = data[r * 8 + c];
+        }
+        fft8_inverse_inplace(&mut col);
+        for r in 0..8 {
+            data[r * 8 + c] = col[r];
+        }
+    }
+    for r in 0..8 {
+        let base = r * 8;
+        let mut row = [Complex::new(F::zero(), F::zero()); 8];
+        row.copy_from_slice(&data[base..base + 8]);
+        fft8_inverse_inplace(&mut row);
+        data[base..base + 8].copy_from_slice(&row);
+    }
+
+    let scale = F::one() / F::usize_as(64);
+    if let Some(out_data) = out.as_slice_memory_order_mut() {
+        for i in 0..64 {
+            out_data[i] = data[i].re * scale;
+        }
+    } else {
+        for r in 0..8 {
+            for c in 0..8 {
+                out[[r, c]] = data[r * 8 + c].re * scale;
+            }
+        }
+    }
+}
+
+#[inline(always)]
+fn fft2d_8x8_strided_patch_into<F: Bm3dFloat>(
+    image_data: &[F],
+    image_cols: usize,
+    top: usize,
+    left: usize,
+    out: &mut [Complex<F>],
+) {
+    debug_assert_eq!(out.len(), 64);
+    for r in 0..8 {
+        let src_base = (top + r) * image_cols + left;
+        let dst_base = r * 8;
+        for c in 0..8 {
+            out[dst_base + c] = Complex::new(image_data[src_base + c], F::zero());
+        }
+    }
+    fft2d_8x8_inplace(out);
 }
 
 fn fill_transformed_group_from_cache<F: Bm3dFloat>(
@@ -813,179 +1002,6 @@ fn get_or_insert_tile<F: Bm3dFloat>(
         .expect("tile should be initialized")
 }
 
-#[cfg(target_arch = "x86_64")]
-#[allow(unsafe_op_in_unsafe_fn)]
-#[target_feature(enable = "avx2")]
-unsafe fn aggregate_patch_row8_avx2(
-    num_data: &mut [f32],
-    den_data: &mut [f32],
-    tile_w: usize,
-    spatial_vals: &[f32],
-    blend_vals: &[f32],
-    local_r0: usize,
-    local_c0: usize,
-    weight: f32,
-) {
-    use std::arch::x86_64::*;
-    let wv = _mm256_set1_ps(weight);
-    for pr in 0..8 {
-        let src_base = pr * 8;
-        let dst_base = (local_r0 + pr) * tile_w + local_c0;
-        let s = _mm256_loadu_ps(spatial_vals.as_ptr().add(src_base));
-        let b = _mm256_loadu_ps(blend_vals.as_ptr().add(src_base));
-        let wr = _mm256_mul_ps(b, wv);
-        let num = _mm256_loadu_ps(num_data.as_ptr().add(dst_base));
-        let den = _mm256_loadu_ps(den_data.as_ptr().add(dst_base));
-        let num_new = _mm256_add_ps(num, _mm256_mul_ps(s, wr));
-        let den_new = _mm256_add_ps(den, wr);
-        _mm256_storeu_ps(num_data.as_mut_ptr().add(dst_base), num_new);
-        _mm256_storeu_ps(den_data.as_mut_ptr().add(dst_base), den_new);
-    }
-}
-
-#[cfg(target_arch = "x86_64")]
-#[allow(unsafe_op_in_unsafe_fn)]
-#[target_feature(enable = "sse2")]
-unsafe fn aggregate_patch_row8_sse2(
-    num_data: &mut [f32],
-    den_data: &mut [f32],
-    tile_w: usize,
-    spatial_vals: &[f32],
-    blend_vals: &[f32],
-    local_r0: usize,
-    local_c0: usize,
-    weight: f32,
-) {
-    use std::arch::x86_64::*;
-    let wv = _mm_set1_ps(weight);
-    for pr in 0..8 {
-        let src_base = pr * 8;
-        let dst_base = (local_r0 + pr) * tile_w + local_c0;
-        for offset in [0usize, 4usize] {
-            let src = src_base + offset;
-            let dst = dst_base + offset;
-            let s = _mm_loadu_ps(spatial_vals.as_ptr().add(src));
-            let b = _mm_loadu_ps(blend_vals.as_ptr().add(src));
-            let wr = _mm_mul_ps(b, wv);
-            let num = _mm_loadu_ps(num_data.as_ptr().add(dst));
-            let den = _mm_loadu_ps(den_data.as_ptr().add(dst));
-            let num_new = _mm_add_ps(num, _mm_mul_ps(s, wr));
-            let den_new = _mm_add_ps(den, wr);
-            _mm_storeu_ps(num_data.as_mut_ptr().add(dst), num_new);
-            _mm_storeu_ps(den_data.as_mut_ptr().add(dst), den_new);
-        }
-    }
-}
-
-#[cfg(target_arch = "aarch64")]
-#[allow(unsafe_op_in_unsafe_fn)]
-unsafe fn aggregate_patch_row8_neon(
-    num_data: &mut [f32],
-    den_data: &mut [f32],
-    tile_w: usize,
-    spatial_vals: &[f32],
-    blend_vals: &[f32],
-    local_r0: usize,
-    local_c0: usize,
-    weight: f32,
-) {
-    use std::arch::aarch64::*;
-    let wv = vdupq_n_f32(weight);
-    for pr in 0..8 {
-        let src_base = pr * 8;
-        let dst_base = (local_r0 + pr) * tile_w + local_c0;
-        for offset in [0usize, 4usize] {
-            let src = src_base + offset;
-            let dst = dst_base + offset;
-            let s = vld1q_f32(spatial_vals.as_ptr().add(src));
-            let b = vld1q_f32(blend_vals.as_ptr().add(src));
-            let wr = vmulq_f32(b, wv);
-            let num = vld1q_f32(num_data.as_ptr().add(dst));
-            let den = vld1q_f32(den_data.as_ptr().add(dst));
-            let num_new = vaddq_f32(num, vmulq_f32(s, wr));
-            let den_new = vaddq_f32(den, wr);
-            vst1q_f32(num_data.as_mut_ptr().add(dst), num_new);
-            vst1q_f32(den_data.as_mut_ptr().add(dst), den_new);
-        }
-    }
-}
-
-#[inline(always)]
-fn try_aggregate_patch_row8_simd_f32(
-    num_data: &mut [f32],
-    den_data: &mut [f32],
-    tile_w: usize,
-    spatial_vals: &[f32],
-    blend_vals: &[f32],
-    local_r0: usize,
-    local_c0: usize,
-    weight: f32,
-    patch_size: usize,
-) -> bool {
-    if patch_size != 8 || local_c0 + 8 > tile_w {
-        return false;
-    }
-
-    #[cfg(target_arch = "x86_64")]
-    {
-        if std::arch::is_x86_feature_detected!("avx2") {
-            // SAFETY: Feature is checked at runtime; buffers are contiguous and sized.
-            unsafe {
-                aggregate_patch_row8_avx2(
-                    num_data,
-                    den_data,
-                    tile_w,
-                    spatial_vals,
-                    blend_vals,
-                    local_r0,
-                    local_c0,
-                    weight,
-                );
-            }
-            return true;
-        }
-        if std::arch::is_x86_feature_detected!("sse2") {
-            // SAFETY: Feature is checked at runtime; buffers are contiguous and sized.
-            unsafe {
-                aggregate_patch_row8_sse2(
-                    num_data,
-                    den_data,
-                    tile_w,
-                    spatial_vals,
-                    blend_vals,
-                    local_r0,
-                    local_c0,
-                    weight,
-                );
-            }
-            return true;
-        }
-    }
-
-    #[cfg(target_arch = "aarch64")]
-    {
-        // SAFETY: NEON is baseline on aarch64; buffers are contiguous and sized.
-        unsafe {
-            aggregate_patch_row8_neon(
-                num_data,
-                den_data,
-                tile_w,
-                spatial_vals,
-                blend_vals,
-                local_r0,
-                local_c0,
-                weight,
-            );
-        }
-        true
-    }
-
-    #[cfg(not(target_arch = "aarch64"))]
-    {
-        false
-    }
-}
-
 /// Aggregate a single denoised patch into tile-local numerator/denominator accumulators.
 fn aggregate_patch_into_tiles<F: Bm3dFloat>(
     spatial: &Array2<F>,
@@ -1031,43 +1047,6 @@ fn aggregate_patch_into_tiles<F: Bm3dFloat>(
             spatial_data,
             blend_data,
         ) {
-            if std::mem::size_of::<F>() == std::mem::size_of::<f32>() && geom.patch_size == 8 {
-                let weight_f32 = weight.to_f32().unwrap_or(0.0);
-                // SAFETY: We only reinterpret when F is f32-sized and this code is instantiated
-                // for f32 in practice; fallback scalar path is always available.
-                let simd_done = unsafe {
-                    let num_f32 = std::slice::from_raw_parts_mut(
-                        num_data.as_mut_ptr() as *mut f32,
-                        num_data.len(),
-                    );
-                    let den_f32 = std::slice::from_raw_parts_mut(
-                        den_data.as_mut_ptr() as *mut f32,
-                        den_data.len(),
-                    );
-                    let spatial_f32 = std::slice::from_raw_parts(
-                        spatial_vals.as_ptr() as *const f32,
-                        spatial_vals.len(),
-                    );
-                    let blend_f32 = std::slice::from_raw_parts(
-                        blend_vals.as_ptr() as *const f32,
-                        blend_vals.len(),
-                    );
-                    try_aggregate_patch_row8_simd_f32(
-                        num_f32,
-                        den_f32,
-                        tile_w,
-                        spatial_f32,
-                        blend_f32,
-                        local_r0,
-                        local_c0,
-                        weight_f32,
-                        geom.patch_size,
-                    )
-                };
-                if simd_done {
-                    return;
-                }
-            }
             for pr in 0..geom.patch_size {
                 let src_base = pr * geom.patch_size;
                 let dst_base = (local_r0 + pr) * tile_w + local_c0;
@@ -1601,13 +1580,27 @@ fn run_bm3d_kernel_with_scratch<F: Bm3dFloat>(
                     // Inverse 2D transforms and aggregation
                     for i in 0..k {
                         let matched = &worker.matches[i];
-                        let complex_slice = worker.g_noisy_c.slice_mut(s![i, .., ..]);
+                        let mut complex_slice = worker.g_noisy_c.slice_mut(s![i, .., ..]);
                         timed!(profile_timing, stats.inverse_2d_ns, {
                             if use_hadamard {
                                 transforms::wht2d_8x8_inverse_into_view(
                                     complex_slice.view(),
                                     &mut worker.spatial_patch,
                                 );
+                            } else if patch_size == 8 {
+                                if let Some(data) = complex_slice.as_slice_memory_order_mut() {
+                                    ifft2d_8x8_inplace_to_real(data, &mut worker.spatial_patch);
+                                } else {
+                                    transforms::ifft2d_inplace_to_real_with_plan_scratch(
+                                        complex_slice,
+                                        ifft_2d_row_ref,
+                                        ifft_2d_col_ref,
+                                        &mut worker.spatial_patch,
+                                        &mut worker.scratch_2d,
+                                        &mut worker.ifft2d_row_plan_scratch,
+                                        &mut worker.ifft2d_col_plan_scratch,
+                                    );
+                                }
                             } else {
                                 transforms::ifft2d_inplace_to_real_with_plan_scratch(
                                     complex_slice,
@@ -1859,6 +1852,7 @@ pub fn test_block_matching<F: Bm3dFloat>(
 mod tests {
     use super::*;
     use ndarray::{Array2, Array3};
+    use rustfft::FftPlanner;
 
     // Helper: Simple Linear Congruential Generator for deterministic "random" test data
     struct SimpleLcg {
@@ -1931,6 +1925,74 @@ mod tests {
         assert_eq!(a.dim(), b.dim());
         let sum_sq: f32 = a.iter().zip(b.iter()).map(|(x, y)| (x - y).powi(2)).sum();
         sum_sq / (a.len() as f32)
+    }
+
+    #[test]
+    fn test_fft2d_8x8_specialized_matches_rustfft() {
+        let image = random_matrix(16, 16, 0x1234_5678);
+        let mut specialized = vec![Complex::new(0.0f32, 0.0f32); 64];
+        fft2d_8x8_strided_patch_into(
+            image.as_slice().expect("image should be contiguous"),
+            16,
+            3,
+            5,
+            &mut specialized,
+        );
+
+        let patch = Array2::from_shape_fn((8, 8), |(r, c)| image[[3 + r, 5 + c]]);
+        let mut planner = FftPlanner::new();
+        let fft_row = planner.plan_fft_forward(8);
+        let fft_col = planner.plan_fft_forward(8);
+        let reference = transforms::fft2d(patch.view(), &fft_row, &fft_col);
+        let reference_data = reference
+            .as_slice_memory_order()
+            .expect("reference should be contiguous");
+
+        for i in 0..64 {
+            let dr = (specialized[i].re - reference_data[i].re).abs();
+            let di = (specialized[i].im - reference_data[i].im).abs();
+            assert!(
+                dr < 1e-4 && di < 1e-4,
+                "mismatch at {}: specialized={:?} reference={:?}",
+                i,
+                specialized[i],
+                reference_data[i]
+            );
+        }
+    }
+
+    #[test]
+    fn test_ifft2d_8x8_specialized_matches_rustfft() {
+        let image = random_matrix(16, 16, 0x8765_4321);
+        let patch = Array2::from_shape_fn((8, 8), |(r, c)| image[[2 + r, 4 + c]]);
+        let mut planner = FftPlanner::new();
+        let fft_row = planner.plan_fft_forward(8);
+        let fft_col = planner.plan_fft_forward(8);
+        let ifft_row = planner.plan_fft_inverse(8);
+        let ifft_col = planner.plan_fft_inverse(8);
+        let freq = transforms::fft2d(patch.view(), &fft_row, &fft_col);
+
+        let mut specialized_freq = freq
+            .as_slice_memory_order()
+            .expect("freq should be contiguous")
+            .to_vec();
+        let mut specialized_spatial = Array2::<f32>::zeros((8, 8));
+        ifft2d_8x8_inplace_to_real(&mut specialized_freq, &mut specialized_spatial);
+
+        let reference_spatial = transforms::ifft2d(&freq, &ifft_row, &ifft_col);
+        for r in 0..8 {
+            for c in 0..8 {
+                let d = (specialized_spatial[[r, c]] - reference_spatial[[r, c]]).abs();
+                assert!(
+                    d < 1e-4,
+                    "ifft mismatch at ({}, {}): specialized={} reference={}",
+                    r,
+                    c,
+                    specialized_spatial[[r, c]],
+                    reference_spatial[[r, c]]
+                );
+            }
+        }
     }
 
     fn stitch_tiles_to_full(
