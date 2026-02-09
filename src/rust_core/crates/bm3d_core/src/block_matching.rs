@@ -1,4 +1,11 @@
 use ndarray::{Array2, ArrayView2};
+use std::any::TypeId;
+#[cfg(target_arch = "aarch64")]
+use std::arch::aarch64::*;
+#[cfg(target_arch = "x86")]
+use std::arch::x86::*;
+#[cfg(target_arch = "x86_64")]
+use std::arch::x86_64::*;
 use std::cmp::Ordering;
 
 use crate::float_trait::Bm3dFloat;
@@ -89,7 +96,7 @@ fn compute_squared_distance_at_strided<F: Bm3dFloat>(
 }
 
 #[inline(always)]
-fn compute_squared_distance_at_strided_8x8<F: Bm3dFloat>(
+fn compute_squared_distance_at_strided_8x8_scalar<F: Bm3dFloat>(
     image_data: &[F],
     image_cols: usize,
     ref_r: usize,
@@ -126,6 +133,225 @@ fn compute_squared_distance_at_strided_8x8<F: Bm3dFloat>(
         }
     }
     sum_sq
+}
+
+#[inline(always)]
+fn compute_squared_distance_at_strided_8x8_f32_dispatch(
+    image_data: &[f32],
+    image_cols: usize,
+    ref_r: usize,
+    ref_c: usize,
+    cand_r: usize,
+    cand_c: usize,
+    threshold: f32,
+) -> f32 {
+    #[cfg(target_arch = "x86_64")]
+    {
+        if std::arch::is_x86_feature_detected!("avx2") {
+            // SAFETY: Guarded by runtime feature check.
+            unsafe {
+                compute_squared_distance_at_strided_8x8_f32_avx2(
+                    image_data, image_cols, ref_r, ref_c, cand_r, cand_c, threshold,
+                )
+            }
+        } else {
+            // SAFETY: SSE2 is guaranteed on x86_64.
+            unsafe {
+                compute_squared_distance_at_strided_8x8_f32_sse2(
+                    image_data, image_cols, ref_r, ref_c, cand_r, cand_c, threshold,
+                )
+            }
+        }
+    }
+
+    #[cfg(target_arch = "x86")]
+    {
+        if std::arch::is_x86_feature_detected!("avx2") {
+            // SAFETY: Guarded by runtime feature check.
+            unsafe {
+                compute_squared_distance_at_strided_8x8_f32_avx2(
+                    image_data, image_cols, ref_r, ref_c, cand_r, cand_c, threshold,
+                )
+            }
+        } else if std::arch::is_x86_feature_detected!("sse2") {
+            // SAFETY: Guarded by runtime feature check.
+            unsafe {
+                compute_squared_distance_at_strided_8x8_f32_sse2(
+                    image_data, image_cols, ref_r, ref_c, cand_r, cand_c, threshold,
+                )
+            }
+        } else {
+            compute_squared_distance_at_strided_8x8_scalar(
+                image_data, image_cols, ref_r, ref_c, cand_r, cand_c, threshold,
+            )
+        }
+    }
+
+    #[cfg(target_arch = "aarch64")]
+    {
+        // SAFETY: NEON is baseline on aarch64.
+        unsafe {
+            compute_squared_distance_at_strided_8x8_f32_neon(
+                image_data, image_cols, ref_r, ref_c, cand_r, cand_c, threshold,
+            )
+        }
+    }
+
+    #[cfg(not(any(target_arch = "x86_64", target_arch = "x86", target_arch = "aarch64")))]
+    {
+        compute_squared_distance_at_strided_8x8_scalar(
+            image_data, image_cols, ref_r, ref_c, cand_r, cand_c, threshold,
+        )
+    }
+}
+
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[target_feature(enable = "sse2")]
+unsafe fn compute_squared_distance_at_strided_8x8_f32_sse2(
+    image_data: &[f32],
+    image_cols: usize,
+    ref_r: usize,
+    ref_c: usize,
+    cand_r: usize,
+    cand_c: usize,
+    threshold: f32,
+) -> f32 {
+    let mut sum_sq = 0.0f32;
+    for dr in 0..8 {
+        let ref_base = (ref_r + dr) * image_cols + ref_c;
+        let cand_base = (cand_r + dr) * image_cols + cand_c;
+        let ref_ptr = image_data.as_ptr().add(ref_base);
+        let cand_ptr = image_data.as_ptr().add(cand_base);
+
+        let ref_lo = _mm_loadu_ps(ref_ptr);
+        let cand_lo = _mm_loadu_ps(cand_ptr);
+        let diff_lo = _mm_sub_ps(ref_lo, cand_lo);
+        let sq_lo = _mm_mul_ps(diff_lo, diff_lo);
+
+        let ref_hi = _mm_loadu_ps(ref_ptr.add(4));
+        let cand_hi = _mm_loadu_ps(cand_ptr.add(4));
+        let diff_hi = _mm_sub_ps(ref_hi, cand_hi);
+        let sq_hi = _mm_mul_ps(diff_hi, diff_hi);
+
+        let mut lanes_lo = [0.0f32; 4];
+        let mut lanes_hi = [0.0f32; 4];
+        _mm_storeu_ps(lanes_lo.as_mut_ptr(), sq_lo);
+        _mm_storeu_ps(lanes_hi.as_mut_ptr(), sq_hi);
+
+        sum_sq += lanes_lo[0]
+            + lanes_lo[1]
+            + lanes_lo[2]
+            + lanes_lo[3]
+            + lanes_hi[0]
+            + lanes_hi[1]
+            + lanes_hi[2]
+            + lanes_hi[3];
+        if sum_sq >= threshold {
+            return sum_sq;
+        }
+    }
+    sum_sq
+}
+
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[target_feature(enable = "avx2")]
+unsafe fn compute_squared_distance_at_strided_8x8_f32_avx2(
+    image_data: &[f32],
+    image_cols: usize,
+    ref_r: usize,
+    ref_c: usize,
+    cand_r: usize,
+    cand_c: usize,
+    threshold: f32,
+) -> f32 {
+    let mut sum_sq = 0.0f32;
+    for dr in 0..8 {
+        let ref_base = (ref_r + dr) * image_cols + ref_c;
+        let cand_base = (cand_r + dr) * image_cols + cand_c;
+        let ref_ptr = image_data.as_ptr().add(ref_base);
+        let cand_ptr = image_data.as_ptr().add(cand_base);
+
+        let ref_vec = _mm256_loadu_ps(ref_ptr);
+        let cand_vec = _mm256_loadu_ps(cand_ptr);
+        let diff = _mm256_sub_ps(ref_vec, cand_vec);
+        let sq = _mm256_mul_ps(diff, diff);
+
+        let mut lanes = [0.0f32; 8];
+        _mm256_storeu_ps(lanes.as_mut_ptr(), sq);
+        sum_sq +=
+            lanes[0] + lanes[1] + lanes[2] + lanes[3] + lanes[4] + lanes[5] + lanes[6] + lanes[7];
+        if sum_sq >= threshold {
+            return sum_sq;
+        }
+    }
+    sum_sq
+}
+
+#[cfg(target_arch = "aarch64")]
+unsafe fn compute_squared_distance_at_strided_8x8_f32_neon(
+    image_data: &[f32],
+    image_cols: usize,
+    ref_r: usize,
+    ref_c: usize,
+    cand_r: usize,
+    cand_c: usize,
+    threshold: f32,
+) -> f32 {
+    let mut sum_sq = 0.0f32;
+    for dr in 0..8 {
+        let ref_base = (ref_r + dr) * image_cols + ref_c;
+        let cand_base = (cand_r + dr) * image_cols + cand_c;
+        let ref_ptr = image_data.as_ptr().add(ref_base);
+        let cand_ptr = image_data.as_ptr().add(cand_base);
+
+        let ref_lo = vld1q_f32(ref_ptr);
+        let cand_lo = vld1q_f32(cand_ptr);
+        let diff_lo = vsubq_f32(ref_lo, cand_lo);
+        let sq_lo = vmulq_f32(diff_lo, diff_lo);
+
+        let ref_hi = vld1q_f32(ref_ptr.add(4));
+        let cand_hi = vld1q_f32(cand_ptr.add(4));
+        let diff_hi = vsubq_f32(ref_hi, cand_hi);
+        let sq_hi = vmulq_f32(diff_hi, diff_hi);
+
+        sum_sq += vaddvq_f32(sq_lo) + vaddvq_f32(sq_hi);
+        if sum_sq >= threshold {
+            return sum_sq;
+        }
+    }
+    sum_sq
+}
+
+#[inline(always)]
+fn compute_squared_distance_at_strided_8x8<F: Bm3dFloat>(
+    image_data: &[F],
+    image_cols: usize,
+    ref_r: usize,
+    ref_c: usize,
+    cand_r: usize,
+    cand_c: usize,
+    threshold: F,
+) -> F {
+    if TypeId::of::<F>() == TypeId::of::<f32>() {
+        // SAFETY: TypeId check guarantees F is f32 in this branch.
+        let data_f32 = unsafe {
+            std::slice::from_raw_parts(image_data.as_ptr() as *const f32, image_data.len())
+        };
+        let threshold_f32 = threshold.to_f32().unwrap_or(f32::MAX);
+        let sum = compute_squared_distance_at_strided_8x8_f32_dispatch(
+            data_f32,
+            image_cols,
+            ref_r,
+            ref_c,
+            cand_r,
+            cand_c,
+            threshold_f32,
+        );
+        return F::from_f64_c(sum as f64);
+    }
+    compute_squared_distance_at_strided_8x8_scalar(
+        image_data, image_cols, ref_r, ref_c, cand_r, cand_c, threshold,
+    )
 }
 
 /// Compute Integral Image (sum only).
@@ -1122,6 +1348,44 @@ mod tests {
                 "Identical patches should have distance ~0, got {}",
                 m.distance
             );
+        }
+    }
+
+    #[test]
+    fn test_compute_squared_distance_8x8_f32_simd_matches_scalar() {
+        let image = random_matrix_f32(24, 24, 44444);
+        let image_data = image
+            .as_slice_memory_order()
+            .expect("random_matrix_f32 should be contiguous");
+        let cols = image.dim().1;
+        let threshold = f32::MAX;
+
+        for ref_r in (0..=16).step_by(3) {
+            for ref_c in (0..=16).step_by(3) {
+                for cand_r in (0..=16).step_by(5) {
+                    for cand_c in (0..=16).step_by(5) {
+                        let scalar = compute_squared_distance_at_strided_8x8_scalar(
+                            image_data, cols, ref_r, ref_c, cand_r, cand_c, threshold,
+                        );
+                        let simd = compute_squared_distance_at_strided_8x8(
+                            image_data, cols, ref_r, ref_c, cand_r, cand_c, threshold,
+                        );
+                        let abs_diff = (simd - scalar).abs();
+                        let rel_diff = abs_diff / scalar.max(1.0);
+                        assert!(
+                            rel_diff < 1e-5,
+                            "SIMD drift too large ref=({},{}) cand=({},{}) scalar={} simd={} rel_diff={}",
+                            ref_r,
+                            ref_c,
+                            cand_r,
+                            cand_c,
+                            scalar,
+                            simd,
+                            rel_diff
+                        );
+                    }
+                }
+            }
         }
     }
 
