@@ -167,6 +167,13 @@ impl<F: Bm3dFloat> PatchTransformCache<F> {
         (self.hits, self.misses, self.evictions)
     }
 
+    fn clear(&mut self) {
+        self.keys.fill(None);
+        self.hits = 0;
+        self.misses = 0;
+        self.evictions = 0;
+    }
+
     #[inline(always)]
     fn slot_for_key(&self, key: u64) -> usize {
         // Mix the packed (row,col) key before modulo to reduce clustering.
@@ -534,6 +541,98 @@ impl<F: Bm3dFloat> WorkerBuffers<F> {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct WorkerBuffersLayout {
+    max_matches: usize,
+    patch_size: usize,
+    fft2d_row_plan_scratch_len: usize,
+    fft2d_col_plan_scratch_len: usize,
+    ifft2d_row_plan_scratch_len: usize,
+    ifft2d_col_plan_scratch_len: usize,
+    fft1d_plan_scratch_len: usize,
+    ifft1d_plan_scratch_len: usize,
+}
+
+struct KernelChunkScratch<F: Bm3dFloat> {
+    worker_layout: Option<WorkerBuffersLayout>,
+    worker: Option<WorkerBuffers<F>>,
+    cache_shape: Option<(usize, usize)>,
+    noisy_transform_cache: Option<PatchTransformCache<F>>,
+    pilot_transform_cache: Option<PatchTransformCache<F>>,
+}
+
+impl<F: Bm3dFloat> KernelChunkScratch<F> {
+    fn new() -> Self {
+        Self {
+            worker_layout: None,
+            worker: None,
+            cache_shape: None,
+            noisy_transform_cache: None,
+            pilot_transform_cache: None,
+        }
+    }
+
+    fn prepare(
+        &mut self,
+        worker_layout: WorkerBuffersLayout,
+        patch_size: usize,
+        transform_cache_capacity: usize,
+    ) {
+        if self.worker_layout != Some(worker_layout) {
+            self.worker = Some(WorkerBuffers::<F>::new(
+                worker_layout.max_matches,
+                worker_layout.patch_size,
+                worker_layout.fft2d_row_plan_scratch_len,
+                worker_layout.fft2d_col_plan_scratch_len,
+                worker_layout.ifft2d_row_plan_scratch_len,
+                worker_layout.ifft2d_col_plan_scratch_len,
+                worker_layout.fft1d_plan_scratch_len,
+                worker_layout.ifft1d_plan_scratch_len,
+            ));
+            self.worker_layout = Some(worker_layout);
+        } else if let Some(worker) = self.worker.as_mut() {
+            worker.matches.clear();
+        }
+
+        let cache_shape = (patch_size, transform_cache_capacity);
+        if self.cache_shape != Some(cache_shape) {
+            self.noisy_transform_cache = Some(PatchTransformCache::<F>::new(
+                patch_size,
+                transform_cache_capacity,
+            ));
+            self.pilot_transform_cache = Some(PatchTransformCache::<F>::new(
+                patch_size,
+                transform_cache_capacity,
+            ));
+            self.cache_shape = Some(cache_shape);
+        } else {
+            if let Some(cache) = self.noisy_transform_cache.as_mut() {
+                cache.clear();
+            }
+            if let Some(cache) = self.pilot_transform_cache.as_mut() {
+                cache.clear();
+            }
+        }
+    }
+}
+
+struct KernelScratchPool<F: Bm3dFloat> {
+    chunks: Vec<KernelChunkScratch<F>>,
+}
+
+impl<F: Bm3dFloat> KernelScratchPool<F> {
+    fn new() -> Self {
+        Self { chunks: Vec::new() }
+    }
+
+    fn ensure_chunk_count(&mut self, chunk_count: usize) {
+        if self.chunks.len() < chunk_count {
+            self.chunks
+                .resize_with(chunk_count, KernelChunkScratch::<F>::new);
+        }
+    }
+}
+
 type TileAccumulator<F> = (Array2<F>, Array2<F>);
 type TileAccumulatorVec<F> = Vec<Option<TileAccumulator<F>>>;
 
@@ -820,6 +919,29 @@ pub fn run_bm3d_kernel<F: Bm3dFloat>(
     config: &Bm3dKernelConfig<F>,
     plans: &Bm3dPlans<F>,
 ) -> Array2<F> {
+    let mut scratch_pool = KernelScratchPool::<F>::new();
+    run_bm3d_kernel_with_scratch(
+        input_noisy,
+        input_pilot,
+        mode,
+        sigma_psd,
+        sigma_map,
+        config,
+        plans,
+        &mut scratch_pool,
+    )
+}
+
+fn run_bm3d_kernel_with_scratch<F: Bm3dFloat>(
+    input_noisy: ArrayView2<F>,
+    input_pilot: ArrayView2<F>,
+    mode: Bm3dMode,
+    sigma_psd: ArrayView2<F>,
+    sigma_map: ArrayView2<F>,
+    config: &Bm3dKernelConfig<F>,
+    plans: &Bm3dPlans<F>,
+    scratch_pool: &mut KernelScratchPool<F>,
+) -> Array2<F> {
     let (rows, cols) = input_noisy.dim();
     let patch_size = config.patch_size;
     let step_size = config.step_size;
@@ -908,6 +1030,17 @@ pub fn run_bm3d_kernel<F: Bm3dFloat>(
         }};
     }
 
+    let worker_layout = WorkerBuffersLayout {
+        max_matches,
+        patch_size,
+        fft2d_row_plan_scratch_len,
+        fft2d_col_plan_scratch_len,
+        ifft2d_row_plan_scratch_len,
+        ifft2d_col_plan_scratch_len,
+        fft1d_plan_scratch_len,
+        ifft1d_plan_scratch_len,
+    };
+
     let final_result = if total_refs == 0 {
         None
     } else {
@@ -917,34 +1050,42 @@ pub fn run_bm3d_kernel<F: Bm3dFloat>(
         let chunk_len = total_refs.div_ceil(partial_count).max(RAYON_MIN_CHUNK_LEN);
         let chunk_count = total_refs.div_ceil(chunk_len);
 
+        scratch_pool.ensure_chunk_count(chunk_count);
+        for chunk in scratch_pool.chunks.iter_mut().take(chunk_count) {
+            chunk.prepare(worker_layout, patch_size, transform_cache_capacity);
+        }
+
         (0..chunk_count)
             .into_par_iter()
-            .map(|chunk_idx| {
+            .zip(scratch_pool.chunks[..chunk_count].par_iter_mut())
+            .map(|(chunk_idx, chunk_scratch)| {
                 let chunk_start = chunk_idx * chunk_len;
                 let chunk_end = (chunk_start + chunk_len).min(total_refs);
                 let mut tile_accumulators: TileAccumulatorVec<F> =
                     (0..tile_count).map(|_| None).collect();
-                let mut worker = WorkerBuffers::<F>::new(
-                    max_matches,
-                    patch_size,
-                    fft2d_row_plan_scratch_len,
-                    fft2d_col_plan_scratch_len,
-                    ifft2d_row_plan_scratch_len,
-                    ifft2d_col_plan_scratch_len,
-                    fft1d_plan_scratch_len,
-                    ifft1d_plan_scratch_len,
-                );
-                let mut noisy_transform_cache =
-                    PatchTransformCache::<F>::new(patch_size, transform_cache_capacity);
+                let mut stats = KernelStageStats::default();
+
+                let KernelChunkScratch {
+                    worker,
+                    noisy_transform_cache,
+                    pilot_transform_cache,
+                    ..
+                } = chunk_scratch;
+                let worker = worker
+                    .as_mut()
+                    .expect("worker scratch should be prepared before processing");
+                let noisy_transform_cache = noisy_transform_cache
+                    .as_mut()
+                    .expect("noisy transform cache should be prepared before processing");
                 let mut pilot_transform_cache = if mode == Bm3dMode::Wiener {
-                    Some(PatchTransformCache::<F>::new(
-                        patch_size,
-                        transform_cache_capacity,
-                    ))
+                    Some(
+                        pilot_transform_cache
+                            .as_mut()
+                            .expect("pilot transform cache should be prepared before processing"),
+                    )
                 } else {
                     None
                 };
-                let mut stats = KernelStageStats::default();
 
                 for ref_index in chunk_start..chunk_end {
                     let ref_r = (ref_index / ref_cols) * step_size;
@@ -987,7 +1128,7 @@ pub fn run_bm3d_kernel<F: Bm3dFloat>(
                             patch_size,
                             use_hadamard,
                             &fft_2d_refs,
-                            &mut noisy_transform_cache,
+                            noisy_transform_cache,
                             &mut worker.complex_work,
                             &mut worker.scratch_2d,
                             &mut worker.fft2d_row_plan_scratch,
@@ -1377,6 +1518,7 @@ pub fn run_bm3d_step_stack<F: Bm3dFloat>(
     }
 
     let mut output = Array3::<F>::zeros((n, rows, cols));
+    let mut scratch_pool = KernelScratchPool::<F>::new();
     // Process one slice at a time: avoids nested Rayon scheduling (stack + kernel)
     // and avoids materializing an intermediate Vec<Array2<_>> of all slice outputs.
     for i in 0..n {
@@ -1388,7 +1530,7 @@ pub fn run_bm3d_step_stack<F: Bm3dFloat>(
             sigma_map.index_axis(Axis(0), i)
         };
 
-        let res = run_bm3d_kernel(
+        let res = run_bm3d_kernel_with_scratch(
             noisy_slice,
             pilot_slice,
             mode,
@@ -1396,6 +1538,7 @@ pub fn run_bm3d_step_stack<F: Bm3dFloat>(
             map_slice,
             config,
             plans,
+            &mut scratch_pool,
         );
         output.slice_mut(s![i, .., ..]).assign(&res);
     }
