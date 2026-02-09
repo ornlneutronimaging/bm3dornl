@@ -28,32 +28,21 @@ jobs:
           path: dist/*.whl
 
   macos:
-    name: ${{ matrix.name }}
-    runs-on: ${{ matrix.runs_on }}
-    strategy:
-      matrix:
-        include:
-          - name: macOS ARM64
-            runs_on: macos-latest
-            target: aarch64-apple-darwin
-            artifact_name: wheel-macos-arm64
-          - name: macOS x86_64
-            runs_on: macos-13
-            target: x86_64-apple-darwin
-            artifact_name: wheel-macos-x86_64
+    name: macOS ARM64
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v6
 
       - name: Build wheel
         uses: PyO3/maturin-action@v1
         with:
-          target: ${{ matrix.target }}
+          target: aarch64-apple-darwin
           args: --release --out dist
 
       - name: Upload wheel
         uses: actions/upload-artifact@v6
         with:
-          name: ${{ matrix.artifact_name }}
+          name: wheel-macos-arm64
           path: dist/*.whl
 
   sdist:
