@@ -4,7 +4,7 @@ use ndarray::{s, Array2, Array3, ArrayView2, ArrayView3, Axis};
 use rayon::prelude::*;
 use rustfft::num_complex::Complex;
 use rustfft::Fft;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -42,7 +42,10 @@ const TRANSFORM_CACHE_CAPACITY: usize = 512;
 const TRANSFORM_CACHE_CAPACITY_ENV: &str = "BM3D_TRANSFORM_CACHE_CAPACITY";
 const PROFILE_TIMING_ENV: &str = "BM3D_PROFILE_TIMING";
 const USE_HADAMARD_ENV: &str = "BM3D_USE_HADAMARD";
-static USE_HADAMARD_FAST_PATH: AtomicBool = AtomicBool::new(false);
+const HADAMARD_FAST_PATH_UNSET: u8 = 0;
+const HADAMARD_FAST_PATH_DISABLED: u8 = 1;
+const HADAMARD_FAST_PATH_ENABLED: u8 = 2;
+static HADAMARD_FAST_PATH_OVERRIDE: AtomicU8 = AtomicU8::new(HADAMARD_FAST_PATH_UNSET);
 
 /// Patch size that triggers the fast Hadamard transform path.
 /// Walsh-Hadamard Transform is only implemented for 8x8 patches.
@@ -910,12 +913,50 @@ impl KernelStageStats {
 ///
 /// Default is `false` (quality-first FFT path).
 pub fn set_use_hadamard_fast_path(enabled: bool) {
-    USE_HADAMARD_FAST_PATH.store(enabled, Ordering::Relaxed);
+    let state = if enabled {
+        HADAMARD_FAST_PATH_ENABLED
+    } else {
+        HADAMARD_FAST_PATH_DISABLED
+    };
+    HADAMARD_FAST_PATH_OVERRIDE.store(state, Ordering::Relaxed);
 }
 
 /// Get current 8x8 Hadamard fast-path setting.
 pub fn use_hadamard_fast_path() -> bool {
-    USE_HADAMARD_FAST_PATH.load(Ordering::Relaxed)
+    hadamard_fast_path_override().unwrap_or(false)
+}
+
+#[inline]
+fn hadamard_fast_path_override() -> Option<bool> {
+    match HADAMARD_FAST_PATH_OVERRIDE.load(Ordering::Relaxed) {
+        HADAMARD_FAST_PATH_DISABLED => Some(false),
+        HADAMARD_FAST_PATH_ENABLED => Some(true),
+        _ => None,
+    }
+}
+
+#[inline]
+fn parse_env_truthy(value: &str) -> bool {
+    let v = value.trim();
+    v == "1"
+        || v.eq_ignore_ascii_case("true")
+        || v.eq_ignore_ascii_case("yes")
+        || v.eq_ignore_ascii_case("on")
+}
+
+#[inline]
+fn resolve_use_hadamard_decision(
+    patch_size: usize,
+    explicit_override: Option<bool>,
+    env_value: Option<&str>,
+) -> bool {
+    if patch_size != HADAMARD_PATCH_SIZE {
+        return false;
+    }
+    if let Some(enabled) = explicit_override {
+        return enabled;
+    }
+    env_value.map(parse_env_truthy).unwrap_or(false)
 }
 
 /// Resolve whether the 8x8 Hadamard fast path should be used.
@@ -924,22 +965,9 @@ pub fn use_hadamard_fast_path() -> bool {
 /// patch-like artifacts near strong boundaries. Set `BM3D_USE_HADAMARD=1`
 /// to re-enable speed-first behavior for 8x8 patches.
 fn resolve_use_hadamard(patch_size: usize) -> bool {
-    if patch_size != HADAMARD_PATCH_SIZE {
-        return false;
-    }
-    if use_hadamard_fast_path() {
-        return true;
-    }
-    std::env::var(USE_HADAMARD_ENV)
-        .ok()
-        .map(|value| {
-            let v = value.trim();
-            v == "1"
-                || v.eq_ignore_ascii_case("true")
-                || v.eq_ignore_ascii_case("yes")
-                || v.eq_ignore_ascii_case("on")
-        })
-        .unwrap_or(false)
+    let explicit_override = hadamard_fast_path_override();
+    let env_value = std::env::var(USE_HADAMARD_ENV).ok();
+    resolve_use_hadamard_decision(patch_size, explicit_override, env_value.as_deref())
 }
 
 /// Build separable patch-blend weights for overlap-add aggregation.
@@ -2135,6 +2163,18 @@ mod tests {
         assert_eq!(a.dim(), b.dim());
         let sum_sq: f32 = a.iter().zip(b.iter()).map(|(x, y)| (x - y).powi(2)).sum();
         sum_sq / (a.len() as f32)
+    }
+
+    #[test]
+    fn test_hadamard_override_precedence_over_env() {
+        // Env alone can enable fast path for 8x8 patches.
+        assert!(resolve_use_hadamard_decision(8, None, Some("1")));
+        // Explicit disable must take precedence over env enable.
+        assert!(!resolve_use_hadamard_decision(8, Some(false), Some("1")));
+        // Explicit enable must take precedence over env disable.
+        assert!(resolve_use_hadamard_decision(8, Some(true), Some("0")));
+        // Non-8x8 patches never use Hadamard fast path.
+        assert!(!resolve_use_hadamard_decision(7, Some(true), Some("1")));
     }
 
     #[test]
