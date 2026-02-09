@@ -37,6 +37,7 @@ fn run_bm3d_step_compat<F: Bm3dFloat>(
         step_size,
         search_window,
         max_matches,
+        use_hadamard_fast_path: None,
     };
     run_bm3d_step(
         input_noisy,
@@ -70,6 +71,7 @@ fn run_bm3d_step_stack_compat<F: Bm3dFloat>(
         step_size,
         search_window,
         max_matches,
+        use_hadamard_fast_path: None,
     };
     run_bm3d_step_stack(
         input_noisy,

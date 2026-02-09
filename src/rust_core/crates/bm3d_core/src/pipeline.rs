@@ -73,6 +73,9 @@ pub struct Bm3dKernelConfig<F: Bm3dFloat> {
     pub step_size: usize,
     pub search_window: usize,
     pub max_matches: usize,
+    /// Optional per-call override for 8x8 Hadamard fast path.
+    /// `Some(true/false)` takes precedence over env/global defaults.
+    pub use_hadamard_fast_path: Option<bool>,
 }
 
 /// Helper struct to manage pre-computed FFT plans.
@@ -947,11 +950,15 @@ fn parse_env_truthy(value: &str) -> bool {
 #[inline]
 fn resolve_use_hadamard_decision(
     patch_size: usize,
+    per_call_override: Option<bool>,
     explicit_override: Option<bool>,
     env_value: Option<&str>,
 ) -> bool {
     if patch_size != HADAMARD_PATCH_SIZE {
         return false;
+    }
+    if let Some(enabled) = per_call_override {
+        return enabled;
     }
     if let Some(enabled) = explicit_override {
         return enabled;
@@ -964,10 +971,15 @@ fn resolve_use_hadamard_decision(
 /// Default is quality-first (`false`), because FFT path is less prone to
 /// patch-like artifacts near strong boundaries. Set `BM3D_USE_HADAMARD=1`
 /// to re-enable speed-first behavior for 8x8 patches.
-fn resolve_use_hadamard(patch_size: usize) -> bool {
+fn resolve_use_hadamard(patch_size: usize, per_call_override: Option<bool>) -> bool {
     let explicit_override = hadamard_fast_path_override();
     let env_value = std::env::var(USE_HADAMARD_ENV).ok();
-    resolve_use_hadamard_decision(patch_size, explicit_override, env_value.as_deref())
+    resolve_use_hadamard_decision(
+        patch_size,
+        per_call_override,
+        explicit_override,
+        env_value.as_deref(),
+    )
 }
 
 /// Build separable patch-blend weights for overlap-add aggregation.
@@ -1383,7 +1395,7 @@ fn run_bm3d_kernel_with_scratch<F: Bm3dFloat>(
     let scalar_sigma_sq = config.sigma_random * config.sigma_random;
 
     // Fast path for 8x8 patches using Hadamard (opt-in via env).
-    let use_hadamard = resolve_use_hadamard(patch_size);
+    let use_hadamard = resolve_use_hadamard(patch_size, config.use_hadamard_fast_path);
 
     // Pre-compute Integral Images for Block Matching acceleration
     let integral_sum = block_matching::compute_integral_sum_image(input_pilot);
@@ -2168,13 +2180,35 @@ mod tests {
     #[test]
     fn test_hadamard_override_precedence_over_env() {
         // Env alone can enable fast path for 8x8 patches.
-        assert!(resolve_use_hadamard_decision(8, None, Some("1")));
+        assert!(resolve_use_hadamard_decision(8, None, None, Some("1")));
         // Explicit disable must take precedence over env enable.
-        assert!(!resolve_use_hadamard_decision(8, Some(false), Some("1")));
+        assert!(!resolve_use_hadamard_decision(
+            8,
+            None,
+            Some(false),
+            Some("1")
+        ));
         // Explicit enable must take precedence over env disable.
-        assert!(resolve_use_hadamard_decision(8, Some(true), Some("0")));
+        assert!(resolve_use_hadamard_decision(
+            8,
+            None,
+            Some(true),
+            Some("0")
+        ));
+        // Per-call override must beat explicit/env defaults.
+        assert!(!resolve_use_hadamard_decision(
+            8,
+            Some(false),
+            Some(true),
+            Some("1")
+        ));
         // Non-8x8 patches never use Hadamard fast path.
-        assert!(!resolve_use_hadamard_decision(7, Some(true), Some("1")));
+        assert!(!resolve_use_hadamard_decision(
+            7,
+            Some(true),
+            Some(true),
+            Some("1")
+        ));
     }
 
     #[test]
@@ -2347,6 +2381,7 @@ mod tests {
             step_size,
             search_window,
             max_matches,
+            use_hadamard_fast_path: None,
         };
         super::run_bm3d_step(
             input_noisy,
@@ -2380,6 +2415,7 @@ mod tests {
             step_size,
             search_window,
             max_matches,
+            use_hadamard_fast_path: None,
         };
         super::run_bm3d_step_stack(
             input_noisy,

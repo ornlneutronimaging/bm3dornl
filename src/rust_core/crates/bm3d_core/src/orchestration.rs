@@ -132,6 +132,9 @@ pub struct Bm3dConfig<F: Bm3dFloat> {
     pub fft_alpha: F,
     /// FFT-Guided SVD: Gaussian notch width. Default: 2.0
     pub notch_width: F,
+    /// Optional per-call override for 8x8 Hadamard fast path.
+    /// `Some(true/false)` takes precedence over env/global defaults.
+    pub use_hadamard_fast_path: Option<bool>,
 }
 
 impl<F: Bm3dFloat> Default for Bm3dConfig<F> {
@@ -151,6 +154,7 @@ impl<F: Bm3dFloat> Default for Bm3dConfig<F> {
             filter_strength: F::from_f64_c(DEFAULT_FILTER_STRENGTH),
             fft_alpha: F::from_f64_c(DEFAULT_FFT_ALPHA),
             notch_width: F::from_f64_c(DEFAULT_NOTCH_WIDTH),
+            use_hadamard_fast_path: None,
         }
     }
 }
@@ -432,6 +436,7 @@ pub fn bm3d_ring_artifact_removal_with_plans<F: Bm3dFloat>(
         step_size: config.step_size,
         search_window: config.search_window,
         max_matches: config.max_matches,
+        use_hadamard_fast_path: config.use_hadamard_fast_path,
     };
     let yhat_ht = timed!(profile_timing, hard_pass_ns, {
         run_bm3d_step(
@@ -453,6 +458,7 @@ pub fn bm3d_ring_artifact_removal_with_plans<F: Bm3dFloat>(
         step_size: config.step_size,
         search_window: config.search_window,
         max_matches: config.max_matches,
+        use_hadamard_fast_path: config.use_hadamard_fast_path,
     };
     let yhat_final = timed!(profile_timing, wiener_pass_ns, {
         run_bm3d_step(

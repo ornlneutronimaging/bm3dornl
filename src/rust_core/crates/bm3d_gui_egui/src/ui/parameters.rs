@@ -80,6 +80,7 @@ impl Bm3dParameters {
             max_matches: self.max_matches,
             fft_alpha: self.fft_alpha,
             notch_width: self.notch_width,
+            use_hadamard_fast_path: Some(self.use_hadamard_fast_mode),
             ..default
         }
     }

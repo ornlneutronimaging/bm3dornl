@@ -52,6 +52,7 @@ fn run_bm3d_kernel_compat<F: bm3d_core::Bm3dFloat>(
         step_size,
         search_window,
         max_matches,
+        use_hadamard_fast_path: None,
     };
     run_bm3d_kernel(
         input_noisy,

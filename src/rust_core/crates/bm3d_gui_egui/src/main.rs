@@ -8,7 +8,6 @@ mod data;
 mod processing;
 mod ui;
 
-use bm3d_core::set_use_hadamard_fast_path;
 use data::{build_hdf5_tree, load_hdf5_dataset, load_tiff_sequence, load_tiff_stack, Volume3D};
 use eframe::egui;
 use processing::{ProcessingManager, ProcessingState};
@@ -302,7 +301,6 @@ impl App {
             let mode = self.bm3d_params.mode;
             let config = self.bm3d_params.to_multiscale_config();
             let use_multiscale = self.bm3d_params.uses_multiscale();
-            set_use_hadamard_fast_path(self.bm3d_params.use_hadamard_fast_mode);
 
             // Use the processing axis from parameters (configurable in Advanced).
             // Default is axis 1 (Y) for standard tomography data [angles, Y, X].
