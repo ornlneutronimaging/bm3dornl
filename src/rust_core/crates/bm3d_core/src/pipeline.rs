@@ -1002,6 +1002,179 @@ fn get_or_insert_tile<F: Bm3dFloat>(
         .expect("tile should be initialized")
 }
 
+#[cfg(target_arch = "x86_64")]
+#[allow(unsafe_op_in_unsafe_fn)]
+#[target_feature(enable = "avx2")]
+unsafe fn aggregate_patch_row8_avx2(
+    num_data: &mut [f32],
+    den_data: &mut [f32],
+    tile_w: usize,
+    spatial_vals: &[f32],
+    blend_vals: &[f32],
+    local_r0: usize,
+    local_c0: usize,
+    weight: f32,
+) {
+    use std::arch::x86_64::*;
+    let wv = _mm256_set1_ps(weight);
+    for pr in 0..8 {
+        let src_base = pr * 8;
+        let dst_base = (local_r0 + pr) * tile_w + local_c0;
+        let s = _mm256_loadu_ps(spatial_vals.as_ptr().add(src_base));
+        let b = _mm256_loadu_ps(blend_vals.as_ptr().add(src_base));
+        let wr = _mm256_mul_ps(b, wv);
+        let num = _mm256_loadu_ps(num_data.as_ptr().add(dst_base));
+        let den = _mm256_loadu_ps(den_data.as_ptr().add(dst_base));
+        let num_new = _mm256_add_ps(num, _mm256_mul_ps(s, wr));
+        let den_new = _mm256_add_ps(den, wr);
+        _mm256_storeu_ps(num_data.as_mut_ptr().add(dst_base), num_new);
+        _mm256_storeu_ps(den_data.as_mut_ptr().add(dst_base), den_new);
+    }
+}
+
+#[cfg(target_arch = "x86_64")]
+#[allow(unsafe_op_in_unsafe_fn)]
+#[target_feature(enable = "sse2")]
+unsafe fn aggregate_patch_row8_sse2(
+    num_data: &mut [f32],
+    den_data: &mut [f32],
+    tile_w: usize,
+    spatial_vals: &[f32],
+    blend_vals: &[f32],
+    local_r0: usize,
+    local_c0: usize,
+    weight: f32,
+) {
+    use std::arch::x86_64::*;
+    let wv = _mm_set1_ps(weight);
+    for pr in 0..8 {
+        let src_base = pr * 8;
+        let dst_base = (local_r0 + pr) * tile_w + local_c0;
+        for offset in [0usize, 4usize] {
+            let src = src_base + offset;
+            let dst = dst_base + offset;
+            let s = _mm_loadu_ps(spatial_vals.as_ptr().add(src));
+            let b = _mm_loadu_ps(blend_vals.as_ptr().add(src));
+            let wr = _mm_mul_ps(b, wv);
+            let num = _mm_loadu_ps(num_data.as_ptr().add(dst));
+            let den = _mm_loadu_ps(den_data.as_ptr().add(dst));
+            let num_new = _mm_add_ps(num, _mm_mul_ps(s, wr));
+            let den_new = _mm_add_ps(den, wr);
+            _mm_storeu_ps(num_data.as_mut_ptr().add(dst), num_new);
+            _mm_storeu_ps(den_data.as_mut_ptr().add(dst), den_new);
+        }
+    }
+}
+
+#[cfg(target_arch = "aarch64")]
+#[allow(unsafe_op_in_unsafe_fn)]
+unsafe fn aggregate_patch_row8_neon(
+    num_data: &mut [f32],
+    den_data: &mut [f32],
+    tile_w: usize,
+    spatial_vals: &[f32],
+    blend_vals: &[f32],
+    local_r0: usize,
+    local_c0: usize,
+    weight: f32,
+) {
+    use std::arch::aarch64::*;
+    let wv = vdupq_n_f32(weight);
+    for pr in 0..8 {
+        let src_base = pr * 8;
+        let dst_base = (local_r0 + pr) * tile_w + local_c0;
+        for offset in [0usize, 4usize] {
+            let src = src_base + offset;
+            let dst = dst_base + offset;
+            let s = vld1q_f32(spatial_vals.as_ptr().add(src));
+            let b = vld1q_f32(blend_vals.as_ptr().add(src));
+            let wr = vmulq_f32(b, wv);
+            let num = vld1q_f32(num_data.as_ptr().add(dst));
+            let den = vld1q_f32(den_data.as_ptr().add(dst));
+            let num_new = vaddq_f32(num, vmulq_f32(s, wr));
+            let den_new = vaddq_f32(den, wr);
+            vst1q_f32(num_data.as_mut_ptr().add(dst), num_new);
+            vst1q_f32(den_data.as_mut_ptr().add(dst), den_new);
+        }
+    }
+}
+
+#[inline(always)]
+fn try_aggregate_patch_row8_simd_f32(
+    num_data: &mut [f32],
+    den_data: &mut [f32],
+    tile_w: usize,
+    spatial_vals: &[f32],
+    blend_vals: &[f32],
+    local_r0: usize,
+    local_c0: usize,
+    weight: f32,
+    patch_size: usize,
+) -> bool {
+    if patch_size != 8 || local_c0 + 8 > tile_w {
+        return false;
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    {
+        if std::arch::is_x86_feature_detected!("avx2") {
+            // SAFETY: Feature is checked at runtime; buffers are contiguous and sized.
+            unsafe {
+                aggregate_patch_row8_avx2(
+                    num_data,
+                    den_data,
+                    tile_w,
+                    spatial_vals,
+                    blend_vals,
+                    local_r0,
+                    local_c0,
+                    weight,
+                );
+            }
+            return true;
+        }
+        if std::arch::is_x86_feature_detected!("sse2") {
+            // SAFETY: Feature is checked at runtime; buffers are contiguous and sized.
+            unsafe {
+                aggregate_patch_row8_sse2(
+                    num_data,
+                    den_data,
+                    tile_w,
+                    spatial_vals,
+                    blend_vals,
+                    local_r0,
+                    local_c0,
+                    weight,
+                );
+            }
+            return true;
+        }
+    }
+
+    #[cfg(target_arch = "aarch64")]
+    {
+        // SAFETY: NEON is baseline on aarch64; buffers are contiguous and sized.
+        unsafe {
+            aggregate_patch_row8_neon(
+                num_data,
+                den_data,
+                tile_w,
+                spatial_vals,
+                blend_vals,
+                local_r0,
+                local_c0,
+                weight,
+            );
+        }
+        true
+    }
+
+    #[cfg(not(target_arch = "aarch64"))]
+    {
+        false
+    }
+}
+
 /// Aggregate a single denoised patch into tile-local numerator/denominator accumulators.
 fn aggregate_patch_into_tiles<F: Bm3dFloat>(
     spatial: &Array2<F>,
@@ -1047,6 +1220,43 @@ fn aggregate_patch_into_tiles<F: Bm3dFloat>(
             spatial_data,
             blend_data,
         ) {
+            if std::mem::size_of::<F>() == std::mem::size_of::<f32>() && geom.patch_size == 8 {
+                let weight_f32 = weight.to_f32().unwrap_or(0.0);
+                // SAFETY: We only reinterpret when F is f32-sized and this code is instantiated
+                // for f32 in practice; fallback scalar path is always available.
+                let simd_done = unsafe {
+                    let num_f32 = std::slice::from_raw_parts_mut(
+                        num_data.as_mut_ptr() as *mut f32,
+                        num_data.len(),
+                    );
+                    let den_f32 = std::slice::from_raw_parts_mut(
+                        den_data.as_mut_ptr() as *mut f32,
+                        den_data.len(),
+                    );
+                    let spatial_f32 = std::slice::from_raw_parts(
+                        spatial_vals.as_ptr() as *const f32,
+                        spatial_vals.len(),
+                    );
+                    let blend_f32 = std::slice::from_raw_parts(
+                        blend_vals.as_ptr() as *const f32,
+                        blend_vals.len(),
+                    );
+                    try_aggregate_patch_row8_simd_f32(
+                        num_f32,
+                        den_f32,
+                        tile_w,
+                        spatial_f32,
+                        blend_f32,
+                        local_r0,
+                        local_c0,
+                        weight_f32,
+                        geom.patch_size,
+                    )
+                };
+                if simd_done {
+                    return;
+                }
+            }
             for pr in 0..geom.patch_size {
                 let src_base = pr * geom.patch_size;
                 let dst_base = (local_r0 + pr) * tile_w + local_c0;
