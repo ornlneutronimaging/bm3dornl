@@ -550,6 +550,7 @@ name = "bm3d_core"
 version = "0.7.1"
 dependencies = [
  "criterion",
+ "libc",
  "ndarray",
  "num-traits",
  "rand 0.8.5",

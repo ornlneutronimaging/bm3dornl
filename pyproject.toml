@@ -1,6 +1,6 @@
 [project]
 name = "bm3dornl"
-version = "0.7.1"
+version = "0.8.0"
 description = "BM3D for streak artifact removal in neutron imaging"
 requires-python = ">=3.12"
 dependencies = [
@@ -20,7 +20,7 @@ documentation = "https://bm3dornl.readthedocs.io/en/latest/"
 issues = "https://github.com/ornlneutronimaging/bm3dornl/issues"
 
 [project.optional-dependencies]
-gui = ["bm3dornl-gui==0.7.1"]
+gui = ["bm3dornl-gui==0.8.0"]
 
 [build-system]
 requires = ["maturin>=1.0,<2.0"]
@@ -71,6 +71,9 @@ build = "maturin develop --release"
 test-rust = { cmd = "PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 cargo test --workspace", cwd = "src/rust_core" }
 test-python = "pytest"
 test = { depends-on = ["test-rust", "test-python"] }
+lint-fmt = { cmd = "cargo fmt --all --check", cwd = "src/rust_core" }
+lint-clippy = { cmd = "cargo clippy --workspace --all-targets -- -D warnings", cwd = "src/rust_core" }
+lint = { depends-on = ["lint-fmt", "lint-clippy"] }
 bench = "python benchmarks/measure_stack_speed.py"
 bench-rust = { cmd = "cargo bench -p bm3d_core", cwd = "src/rust_core" }
 clean = "cargo clean --manifest-path src/rust_core/Cargo.toml"

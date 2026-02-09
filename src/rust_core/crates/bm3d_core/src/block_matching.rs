@@ -1,4 +1,11 @@
-use ndarray::{s, Array2, ArrayView2};
+use ndarray::{Array2, ArrayView2};
+use std::any::TypeId;
+#[cfg(target_arch = "aarch64")]
+use std::arch::aarch64::*;
+#[cfg(target_arch = "x86")]
+use std::arch::x86::*;
+#[cfg(target_arch = "x86_64")]
+use std::arch::x86_64::*;
 use std::cmp::Ordering;
 
 use crate::float_trait::Bm3dFloat;
@@ -32,13 +39,26 @@ impl<F: Bm3dFloat> PartialOrd for PatchMatch<F> {
     }
 }
 
-/// Compute squared L2 distance between two patches with early termination.
-#[inline]
-fn compute_squared_distance<F: Bm3dFloat>(p1: ArrayView2<F>, p2: ArrayView2<F>, threshold: F) -> F {
+/// Compute squared L2 distance between two patches directly from the source image.
+///
+/// This avoids creating candidate patch views in the hot inner loop.
+#[inline(always)]
+fn compute_squared_distance_at<F: Bm3dFloat>(
+    image: ArrayView2<F>,
+    ref_r: usize,
+    ref_c: usize,
+    cand_r: usize,
+    cand_c: usize,
+    ph: usize,
+    pw: usize,
+    threshold: F,
+) -> F {
     let mut sum_sq = F::zero();
-    for (r1, r2) in p1.outer_iter().zip(p2.outer_iter()) {
-        for (a, b) in r1.iter().zip(r2.iter()) {
-            let diff = *a - *b;
+    for dr in 0..ph {
+        let ref_row = image.row(ref_r + dr);
+        let cand_row = image.row(cand_r + dr);
+        for dc in 0..pw {
+            let diff = ref_row[ref_c + dc] - cand_row[cand_c + dc];
             sum_sq += diff * diff;
         }
         if sum_sq >= threshold {
@@ -46,6 +66,310 @@ fn compute_squared_distance<F: Bm3dFloat>(p1: ArrayView2<F>, p2: ArrayView2<F>, 
         }
     }
     sum_sq
+}
+
+#[inline(always)]
+fn compute_squared_distance_at_strided<F: Bm3dFloat>(
+    image_data: &[F],
+    image_cols: usize,
+    ref_r: usize,
+    ref_c: usize,
+    cand_r: usize,
+    cand_c: usize,
+    ph: usize,
+    pw: usize,
+    threshold: F,
+) -> F {
+    let mut sum_sq = F::zero();
+    for dr in 0..ph {
+        let ref_base = (ref_r + dr) * image_cols + ref_c;
+        let cand_base = (cand_r + dr) * image_cols + cand_c;
+        for dc in 0..pw {
+            let diff = image_data[ref_base + dc] - image_data[cand_base + dc];
+            sum_sq += diff * diff;
+        }
+        if sum_sq >= threshold {
+            return sum_sq;
+        }
+    }
+    sum_sq
+}
+
+#[inline(always)]
+fn compute_squared_distance_at_strided_8x8_scalar<F: Bm3dFloat>(
+    image_data: &[F],
+    image_cols: usize,
+    ref_r: usize,
+    ref_c: usize,
+    cand_r: usize,
+    cand_c: usize,
+    threshold: F,
+) -> F {
+    let mut sum_sq = F::zero();
+    for dr in 0..8 {
+        let ref_base = (ref_r + dr) * image_cols + ref_c;
+        let cand_base = (cand_r + dr) * image_cols + cand_c;
+
+        let d0 = image_data[ref_base] - image_data[cand_base];
+        let d1 = image_data[ref_base + 1] - image_data[cand_base + 1];
+        let d2 = image_data[ref_base + 2] - image_data[cand_base + 2];
+        let d3 = image_data[ref_base + 3] - image_data[cand_base + 3];
+        let d4 = image_data[ref_base + 4] - image_data[cand_base + 4];
+        let d5 = image_data[ref_base + 5] - image_data[cand_base + 5];
+        let d6 = image_data[ref_base + 6] - image_data[cand_base + 6];
+        let d7 = image_data[ref_base + 7] - image_data[cand_base + 7];
+
+        sum_sq += d0 * d0;
+        sum_sq += d1 * d1;
+        sum_sq += d2 * d2;
+        sum_sq += d3 * d3;
+        sum_sq += d4 * d4;
+        sum_sq += d5 * d5;
+        sum_sq += d6 * d6;
+        sum_sq += d7 * d7;
+
+        if sum_sq >= threshold {
+            return sum_sq;
+        }
+    }
+    sum_sq
+}
+
+#[inline(always)]
+fn compute_squared_distance_at_strided_8x8_f32_dispatch(
+    image_data: &[f32],
+    image_cols: usize,
+    ref_r: usize,
+    ref_c: usize,
+    cand_r: usize,
+    cand_c: usize,
+    threshold: f32,
+) -> f32 {
+    #[cfg(target_arch = "x86_64")]
+    {
+        if std::arch::is_x86_feature_detected!("avx2") {
+            // SAFETY: Guarded by runtime feature check.
+            unsafe {
+                compute_squared_distance_at_strided_8x8_f32_avx2(
+                    image_data, image_cols, ref_r, ref_c, cand_r, cand_c, threshold,
+                )
+            }
+        } else {
+            // SAFETY: SSE2 is guaranteed on x86_64.
+            unsafe {
+                compute_squared_distance_at_strided_8x8_f32_sse2(
+                    image_data, image_cols, ref_r, ref_c, cand_r, cand_c, threshold,
+                )
+            }
+        }
+    }
+
+    #[cfg(target_arch = "x86")]
+    {
+        if std::arch::is_x86_feature_detected!("avx2") {
+            // SAFETY: Guarded by runtime feature check.
+            unsafe {
+                compute_squared_distance_at_strided_8x8_f32_avx2(
+                    image_data, image_cols, ref_r, ref_c, cand_r, cand_c, threshold,
+                )
+            }
+        } else if std::arch::is_x86_feature_detected!("sse2") {
+            // SAFETY: Guarded by runtime feature check.
+            unsafe {
+                compute_squared_distance_at_strided_8x8_f32_sse2(
+                    image_data, image_cols, ref_r, ref_c, cand_r, cand_c, threshold,
+                )
+            }
+        } else {
+            compute_squared_distance_at_strided_8x8_scalar(
+                image_data, image_cols, ref_r, ref_c, cand_r, cand_c, threshold,
+            )
+        }
+    }
+
+    #[cfg(target_arch = "aarch64")]
+    {
+        // SAFETY: NEON is baseline on aarch64.
+        unsafe {
+            compute_squared_distance_at_strided_8x8_f32_neon(
+                image_data, image_cols, ref_r, ref_c, cand_r, cand_c, threshold,
+            )
+        }
+    }
+
+    #[cfg(not(any(target_arch = "x86_64", target_arch = "x86", target_arch = "aarch64")))]
+    {
+        compute_squared_distance_at_strided_8x8_scalar(
+            image_data, image_cols, ref_r, ref_c, cand_r, cand_c, threshold,
+        )
+    }
+}
+
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[target_feature(enable = "sse2")]
+unsafe fn compute_squared_distance_at_strided_8x8_f32_sse2(
+    image_data: &[f32],
+    image_cols: usize,
+    ref_r: usize,
+    ref_c: usize,
+    cand_r: usize,
+    cand_c: usize,
+    threshold: f32,
+) -> f32 {
+    let mut sum_sq = 0.0f32;
+    for dr in 0..8 {
+        let ref_base = (ref_r + dr) * image_cols + ref_c;
+        let cand_base = (cand_r + dr) * image_cols + cand_c;
+        let ref_ptr = image_data.as_ptr().add(ref_base);
+        let cand_ptr = image_data.as_ptr().add(cand_base);
+
+        let ref_lo = _mm_loadu_ps(ref_ptr);
+        let cand_lo = _mm_loadu_ps(cand_ptr);
+        let diff_lo = _mm_sub_ps(ref_lo, cand_lo);
+        let sq_lo = _mm_mul_ps(diff_lo, diff_lo);
+
+        let ref_hi = _mm_loadu_ps(ref_ptr.add(4));
+        let cand_hi = _mm_loadu_ps(cand_ptr.add(4));
+        let diff_hi = _mm_sub_ps(ref_hi, cand_hi);
+        let sq_hi = _mm_mul_ps(diff_hi, diff_hi);
+
+        let mut lanes_lo = [0.0f32; 4];
+        let mut lanes_hi = [0.0f32; 4];
+        _mm_storeu_ps(lanes_lo.as_mut_ptr(), sq_lo);
+        _mm_storeu_ps(lanes_hi.as_mut_ptr(), sq_hi);
+
+        sum_sq += lanes_lo[0]
+            + lanes_lo[1]
+            + lanes_lo[2]
+            + lanes_lo[3]
+            + lanes_hi[0]
+            + lanes_hi[1]
+            + lanes_hi[2]
+            + lanes_hi[3];
+        if sum_sq >= threshold {
+            return sum_sq;
+        }
+    }
+    sum_sq
+}
+
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[target_feature(enable = "avx2")]
+unsafe fn compute_squared_distance_at_strided_8x8_f32_avx2(
+    image_data: &[f32],
+    image_cols: usize,
+    ref_r: usize,
+    ref_c: usize,
+    cand_r: usize,
+    cand_c: usize,
+    threshold: f32,
+) -> f32 {
+    let mut sum_sq = 0.0f32;
+    for dr in 0..8 {
+        let ref_base = (ref_r + dr) * image_cols + ref_c;
+        let cand_base = (cand_r + dr) * image_cols + cand_c;
+        let ref_ptr = image_data.as_ptr().add(ref_base);
+        let cand_ptr = image_data.as_ptr().add(cand_base);
+
+        let ref_vec = _mm256_loadu_ps(ref_ptr);
+        let cand_vec = _mm256_loadu_ps(cand_ptr);
+        let diff = _mm256_sub_ps(ref_vec, cand_vec);
+        let sq = _mm256_mul_ps(diff, diff);
+
+        let mut lanes = [0.0f32; 8];
+        _mm256_storeu_ps(lanes.as_mut_ptr(), sq);
+        sum_sq +=
+            lanes[0] + lanes[1] + lanes[2] + lanes[3] + lanes[4] + lanes[5] + lanes[6] + lanes[7];
+        if sum_sq >= threshold {
+            return sum_sq;
+        }
+    }
+    sum_sq
+}
+
+#[cfg(target_arch = "aarch64")]
+unsafe fn compute_squared_distance_at_strided_8x8_f32_neon(
+    image_data: &[f32],
+    image_cols: usize,
+    ref_r: usize,
+    ref_c: usize,
+    cand_r: usize,
+    cand_c: usize,
+    threshold: f32,
+) -> f32 {
+    let mut sum_sq = 0.0f32;
+    for dr in 0..8 {
+        let ref_base = (ref_r + dr) * image_cols + ref_c;
+        let cand_base = (cand_r + dr) * image_cols + cand_c;
+        let ref_ptr = image_data.as_ptr().add(ref_base);
+        let cand_ptr = image_data.as_ptr().add(cand_base);
+
+        let ref_lo = vld1q_f32(ref_ptr);
+        let cand_lo = vld1q_f32(cand_ptr);
+        let diff_lo = vsubq_f32(ref_lo, cand_lo);
+        let sq_lo = vmulq_f32(diff_lo, diff_lo);
+
+        let ref_hi = vld1q_f32(ref_ptr.add(4));
+        let cand_hi = vld1q_f32(cand_ptr.add(4));
+        let diff_hi = vsubq_f32(ref_hi, cand_hi);
+        let sq_hi = vmulq_f32(diff_hi, diff_hi);
+
+        sum_sq += vaddvq_f32(sq_lo) + vaddvq_f32(sq_hi);
+        if sum_sq >= threshold {
+            return sum_sq;
+        }
+    }
+    sum_sq
+}
+
+#[inline(always)]
+fn compute_squared_distance_at_strided_8x8<F: Bm3dFloat>(
+    image_data: &[F],
+    image_cols: usize,
+    ref_r: usize,
+    ref_c: usize,
+    cand_r: usize,
+    cand_c: usize,
+    threshold: F,
+) -> F {
+    if TypeId::of::<F>() == TypeId::of::<f32>() {
+        // SAFETY: TypeId check guarantees F is f32 in this branch.
+        let data_f32 = unsafe {
+            std::slice::from_raw_parts(image_data.as_ptr() as *const f32, image_data.len())
+        };
+        let threshold_f32 = threshold.to_f32().unwrap_or(f32::MAX);
+        let sum = compute_squared_distance_at_strided_8x8_f32_dispatch(
+            data_f32,
+            image_cols,
+            ref_r,
+            ref_c,
+            cand_r,
+            cand_c,
+            threshold_f32,
+        );
+        return F::from_f64_c(sum as f64);
+    }
+    compute_squared_distance_at_strided_8x8_scalar(
+        image_data, image_cols, ref_r, ref_c, cand_r, cand_c, threshold,
+    )
+}
+
+/// Compute Integral Image (sum only).
+///
+/// Returns an array with shape `(h + 1, w + 1)`.
+pub fn compute_integral_sum_image<F: Bm3dFloat>(image: ArrayView2<F>) -> Array2<F> {
+    let (h, w) = image.dim();
+    let mut sum_img = Array2::<F>::zeros((h + 1, w + 1));
+
+    for r in 0..h {
+        let mut row_sum = F::zero();
+        for c in 0..w {
+            let val = image[[r, c]];
+            row_sum += val;
+            sum_img[[r + 1, c + 1]] = sum_img[[r, c + 1]] + row_sum;
+        }
+    }
+    sum_img
 }
 
 /// Compute Integral Images (Sum and Squared Sum).
@@ -60,18 +384,15 @@ fn compute_squared_distance<F: Bm3dFloat>(p1: ArrayView2<F>, p2: ArrayView2<F>, 
 /// Returns (Sum, SqSum). Indexing: [row+1, col+1].
 pub fn compute_integral_images<F: Bm3dFloat>(image: ArrayView2<F>) -> (Array2<F>, Array2<F>) {
     let (h, w) = image.dim();
-    let mut sum_img = Array2::<F>::zeros((h + 1, w + 1));
+    let sum_img = compute_integral_sum_image(image);
     let mut sq_sum_img = Array2::<F>::zeros((h + 1, w + 1));
 
     for r in 0..h {
-        let mut row_sum = F::zero();
         let mut row_sq_sum = F::zero();
         for c in 0..w {
             let val = image[[r, c]];
-            row_sum += val;
             row_sq_sum += val * val;
 
-            sum_img[[r + 1, c + 1]] = sum_img[[r, c + 1]] + row_sum;
             sq_sum_img[[r + 1, c + 1]] = sq_sum_img[[r, c + 1]] + row_sq_sum;
         }
     }
@@ -79,52 +400,54 @@ pub fn compute_integral_images<F: Bm3dFloat>(image: ArrayView2<F>) -> (Array2<F>
 }
 
 #[inline(always)]
-fn get_patch_sums<F: Bm3dFloat>(
-    sum_img: &Array2<F>,
-    sq_sum_img: &Array2<F>,
-    r: usize,
-    c: usize,
-    h: usize,
-    w: usize,
-) -> (F, F) {
+fn get_patch_sum<F: Bm3dFloat>(sum_img: &Array2<F>, r: usize, c: usize, h: usize, w: usize) -> F {
     let r1 = r;
     let c1 = c;
     let r2 = r + h;
     let c2 = c + w;
 
-    let sum = sum_img[[r2, c2]] - sum_img[[r1, c2]] - sum_img[[r2, c1]] + sum_img[[r1, c1]];
-    let sq_sum =
-        sq_sum_img[[r2, c2]] - sq_sum_img[[r1, c2]] - sq_sum_img[[r2, c1]] + sq_sum_img[[r1, c1]];
-
-    (sum, sq_sum)
+    sum_img[[r2, c2]] - sum_img[[r1, c2]] - sum_img[[r2, c1]] + sum_img[[r1, c1]]
 }
 
-/// Find similar patches within a search window using Integral Image Pre-Screening.
-#[allow(clippy::too_many_arguments)]
-pub fn find_similar_patches<F: Bm3dFloat>(
+#[inline(always)]
+fn get_patch_sum_strided<F: Bm3dFloat>(
+    sum_data: &[F],
+    sum_stride: usize,
+    r: usize,
+    c: usize,
+    h: usize,
+    w: usize,
+) -> F {
+    let r1 = r;
+    let c1 = c;
+    let r2 = r + h;
+    let c2 = c + w;
+    sum_data[r2 * sum_stride + c2] - sum_data[r1 * sum_stride + c2] - sum_data[r2 * sum_stride + c1]
+        + sum_data[r1 * sum_stride + c1]
+}
+
+/// Find similar patches within a search window using Integral Image pre-screening (sum bound).
+pub fn find_similar_patches_in_place_sum<F: Bm3dFloat>(
     image: ArrayView2<F>,
     integral_sum: &Array2<F>,
-    integral_sq_sum: &Array2<F>,
     ref_pos: (usize, usize),
     patch_size: (usize, usize),
     search_window: (usize, usize),
     max_matches: usize,
     step: usize,
-) -> Vec<PatchMatch<F>> {
+    out_matches: &mut Vec<PatchMatch<F>>,
+) {
     let (ref_r, ref_c) = ref_pos;
     let (ph, pw) = patch_size;
     let (h, w) = image.dim();
-
-    let ref_patch = image.slice(s![ref_r..ref_r + ph, ref_c..ref_c + pw]);
 
     let search_r_start = ref_r.saturating_sub(search_window.0 / 2);
     let search_r_end = (ref_r + search_window.0 / 2).min(h - ph);
     let search_c_start = ref_c.saturating_sub(search_window.1 / 2);
     let search_c_end = (ref_c + search_window.1 / 2).min(w - pw);
 
-    let mut heap = std::collections::BinaryHeap::with_capacity(max_matches + 1);
-
-    heap.push(PatchMatch {
+    out_matches.clear();
+    out_matches.push(PatchMatch {
         row: ref_r,
         col: ref_c,
         distance: F::zero(),
@@ -136,76 +459,205 @@ pub fn find_similar_patches<F: Bm3dFloat>(
         F::zero()
     };
 
-    // Pre-calculate Reference stats
-    let (ref_sum, ref_sq_sum) = get_patch_sums(integral_sum, integral_sq_sum, ref_r, ref_c, ph, pw);
-    let ref_norm = ref_sq_sum.max(F::zero()).sqrt();
     let inv_n = F::one() / F::usize_as(ph * pw);
+    if let (Some(image_data), Some(sum_data)) = (
+        image.as_slice_memory_order(),
+        integral_sum.as_slice_memory_order(),
+    ) {
+        let sum_stride = integral_sum.dim().1;
+        let image_cols = w;
+        let ref_sum = get_patch_sum_strided(sum_data, sum_stride, ref_r, ref_c, ph, pw);
+        for r in (search_r_start..=search_r_end).step_by(step) {
+            for c in (search_c_start..=search_c_end).step_by(step) {
+                if r == ref_r && c == ref_c {
+                    continue;
+                }
 
-    for r in (search_r_start..=search_r_end).step_by(step) {
-        for c in (search_c_start..=search_c_end).step_by(step) {
-            if r == ref_r && c == ref_c {
-                continue;
-            }
+                let cand_sum = get_patch_sum_strided(sum_data, sum_stride, r, c, ph, pw);
+                let check_threshold = threshold;
 
-            // 1. Pre-Screening (Bounds Check)
-            // Bound 1: Mean Difference: (sum1 - sum2)^2 / N
-            // Bound 2: Norm Difference: (norm1 - norm2)^2
-            // If Max(Bound) > threshold, skip.
+                let diff_sum = cand_sum - ref_sum;
+                let lb_mean = (diff_sum * diff_sum) * inv_n;
+                if lb_mean >= check_threshold {
+                    continue;
+                }
 
-            let (cand_sum, cand_sq_sum) =
-                get_patch_sums(integral_sum, integral_sq_sum, r, c, ph, pw);
-            let check_threshold = threshold;
-
-            // Mean Bound
-            let diff_sum = cand_sum - ref_sum;
-            let lb_mean = (diff_sum * diff_sum) * inv_n;
-            if lb_mean >= check_threshold {
-                continue;
-            }
-
-            // Norm Bound
-            let cand_norm = cand_sq_sum.max(F::zero()).sqrt();
-            let diff_norm = (cand_norm - ref_norm).abs();
-            let lb_norm = diff_norm * diff_norm;
-            if lb_norm >= check_threshold {
-                continue;
-            }
-
-            // 2. Full Distance Calculation
-            let candidate_patch = image.slice(s![r..r + ph, c..c + pw]);
-            let dist = compute_squared_distance(ref_patch, candidate_patch, threshold);
-
-            if dist < threshold {
-                if heap.len() < max_matches {
-                    heap.push(PatchMatch {
-                        row: r,
-                        col: c,
-                        distance: dist,
-                    });
-                    if heap.len() == max_matches {
-                        threshold = heap.peek().unwrap().distance;
-                    }
+                let dist = if ph == 8 && pw == 8 {
+                    compute_squared_distance_at_strided_8x8(
+                        image_data, image_cols, ref_r, ref_c, r, c, threshold,
+                    )
                 } else {
-                    heap.pop();
-                    heap.push(PatchMatch {
-                        row: r,
-                        col: c,
-                        distance: dist,
-                    });
-                    threshold = heap.peek().unwrap().distance;
+                    compute_squared_distance_at_strided(
+                        image_data, image_cols, ref_r, ref_c, r, c, ph, pw, threshold,
+                    )
+                };
+
+                if dist < threshold {
+                    if out_matches.len() < max_matches {
+                        out_matches.push(PatchMatch {
+                            row: r,
+                            col: c,
+                            distance: dist,
+                        });
+                        if out_matches.len() == max_matches {
+                            let mut worst_idx = 0usize;
+                            let mut worst_dist = out_matches[0].distance;
+                            for (idx, m) in out_matches.iter().enumerate().skip(1) {
+                                if m.distance > worst_dist {
+                                    worst_idx = idx;
+                                    worst_dist = m.distance;
+                                }
+                            }
+                            threshold = out_matches[worst_idx].distance;
+                        }
+                    } else {
+                        let mut worst_idx = 0usize;
+                        let mut worst_dist = out_matches[0].distance;
+                        for (idx, m) in out_matches.iter().enumerate().skip(1) {
+                            if m.distance > worst_dist {
+                                worst_idx = idx;
+                                worst_dist = m.distance;
+                            }
+                        }
+                        out_matches[worst_idx] = PatchMatch {
+                            row: r,
+                            col: c,
+                            distance: dist,
+                        };
+                        let mut next_worst = out_matches[0].distance;
+                        for m in out_matches.iter().skip(1) {
+                            if m.distance > next_worst {
+                                next_worst = m.distance;
+                            }
+                        }
+                        threshold = next_worst;
+                    }
+                }
+            }
+        }
+    } else {
+        // Fallback for non-contiguous views.
+        let ref_sum = get_patch_sum(integral_sum, ref_r, ref_c, ph, pw);
+        for r in (search_r_start..=search_r_end).step_by(step) {
+            for c in (search_c_start..=search_c_end).step_by(step) {
+                if r == ref_r && c == ref_c {
+                    continue;
+                }
+
+                let cand_sum = get_patch_sum(integral_sum, r, c, ph, pw);
+                let check_threshold = threshold;
+
+                let diff_sum = cand_sum - ref_sum;
+                let lb_mean = (diff_sum * diff_sum) * inv_n;
+                if lb_mean >= check_threshold {
+                    continue;
+                }
+
+                let dist =
+                    compute_squared_distance_at(image, ref_r, ref_c, r, c, ph, pw, threshold);
+
+                if dist < threshold {
+                    if out_matches.len() < max_matches {
+                        out_matches.push(PatchMatch {
+                            row: r,
+                            col: c,
+                            distance: dist,
+                        });
+                        if out_matches.len() == max_matches {
+                            let mut worst_idx = 0usize;
+                            let mut worst_dist = out_matches[0].distance;
+                            for (idx, m) in out_matches.iter().enumerate().skip(1) {
+                                if m.distance > worst_dist {
+                                    worst_idx = idx;
+                                    worst_dist = m.distance;
+                                }
+                            }
+                            threshold = out_matches[worst_idx].distance;
+                        }
+                    } else {
+                        let mut worst_idx = 0usize;
+                        let mut worst_dist = out_matches[0].distance;
+                        for (idx, m) in out_matches.iter().enumerate().skip(1) {
+                            if m.distance > worst_dist {
+                                worst_idx = idx;
+                                worst_dist = m.distance;
+                            }
+                        }
+                        out_matches[worst_idx] = PatchMatch {
+                            row: r,
+                            col: c,
+                            distance: dist,
+                        };
+                        let mut next_worst = out_matches[0].distance;
+                        for m in out_matches.iter().skip(1) {
+                            if m.distance > next_worst {
+                                next_worst = m.distance;
+                            }
+                        }
+                        threshold = next_worst;
+                    }
                 }
             }
         }
     }
 
-    let mut sorted_matches = heap.into_vec();
-    sorted_matches.sort_by(|a, b| {
+    out_matches.sort_unstable_by(|a, b| {
         a.distance
             .partial_cmp(&b.distance)
             .unwrap_or(Ordering::Equal)
     });
+}
 
-    sorted_matches
+/// Backward-compatible in-place API.
+///
+/// `integral_sq_sum` is accepted for compatibility but no longer used.
+pub fn find_similar_patches_in_place<F: Bm3dFloat>(
+    image: ArrayView2<F>,
+    integral_sum: &Array2<F>,
+    _integral_sq_sum: &Array2<F>,
+    ref_pos: (usize, usize),
+    patch_size: (usize, usize),
+    search_window: (usize, usize),
+    max_matches: usize,
+    step: usize,
+    out_matches: &mut Vec<PatchMatch<F>>,
+) {
+    find_similar_patches_in_place_sum(
+        image,
+        integral_sum,
+        ref_pos,
+        patch_size,
+        search_window,
+        max_matches,
+        step,
+        out_matches,
+    );
+}
+
+/// Find similar patches within a search window using Integral Image Pre-Screening.
+pub fn find_similar_patches<F: Bm3dFloat>(
+    image: ArrayView2<F>,
+    integral_sum: &Array2<F>,
+    integral_sq_sum: &Array2<F>,
+    ref_pos: (usize, usize),
+    patch_size: (usize, usize),
+    search_window: (usize, usize),
+    max_matches: usize,
+    step: usize,
+) -> Vec<PatchMatch<F>> {
+    let mut matches = Vec::with_capacity(max_matches.max(1));
+    find_similar_patches_in_place(
+        image,
+        integral_sum,
+        integral_sq_sum,
+        ref_pos,
+        patch_size,
+        search_window,
+        max_matches,
+        step,
+        &mut matches,
+    );
+    matches
 }
 
 #[cfg(test)]
@@ -896,6 +1348,44 @@ mod tests {
                 "Identical patches should have distance ~0, got {}",
                 m.distance
             );
+        }
+    }
+
+    #[test]
+    fn test_compute_squared_distance_8x8_f32_simd_matches_scalar() {
+        let image = random_matrix_f32(24, 24, 44444);
+        let image_data = image
+            .as_slice_memory_order()
+            .expect("random_matrix_f32 should be contiguous");
+        let cols = image.dim().1;
+        let threshold = f32::MAX;
+
+        for ref_r in (0..=16).step_by(3) {
+            for ref_c in (0..=16).step_by(3) {
+                for cand_r in (0..=16).step_by(5) {
+                    for cand_c in (0..=16).step_by(5) {
+                        let scalar = compute_squared_distance_at_strided_8x8_scalar(
+                            image_data, cols, ref_r, ref_c, cand_r, cand_c, threshold,
+                        );
+                        let simd = compute_squared_distance_at_strided_8x8(
+                            image_data, cols, ref_r, ref_c, cand_r, cand_c, threshold,
+                        );
+                        let abs_diff = (simd - scalar).abs();
+                        let rel_diff = abs_diff / scalar.max(1.0);
+                        assert!(
+                            rel_diff < 1e-5,
+                            "SIMD drift too large ref=({},{}) cand=({},{}) scalar={} simd={} rel_diff={}",
+                            ref_r,
+                            ref_c,
+                            cand_r,
+                            cand_c,
+                            scalar,
+                            simd,
+                            rel_diff
+                        );
+                    }
+                }
+            }
         }
     }
 

@@ -24,9 +24,14 @@ pub mod utils;
 // Re-export commonly used types at the crate root
 pub use block_matching::PatchMatch;
 pub use float_trait::Bm3dFloat;
-pub use multiscale::{multiscale_bm3d_streak_removal, MultiscaleConfig};
+pub use multiscale::{
+    multiscale_bm3d_streak_removal, multiscale_bm3d_streak_removal_with_plans, MultiscaleConfig,
+};
 pub use noise_estimation::estimate_noise_sigma;
 pub use orchestration::{bm3d_ring_artifact_removal, Bm3dConfig, RingRemovalMode};
-pub use pipeline::{run_bm3d_kernel, run_bm3d_step, run_bm3d_step_stack, Bm3dMode, Bm3dPlans};
+pub use pipeline::{
+    run_bm3d_kernel, run_bm3d_step, run_bm3d_step_stack, set_use_hadamard_fast_path,
+    use_hadamard_fast_path, Bm3dKernelConfig, Bm3dMode, Bm3dPlans,
+};
 pub use streak::estimate_streak_profile_impl;
 pub use transforms::{fft2d, ifft2d, wht2d_8x8_forward, wht2d_8x8_inverse};
