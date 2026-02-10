@@ -697,6 +697,22 @@ pub fn multiscale_bm3d_streak_removal<F: Bm3dFloat>(
     sinogram: ArrayView2<F>,
     config: &MultiscaleConfig<F>,
 ) -> Result<Array2<F>, String> {
+    let plans = crate::pipeline::Bm3dPlans::new(
+        config.bm3d_config.patch_size,
+        config.bm3d_config.max_matches,
+    );
+    multiscale_bm3d_streak_removal_with_plans(sinogram, config, &plans)
+}
+
+/// Multi-scale BM3D streak removal for 2D sinograms using precomputed BM3D plans.
+///
+/// Reusing `plans` across many calls (for example, one plan set per volume) avoids
+/// repeated FFT planning overhead and improves throughput for stack processing.
+pub fn multiscale_bm3d_streak_removal_with_plans<F: Bm3dFloat>(
+    sinogram: ArrayView2<F>,
+    config: &MultiscaleConfig<F>,
+    plans: &crate::pipeline::Bm3dPlans<F>,
+) -> Result<Array2<F>, String> {
     // Validate configuration
     config.validate()?;
 
@@ -791,14 +807,6 @@ pub fn multiscale_bm3d_streak_removal<F: Bm3dFloat>(
     // Normalization is ONLY applied immediately before/after BM3D call.
     let mut denoised: Option<Array2<F>> = None;
 
-    // Create FFT plans once used for all scales
-    // Since patch_size and max_matches don't change across scales, we can reuse this.
-    // This removes the ~30-40ms overhead per scale.
-    let plans = crate::pipeline::Bm3dPlans::new(
-        config.bm3d_config.patch_size,
-        config.bm3d_config.max_matches,
-    );
-
     for scale in (0..=num_scales).rev() {
         // Get working image at this scale (in original scaled space)
         let img = pyramid_work[scale].clone();
@@ -878,7 +886,7 @@ pub fn multiscale_bm3d_streak_removal<F: Bm3dFloat>(
             img_normalized.view(),
             RingRemovalMode::Streak,
             &scale_config,
-            &plans,
+            plans,
         )?;
 
         // === DENORMALIZE immediately after BM3D ===
@@ -1075,7 +1083,6 @@ pub fn multiscale_bm3d_streak_removal<F: Bm3dFloat>(
 // =============================================================================
 
 #[cfg(test)]
-#[allow(clippy::field_reassign_with_default)]
 mod tests {
     use super::*;
     use ndarray::Array2;
@@ -1294,15 +1301,19 @@ mod tests {
 
     #[test]
     fn test_config_validation_invalid_filter_strength() {
-        let mut config: MultiscaleConfig<f32> = MultiscaleConfig::default();
-        config.filter_strength = 0.0;
+        let config: MultiscaleConfig<f32> = MultiscaleConfig {
+            filter_strength: 0.0,
+            ..MultiscaleConfig::default()
+        };
         assert!(config.validate().is_err());
     }
 
     #[test]
     fn test_config_validation_invalid_debin_iterations() {
-        let mut config: MultiscaleConfig<f32> = MultiscaleConfig::default();
-        config.debin_iterations = 0;
+        let config: MultiscaleConfig<f32> = MultiscaleConfig {
+            debin_iterations: 0,
+            ..MultiscaleConfig::default()
+        };
         assert!(config.validate().is_err());
     }
 
@@ -1364,8 +1375,10 @@ mod tests {
         // For larger images, multiscale should differ from single-scale
         let image = random_matrix(64, 256, 99999);
 
-        let mut single_config: Bm3dConfig<f32> = Bm3dConfig::default();
-        single_config.threshold = 3.5; // Match multiscale default
+        let single_config = Bm3dConfig {
+            threshold: 3.5, // Match multiscale default
+            ..Bm3dConfig::default()
+        };
 
         let single_result =
             bm3d_ring_artifact_removal(image.view(), RingRemovalMode::Streak, &single_config)
@@ -1399,8 +1412,13 @@ mod tests {
             }
         }
 
-        let mut config = MultiscaleConfig::default();
-        config.bm3d_config.sigma_random = 0.5;
+        let config = MultiscaleConfig {
+            bm3d_config: Bm3dConfig {
+                sigma_random: 0.5,
+                ..Bm3dConfig::default()
+            },
+            ..MultiscaleConfig::default()
+        };
         let result = multiscale_bm3d_streak_removal(image.view(), &config);
 
         assert!(result.is_ok());
@@ -1466,8 +1484,10 @@ mod tests {
         let image = random_matrix(64, 256, 10101);
 
         // Force K=1 even though auto would compute higher
-        let mut config: MultiscaleConfig<f32> = MultiscaleConfig::default();
-        config.num_scales = Some(1);
+        let config = MultiscaleConfig {
+            num_scales: Some(1),
+            ..MultiscaleConfig::default()
+        };
 
         let result = multiscale_bm3d_streak_removal(image.view(), &config);
 
@@ -1479,8 +1499,10 @@ mod tests {
         // Force K=0 on large image
         let image = random_matrix(64, 256, 20202);
 
-        let mut config: MultiscaleConfig<f32> = MultiscaleConfig::default();
-        config.num_scales = Some(0);
+        let config = MultiscaleConfig {
+            num_scales: Some(0),
+            ..MultiscaleConfig::default()
+        };
 
         let multi_result = multiscale_bm3d_streak_removal(image.view(), &config).unwrap();
 
@@ -1553,7 +1575,6 @@ fn compute_residual_kernel_shift<F: Bm3dFloat>(shift: usize) -> Vec<f64> {
 }
 
 #[cfg(test)]
-#[allow(clippy::print_stdout)]
 mod kernel_tests {
     use super::*;
 
@@ -1561,14 +1582,9 @@ mod kernel_tests {
     fn test_verify_residual_kernel_properties() {
         let computed = compute_residual_kernel::<f64>();
 
-        println!("\nVerification of Residual Kernel Properties:");
-        println!("Index | Computed");
-        println!("-----------------");
-
         // Center check
         let center_idx = 18;
         let center_val = computed[center_idx];
-        println!("Center Value: {:.4}", center_val);
         assert!(
             center_val > 0.7,
             "Center value should be significant (residual of peak)"
@@ -1582,7 +1598,6 @@ mod kernel_tests {
             full_kernel.push(computed[i]);
         }
         let sum: f64 = full_kernel.iter().sum();
-        println!("Kernel Sum: {:.4e}", sum);
         // Note: The current pipeline implementation has a DC gain of 0.5 (Loop Gain 0.5).
         // Theoretically residual should be zero-sum (High Pass), but due to damping/scaling,
         // it retains 0.5 of the DC energy. We assert this to verify we match the actual pipeline.
@@ -1590,9 +1605,5 @@ mod kernel_tests {
             (sum - 0.5).abs() < 0.1,
             "Residual kernel sum reflects pipeline DC damping (0.5)"
         );
-
-        for (i, val) in computed.iter().enumerate().take(19) {
-            println!("{:5} | {:10.4e}", i, val);
-        }
     }
 }

@@ -7,16 +7,85 @@
 //! Both f32 and f64 precision are supported. Functions with `_f64` suffix
 //! accept and return float64 numpy arrays.
 
+use ndarray::{Array2, Array3, ArrayView2, ArrayView3};
 use numpy::{PyArray1, PyArray2, PyArray3, PyReadonlyArray2, PyReadonlyArray3, ToPyArray};
 use pyo3::prelude::*;
 
 use bm3d_core::{bm3d_ring_artifact_removal, Bm3dConfig, RingRemovalMode};
 use bm3d_core::{multiscale_bm3d_streak_removal, MultiscaleConfig};
 use bm3d_core::{run_bm3d_step, run_bm3d_step_stack, Bm3dMode};
+use bm3d_core::{Bm3dFloat, Bm3dKernelConfig, Bm3dPlans};
+
+fn run_bm3d_step_compat<F: Bm3dFloat>(
+    input_noisy: ArrayView2<F>,
+    input_pilot: ArrayView2<F>,
+    mode: Bm3dMode,
+    sigma_psd: ArrayView2<F>,
+    sigma_map: ArrayView2<F>,
+    sigma_random: F,
+    threshold: F,
+    patch_size: usize,
+    step_size: usize,
+    search_window: usize,
+    max_matches: usize,
+    plans: &Bm3dPlans<F>,
+) -> Result<Array2<F>, String> {
+    let config = Bm3dKernelConfig {
+        sigma_random,
+        threshold,
+        patch_size,
+        step_size,
+        search_window,
+        max_matches,
+        use_hadamard_fast_path: None,
+    };
+    run_bm3d_step(
+        input_noisy,
+        input_pilot,
+        mode,
+        sigma_psd,
+        sigma_map,
+        &config,
+        plans,
+    )
+}
+
+fn run_bm3d_step_stack_compat<F: Bm3dFloat>(
+    input_noisy: ArrayView3<F>,
+    input_pilot: ArrayView3<F>,
+    mode: Bm3dMode,
+    sigma_psd: ArrayView2<F>,
+    sigma_map: ArrayView3<F>,
+    sigma_random: F,
+    threshold: F,
+    patch_size: usize,
+    step_size: usize,
+    search_window: usize,
+    max_matches: usize,
+    plans: &Bm3dPlans<F>,
+) -> Result<Array3<F>, String> {
+    let config = Bm3dKernelConfig {
+        sigma_random,
+        threshold,
+        patch_size,
+        step_size,
+        search_window,
+        max_matches,
+        use_hadamard_fast_path: None,
+    };
+    run_bm3d_step_stack(
+        input_noisy,
+        input_pilot,
+        mode,
+        sigma_psd,
+        sigma_map,
+        &config,
+        plans,
+    )
+}
 
 /// Hard thresholding step of BM3D for a single 2D image.
 #[pyfunction]
-#[allow(clippy::too_many_arguments)]
 pub fn bm3d_hard_thresholding<'py>(
     py: Python<'py>,
     input_noisy: PyReadonlyArray2<'py, f32>,
@@ -31,7 +100,7 @@ pub fn bm3d_hard_thresholding<'py>(
     max_matches: usize,
 ) -> PyResult<Bound<'py, PyArray2<f32>>> {
     let plans = bm3d_core::pipeline::Bm3dPlans::new(patch_size, max_matches);
-    let output = run_bm3d_step(
+    let output = run_bm3d_step_compat(
         input_noisy.as_array(),
         input_pilot.as_array(),
         Bm3dMode::HardThreshold,
@@ -51,7 +120,6 @@ pub fn bm3d_hard_thresholding<'py>(
 
 /// Wiener filtering step of BM3D for a single 2D image.
 #[pyfunction]
-#[allow(clippy::too_many_arguments)]
 pub fn bm3d_wiener_filtering<'py>(
     py: Python<'py>,
     input_noisy: PyReadonlyArray2<'py, f32>,
@@ -65,7 +133,7 @@ pub fn bm3d_wiener_filtering<'py>(
     max_matches: usize,
 ) -> PyResult<Bound<'py, PyArray2<f32>>> {
     let plans = bm3d_core::pipeline::Bm3dPlans::new(patch_size, max_matches);
-    let output = run_bm3d_step(
+    let output = run_bm3d_step_compat(
         input_noisy.as_array(),
         input_pilot.as_array(),
         Bm3dMode::Wiener,
@@ -85,7 +153,6 @@ pub fn bm3d_wiener_filtering<'py>(
 
 /// Hard thresholding step of BM3D for a 3D stack of images.
 #[pyfunction]
-#[allow(clippy::too_many_arguments)]
 pub fn bm3d_hard_thresholding_stack<'py>(
     py: Python<'py>,
     input_noisy: PyReadonlyArray3<'py, f32>,
@@ -100,7 +167,7 @@ pub fn bm3d_hard_thresholding_stack<'py>(
     max_matches: usize,
 ) -> PyResult<Bound<'py, PyArray3<f32>>> {
     let plans = bm3d_core::pipeline::Bm3dPlans::new(patch_size, max_matches);
-    let output = run_bm3d_step_stack(
+    let output = run_bm3d_step_stack_compat(
         input_noisy.as_array(),
         input_pilot.as_array(),
         Bm3dMode::HardThreshold,
@@ -120,7 +187,6 @@ pub fn bm3d_hard_thresholding_stack<'py>(
 
 /// Wiener filtering step of BM3D for a 3D stack of images.
 #[pyfunction]
-#[allow(clippy::too_many_arguments)]
 pub fn bm3d_wiener_filtering_stack<'py>(
     py: Python<'py>,
     input_noisy: PyReadonlyArray3<'py, f32>,
@@ -134,7 +200,7 @@ pub fn bm3d_wiener_filtering_stack<'py>(
     max_matches: usize,
 ) -> PyResult<Bound<'py, PyArray3<f32>>> {
     let plans = bm3d_core::pipeline::Bm3dPlans::new(patch_size, max_matches);
-    let output = run_bm3d_step_stack(
+    let output = run_bm3d_step_stack_compat(
         input_noisy.as_array(),
         input_pilot.as_array(),
         Bm3dMode::Wiener,
@@ -193,7 +259,6 @@ pub fn estimate_streak_profile_py<'py>(
 
 /// Hard thresholding step of BM3D for a single 2D image (f64 precision).
 #[pyfunction]
-#[allow(clippy::too_many_arguments)]
 pub fn bm3d_hard_thresholding_f64<'py>(
     py: Python<'py>,
     input_noisy: PyReadonlyArray2<'py, f64>,
@@ -208,7 +273,7 @@ pub fn bm3d_hard_thresholding_f64<'py>(
     max_matches: usize,
 ) -> PyResult<Bound<'py, PyArray2<f64>>> {
     let plans = bm3d_core::pipeline::Bm3dPlans::new(patch_size, max_matches);
-    let output = run_bm3d_step(
+    let output = run_bm3d_step_compat(
         input_noisy.as_array(),
         input_pilot.as_array(),
         Bm3dMode::HardThreshold,
@@ -228,7 +293,6 @@ pub fn bm3d_hard_thresholding_f64<'py>(
 
 /// Wiener filtering step of BM3D for a single 2D image (f64 precision).
 #[pyfunction]
-#[allow(clippy::too_many_arguments)]
 pub fn bm3d_wiener_filtering_f64<'py>(
     py: Python<'py>,
     input_noisy: PyReadonlyArray2<'py, f64>,
@@ -242,7 +306,7 @@ pub fn bm3d_wiener_filtering_f64<'py>(
     max_matches: usize,
 ) -> PyResult<Bound<'py, PyArray2<f64>>> {
     let plans = bm3d_core::pipeline::Bm3dPlans::new(patch_size, max_matches);
-    let output = run_bm3d_step(
+    let output = run_bm3d_step_compat(
         input_noisy.as_array(),
         input_pilot.as_array(),
         Bm3dMode::Wiener,
@@ -262,7 +326,6 @@ pub fn bm3d_wiener_filtering_f64<'py>(
 
 /// Hard thresholding step of BM3D for a 3D stack of images (f64 precision).
 #[pyfunction]
-#[allow(clippy::too_many_arguments)]
 pub fn bm3d_hard_thresholding_stack_f64<'py>(
     py: Python<'py>,
     input_noisy: PyReadonlyArray3<'py, f64>,
@@ -277,7 +340,7 @@ pub fn bm3d_hard_thresholding_stack_f64<'py>(
     max_matches: usize,
 ) -> PyResult<Bound<'py, PyArray3<f64>>> {
     let plans = bm3d_core::pipeline::Bm3dPlans::new(patch_size, max_matches);
-    let output = run_bm3d_step_stack(
+    let output = run_bm3d_step_stack_compat(
         input_noisy.as_array(),
         input_pilot.as_array(),
         Bm3dMode::HardThreshold,
@@ -297,7 +360,6 @@ pub fn bm3d_hard_thresholding_stack_f64<'py>(
 
 /// Wiener filtering step of BM3D for a 3D stack of images (f64 precision).
 #[pyfunction]
-#[allow(clippy::too_many_arguments)]
 pub fn bm3d_wiener_filtering_stack_f64<'py>(
     py: Python<'py>,
     input_noisy: PyReadonlyArray3<'py, f64>,
@@ -311,7 +373,7 @@ pub fn bm3d_wiener_filtering_stack_f64<'py>(
     max_matches: usize,
 ) -> PyResult<Bound<'py, PyArray3<f64>>> {
     let plans = bm3d_core::pipeline::Bm3dPlans::new(patch_size, max_matches);
-    let output = run_bm3d_step_stack(
+    let output = run_bm3d_step_stack_compat(
         input_noisy.as_array(),
         input_pilot.as_array(),
         Bm3dMode::Wiener,
@@ -432,7 +494,6 @@ pub fn estimate_streak_profile_py_f64<'py>(
     fft_alpha = None,
     notch_width = None
 ))]
-#[allow(clippy::too_many_arguments)]
 pub fn bm3d_ring_artifact_removal_2d<'py>(
     py: Python<'py>,
     sinogram: PyReadonlyArray2<'py, f32>,
@@ -536,7 +597,6 @@ pub fn bm3d_ring_artifact_removal_2d<'py>(
     fft_alpha = None,
     notch_width = None
 ))]
-#[allow(clippy::too_many_arguments)]
 pub fn bm3d_ring_artifact_removal_2d_f64<'py>(
     py: Python<'py>,
     sinogram: PyReadonlyArray2<'py, f64>,
@@ -739,7 +799,6 @@ pub fn estimate_noise_sigma_py_f64(sinogram: PyReadonlyArray2<'_, f64>) -> PyRes
     streak_sigma_scale = None,
     psd_width = None
 ))]
-#[allow(clippy::too_many_arguments)]
 pub fn multiscale_bm3d_streak_removal_2d<'py>(
     py: Python<'py>,
     sinogram: PyReadonlyArray2<'py, f32>,
@@ -833,7 +892,6 @@ pub fn multiscale_bm3d_streak_removal_2d<'py>(
     streak_sigma_scale = None,
     psd_width = None
 ))]
-#[allow(clippy::too_many_arguments)]
 pub fn multiscale_bm3d_streak_removal_2d_f64<'py>(
     py: Python<'py>,
     sinogram: PyReadonlyArray2<'py, f64>,

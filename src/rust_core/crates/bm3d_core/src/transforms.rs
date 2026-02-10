@@ -1,4 +1,4 @@
-use ndarray::{Array2, ArrayView2};
+use ndarray::{Array2, ArrayView2, ArrayViewMut2};
 use rustfft::{num_complex::Complex, Fft};
 use std::sync::Arc;
 
@@ -11,6 +11,26 @@ use crate::float_trait::Bm3dFloat;
 // Note: WHT normalization scale is now computed at runtime using F::usize_as(64)
 // to support both f32 and f64 precision.
 
+#[inline(always)]
+fn transpose_square_in_place<T>(data: &mut [T], n: usize) {
+    for r in 0..n {
+        let row_base = r * n;
+        for c in (r + 1)..n {
+            data.swap(row_base + c, c * n + r);
+        }
+    }
+}
+
+#[inline(always)]
+fn transpose_square_copy<T: Copy>(src: &[T], dst: &mut [T], n: usize) {
+    for r in 0..n {
+        let src_base = r * n;
+        for c in 0..n {
+            dst[c * n + r] = src[src_base + c];
+        }
+    }
+}
+
 /// Compute 2D FFT of a square patch using pre-computed plans.
 /// Returns unnormalized FFT.
 pub fn fft2d<F: Bm3dFloat>(
@@ -19,42 +39,185 @@ pub fn fft2d<F: Bm3dFloat>(
     fft_col_plan: &Arc<dyn Fft<F>>,
 ) -> Array2<Complex<F>> {
     let (rows, cols) = input.dim();
-
-    // 1. Transform rows
     let mut intermediate = Array2::<Complex<F>>::zeros((rows, cols));
-    let mut row_vec = vec![Complex::new(F::zero(), F::zero()); cols];
-
-    for r in 0..rows {
-        // Copy to buffer
-        for (c, &v) in input.row(r).iter().enumerate() {
-            row_vec[c] = Complex::new(v, F::zero());
-        }
-        // FFT
-        fft_row_plan.process(&mut row_vec);
-        // Copy back
-        for c in 0..cols {
-            intermediate[[r, c]] = row_vec[c];
-        }
-    }
-
-    // 2. Transform columns
     let mut output = Array2::<Complex<F>>::zeros((rows, cols));
-    let mut col_vec = vec![Complex::new(F::zero(), F::zero()); rows];
+    let mut scratch = vec![Complex::new(F::zero(), F::zero()); rows.max(cols)];
+    fft2d_into(
+        input,
+        fft_row_plan,
+        fft_col_plan,
+        &mut intermediate,
+        output.view_mut(),
+        &mut scratch,
+    );
+    output
+}
 
-    for c in 0..cols {
-        // Extract column
+/// Compute 2D FFT into pre-allocated buffers.
+///
+/// - `work_complex` must have shape `(rows, cols)` matching `input`.
+/// - `output` must have shape `(rows, cols)` matching `input`.
+/// - `scratch` length must be at least `max(rows, cols)`.
+pub fn fft2d_into<F: Bm3dFloat>(
+    input: ArrayView2<F>,
+    fft_row_plan: &Arc<dyn Fft<F>>,
+    fft_col_plan: &Arc<dyn Fft<F>>,
+    work_complex: &mut Array2<Complex<F>>,
+    mut output: ArrayViewMut2<Complex<F>>,
+    scratch: &mut [Complex<F>],
+) {
+    let row_scratch_len = fft_row_plan.get_inplace_scratch_len();
+    let col_scratch_len = fft_col_plan.get_inplace_scratch_len();
+    let mut row_fft_scratch = if row_scratch_len > 0 {
+        vec![Complex::new(F::zero(), F::zero()); row_scratch_len]
+    } else {
+        Vec::new()
+    };
+    let mut col_fft_scratch = if col_scratch_len > 0 {
+        vec![Complex::new(F::zero(), F::zero()); col_scratch_len]
+    } else {
+        Vec::new()
+    };
+    fft2d_into_with_plan_scratch(
+        input,
+        fft_row_plan,
+        fft_col_plan,
+        work_complex,
+        output.view_mut(),
+        scratch,
+        &mut row_fft_scratch,
+        &mut col_fft_scratch,
+    );
+}
+
+/// Compute 2D FFT into pre-allocated buffers using reusable FFT-plan scratch.
+pub fn fft2d_into_with_plan_scratch<F: Bm3dFloat>(
+    input: ArrayView2<F>,
+    fft_row_plan: &Arc<dyn Fft<F>>,
+    fft_col_plan: &Arc<dyn Fft<F>>,
+    work_complex: &mut Array2<Complex<F>>,
+    mut output: ArrayViewMut2<Complex<F>>,
+    scratch: &mut [Complex<F>],
+    row_fft_scratch: &mut [Complex<F>],
+    col_fft_scratch: &mut [Complex<F>],
+) {
+    let (rows, cols) = input.dim();
+    debug_assert_eq!(work_complex.dim(), (rows, cols));
+    debug_assert_eq!(output.dim(), (rows, cols));
+    debug_assert!(scratch.len() >= rows.max(cols));
+    debug_assert!(row_fft_scratch.len() >= fft_row_plan.get_inplace_scratch_len());
+    debug_assert!(col_fft_scratch.len() >= fft_col_plan.get_inplace_scratch_len());
+
+    let row_scratch_len = fft_row_plan.get_inplace_scratch_len();
+    let col_scratch_len = fft_col_plan.get_inplace_scratch_len();
+
+    if let (Some(input_data), Some(work_data), Some(output_data)) = (
+        input.as_slice_memory_order(),
+        work_complex.as_slice_memory_order_mut(),
+        output.as_slice_memory_order_mut(),
+    ) {
+        // 1. Transform rows (batched across all rows in one call).
         for r in 0..rows {
-            col_vec[r] = intermediate[[r, c]];
+            let row_base = r * cols;
+            let row = &mut work_data[row_base..row_base + cols];
+            for c in 0..cols {
+                row[c] = Complex::new(input_data[row_base + c], F::zero());
+            }
         }
-        // FFT
-        fft_col_plan.process(&mut col_vec);
-        // Copy back
-        for r in 0..rows {
-            output[[r, c]] = col_vec[r];
+        if row_scratch_len == 0 {
+            fft_row_plan.process_with_scratch(work_data, &mut []);
+        } else {
+            fft_row_plan.process_with_scratch(work_data, row_fft_scratch);
+        }
+        // 2. Transform columns
+        if rows == cols {
+            transpose_square_copy(work_data, output_data, rows);
+            if col_scratch_len == 0 {
+                fft_col_plan.process_with_scratch(output_data, &mut []);
+            } else {
+                fft_col_plan.process_with_scratch(output_data, col_fft_scratch);
+            }
+            transpose_square_in_place(output_data, rows);
+        } else if col_scratch_len == 0 {
+            for c in 0..cols {
+                for r in 0..rows {
+                    scratch[r] = work_data[r * cols + c];
+                }
+                fft_col_plan.process_with_scratch(&mut scratch[..rows], &mut []);
+                for r in 0..rows {
+                    output_data[r * cols + c] = scratch[r];
+                }
+            }
+        } else {
+            for c in 0..cols {
+                for r in 0..rows {
+                    scratch[r] = work_data[r * cols + c];
+                }
+                fft_col_plan.process_with_scratch(&mut scratch[..rows], col_fft_scratch);
+                for r in 0..rows {
+                    output_data[r * cols + c] = scratch[r];
+                }
+            }
+        }
+    } else {
+        // 1. Transform rows
+        if row_scratch_len == 0 {
+            for r in 0..rows {
+                // Copy to buffer
+                for (c, &v) in input.row(r).iter().enumerate() {
+                    scratch[c] = Complex::new(v, F::zero());
+                }
+                // FFT
+                fft_row_plan.process_with_scratch(&mut scratch[..cols], &mut []);
+                // Copy back
+                for c in 0..cols {
+                    work_complex[[r, c]] = scratch[c];
+                }
+            }
+        } else {
+            for r in 0..rows {
+                // Copy to buffer
+                for (c, &v) in input.row(r).iter().enumerate() {
+                    scratch[c] = Complex::new(v, F::zero());
+                }
+                // FFT
+                fft_row_plan.process_with_scratch(&mut scratch[..cols], row_fft_scratch);
+                // Copy back
+                for c in 0..cols {
+                    work_complex[[r, c]] = scratch[c];
+                }
+            }
+        }
+
+        // 2. Transform columns
+        if col_scratch_len == 0 {
+            for c in 0..cols {
+                // Extract column
+                for r in 0..rows {
+                    scratch[r] = work_complex[[r, c]];
+                }
+                // FFT
+                fft_col_plan.process_with_scratch(&mut scratch[..rows], &mut []);
+                // Copy back
+                for r in 0..rows {
+                    output[[r, c]] = scratch[r];
+                }
+            }
+        } else {
+            for c in 0..cols {
+                // Extract column
+                for r in 0..rows {
+                    scratch[r] = work_complex[[r, c]];
+                }
+                // FFT
+                fft_col_plan.process_with_scratch(&mut scratch[..rows], col_fft_scratch);
+                // Copy back
+                for r in 0..rows {
+                    output[[r, c]] = scratch[r];
+                }
+            }
         }
     }
-
-    output
 }
 
 /// Compute 2D Inverse FFT of a square patch using pre-computed plans.
@@ -64,17 +227,43 @@ pub fn ifft2d<F: Bm3dFloat>(
     ifft_row_plan: &Arc<dyn Fft<F>>,
     ifft_col_plan: &Arc<dyn Fft<F>>,
 ) -> Array2<F> {
+    ifft2d_view(input.view(), ifft_row_plan, ifft_col_plan)
+}
+
+/// Compute 2D Inverse FFT from a complex view.
+/// Normalizes by 1/(rows*cols).
+pub fn ifft2d_view<F: Bm3dFloat>(
+    input: ArrayView2<Complex<F>>,
+    ifft_row_plan: &Arc<dyn Fft<F>>,
+    ifft_col_plan: &Arc<dyn Fft<F>>,
+) -> Array2<F> {
     let (rows, cols) = input.dim();
+    let col_scratch_len = ifft_col_plan.get_inplace_scratch_len();
+    let row_scratch_len = ifft_row_plan.get_inplace_scratch_len();
+    let mut col_fft_scratch = if col_scratch_len > 0 {
+        vec![Complex::new(F::zero(), F::zero()); col_scratch_len]
+    } else {
+        Vec::new()
+    };
+    let mut row_fft_scratch = if row_scratch_len > 0 {
+        vec![Complex::new(F::zero(), F::zero()); row_scratch_len]
+    } else {
+        Vec::new()
+    };
 
     // 1. Transform columns
-    let mut intermediate = input.clone();
+    let mut intermediate = input.to_owned();
     let mut col_vec = vec![Complex::new(F::zero(), F::zero()); rows];
 
     for c in 0..cols {
         for r in 0..rows {
             col_vec[r] = intermediate[[r, c]];
         }
-        ifft_col_plan.process(&mut col_vec);
+        if col_scratch_len == 0 {
+            ifft_col_plan.process_with_scratch(&mut col_vec, &mut []);
+        } else {
+            ifft_col_plan.process_with_scratch(&mut col_vec, &mut col_fft_scratch);
+        }
         for r in 0..rows {
             intermediate[[r, c]] = col_vec[r];
         }
@@ -89,13 +278,296 @@ pub fn ifft2d<F: Bm3dFloat>(
         for c in 0..cols {
             row_vec[c] = intermediate[[r, c]];
         }
-        ifft_row_plan.process(&mut row_vec);
+        if row_scratch_len == 0 {
+            ifft_row_plan.process_with_scratch(&mut row_vec, &mut []);
+        } else {
+            ifft_row_plan.process_with_scratch(&mut row_vec, &mut row_fft_scratch);
+        }
         for c in 0..cols {
             output[[r, c]] = row_vec[c].re * norm_factor;
         }
     }
 
     output
+}
+
+/// Compute 2D Inverse FFT into pre-allocated buffers.
+///
+/// - `work_complex` must have shape `(rows, cols)` matching `input`.
+/// - `output` must have shape `(rows, cols)` matching `input`.
+/// - `scratch` length must be at least `max(rows, cols)`.
+pub fn ifft2d_into<F: Bm3dFloat>(
+    input: ArrayView2<Complex<F>>,
+    ifft_row_plan: &Arc<dyn Fft<F>>,
+    ifft_col_plan: &Arc<dyn Fft<F>>,
+    work_complex: &mut Array2<Complex<F>>,
+    output: &mut Array2<F>,
+    scratch: &mut [Complex<F>],
+) {
+    let col_scratch_len = ifft_col_plan.get_inplace_scratch_len();
+    let row_scratch_len = ifft_row_plan.get_inplace_scratch_len();
+    let mut col_fft_scratch = if col_scratch_len > 0 {
+        vec![Complex::new(F::zero(), F::zero()); col_scratch_len]
+    } else {
+        Vec::new()
+    };
+    let mut row_fft_scratch = if row_scratch_len > 0 {
+        vec![Complex::new(F::zero(), F::zero()); row_scratch_len]
+    } else {
+        Vec::new()
+    };
+    ifft2d_into_with_plan_scratch(
+        input,
+        ifft_row_plan,
+        ifft_col_plan,
+        work_complex,
+        output,
+        scratch,
+        &mut row_fft_scratch,
+        &mut col_fft_scratch,
+    );
+}
+
+/// Compute 2D inverse FFT into pre-allocated buffers using reusable FFT-plan scratch.
+pub fn ifft2d_into_with_plan_scratch<F: Bm3dFloat>(
+    input: ArrayView2<Complex<F>>,
+    ifft_row_plan: &Arc<dyn Fft<F>>,
+    ifft_col_plan: &Arc<dyn Fft<F>>,
+    work_complex: &mut Array2<Complex<F>>,
+    output: &mut Array2<F>,
+    scratch: &mut [Complex<F>],
+    row_fft_scratch: &mut [Complex<F>],
+    col_fft_scratch: &mut [Complex<F>],
+) {
+    let (rows, cols) = input.dim();
+    debug_assert_eq!(work_complex.dim(), (rows, cols));
+    debug_assert_eq!(output.dim(), (rows, cols));
+    debug_assert!(scratch.len() >= rows.max(cols));
+    debug_assert!(row_fft_scratch.len() >= ifft_row_plan.get_inplace_scratch_len());
+    debug_assert!(col_fft_scratch.len() >= ifft_col_plan.get_inplace_scratch_len());
+
+    let col_scratch_len = ifft_col_plan.get_inplace_scratch_len();
+    let row_scratch_len = ifft_row_plan.get_inplace_scratch_len();
+
+    if let (Some(input_data), Some(work_data), Some(output_data)) = (
+        input.as_slice_memory_order(),
+        work_complex.as_slice_memory_order_mut(),
+        output.as_slice_memory_order_mut(),
+    ) {
+        // 1. Transform columns in-place in complex workspace.
+        work_data.copy_from_slice(input_data);
+        if rows == cols {
+            transpose_square_in_place(work_data, rows);
+            if col_scratch_len == 0 {
+                ifft_col_plan.process_with_scratch(work_data, &mut []);
+            } else {
+                ifft_col_plan.process_with_scratch(work_data, col_fft_scratch);
+            }
+            transpose_square_in_place(work_data, rows);
+        } else if col_scratch_len == 0 {
+            for c in 0..cols {
+                for r in 0..rows {
+                    scratch[r] = work_data[r * cols + c];
+                }
+                ifft_col_plan.process_with_scratch(&mut scratch[..rows], &mut []);
+                for r in 0..rows {
+                    work_data[r * cols + c] = scratch[r];
+                }
+            }
+        } else {
+            for c in 0..cols {
+                for r in 0..rows {
+                    scratch[r] = work_data[r * cols + c];
+                }
+                ifft_col_plan.process_with_scratch(&mut scratch[..rows], col_fft_scratch);
+                for r in 0..rows {
+                    work_data[r * cols + c] = scratch[r];
+                }
+            }
+        }
+
+        // 2. Transform rows into real output (batched across all rows).
+        let norm_factor = F::one() / F::usize_as(rows * cols);
+        if row_scratch_len == 0 {
+            ifft_row_plan.process_with_scratch(work_data, &mut []);
+            for idx in 0..rows * cols {
+                output_data[idx] = work_data[idx].re * norm_factor;
+            }
+        } else {
+            ifft_row_plan.process_with_scratch(work_data, row_fft_scratch);
+            for idx in 0..rows * cols {
+                output_data[idx] = work_data[idx].re * norm_factor;
+            }
+        }
+    } else {
+        // 1. Transform columns in-place in complex workspace.
+        work_complex.assign(&input);
+        if col_scratch_len == 0 {
+            for c in 0..cols {
+                for r in 0..rows {
+                    scratch[r] = work_complex[[r, c]];
+                }
+                ifft_col_plan.process_with_scratch(&mut scratch[..rows], &mut []);
+                for r in 0..rows {
+                    work_complex[[r, c]] = scratch[r];
+                }
+            }
+        } else {
+            for c in 0..cols {
+                for r in 0..rows {
+                    scratch[r] = work_complex[[r, c]];
+                }
+                ifft_col_plan.process_with_scratch(&mut scratch[..rows], col_fft_scratch);
+                for r in 0..rows {
+                    work_complex[[r, c]] = scratch[r];
+                }
+            }
+        }
+
+        // 2. Transform rows into real output.
+        let norm_factor = F::one() / F::usize_as(rows * cols);
+        if row_scratch_len == 0 {
+            for r in 0..rows {
+                for c in 0..cols {
+                    scratch[c] = work_complex[[r, c]];
+                }
+                ifft_row_plan.process_with_scratch(&mut scratch[..cols], &mut []);
+                for c in 0..cols {
+                    output[[r, c]] = scratch[c].re * norm_factor;
+                }
+            }
+        } else {
+            for r in 0..rows {
+                for c in 0..cols {
+                    scratch[c] = work_complex[[r, c]];
+                }
+                ifft_row_plan.process_with_scratch(&mut scratch[..cols], row_fft_scratch);
+                for c in 0..cols {
+                    output[[r, c]] = scratch[c].re * norm_factor;
+                }
+            }
+        }
+    }
+}
+
+/// Compute 2D inverse FFT in-place on complex input, writing real output.
+///
+/// Compared to `ifft2d_into_with_plan_scratch`, this avoids copying input into
+/// a separate complex workspace. The complex input is overwritten.
+pub fn ifft2d_inplace_to_real_with_plan_scratch<F: Bm3dFloat>(
+    mut input_output: ArrayViewMut2<Complex<F>>,
+    ifft_row_plan: &Arc<dyn Fft<F>>,
+    ifft_col_plan: &Arc<dyn Fft<F>>,
+    output: &mut Array2<F>,
+    scratch: &mut [Complex<F>],
+    row_fft_scratch: &mut [Complex<F>],
+    col_fft_scratch: &mut [Complex<F>],
+) {
+    let (rows, cols) = input_output.dim();
+    debug_assert_eq!(output.dim(), (rows, cols));
+    debug_assert!(scratch.len() >= rows.max(cols));
+    debug_assert!(row_fft_scratch.len() >= ifft_row_plan.get_inplace_scratch_len());
+    debug_assert!(col_fft_scratch.len() >= ifft_col_plan.get_inplace_scratch_len());
+
+    let col_scratch_len = ifft_col_plan.get_inplace_scratch_len();
+    let row_scratch_len = ifft_row_plan.get_inplace_scratch_len();
+
+    if let (Some(data), Some(output_data)) = (
+        input_output.as_slice_memory_order_mut(),
+        output.as_slice_memory_order_mut(),
+    ) {
+        // 1. Transform columns in-place in complex input/output buffer.
+        if rows == cols {
+            transpose_square_in_place(data, rows);
+            if col_scratch_len == 0 {
+                ifft_col_plan.process_with_scratch(data, &mut []);
+            } else {
+                ifft_col_plan.process_with_scratch(data, col_fft_scratch);
+            }
+            transpose_square_in_place(data, rows);
+        } else if col_scratch_len == 0 {
+            for c in 0..cols {
+                for r in 0..rows {
+                    scratch[r] = data[r * cols + c];
+                }
+                ifft_col_plan.process_with_scratch(&mut scratch[..rows], &mut []);
+                for r in 0..rows {
+                    data[r * cols + c] = scratch[r];
+                }
+            }
+        } else {
+            for c in 0..cols {
+                for r in 0..rows {
+                    scratch[r] = data[r * cols + c];
+                }
+                ifft_col_plan.process_with_scratch(&mut scratch[..rows], col_fft_scratch);
+                for r in 0..rows {
+                    data[r * cols + c] = scratch[r];
+                }
+            }
+        }
+
+        // 2. Transform rows into real output (batched across all rows).
+        let norm_factor = F::one() / F::usize_as(rows * cols);
+        if row_scratch_len == 0 {
+            ifft_row_plan.process_with_scratch(data, &mut []);
+            for idx in 0..rows * cols {
+                output_data[idx] = data[idx].re * norm_factor;
+            }
+        } else {
+            ifft_row_plan.process_with_scratch(data, row_fft_scratch);
+            for idx in 0..rows * cols {
+                output_data[idx] = data[idx].re * norm_factor;
+            }
+        }
+    } else {
+        // 1. Transform columns in-place in complex input/output buffer.
+        if col_scratch_len == 0 {
+            for c in 0..cols {
+                for r in 0..rows {
+                    scratch[r] = input_output[[r, c]];
+                }
+                ifft_col_plan.process_with_scratch(&mut scratch[..rows], &mut []);
+                for r in 0..rows {
+                    input_output[[r, c]] = scratch[r];
+                }
+            }
+        } else {
+            for c in 0..cols {
+                for r in 0..rows {
+                    scratch[r] = input_output[[r, c]];
+                }
+                ifft_col_plan.process_with_scratch(&mut scratch[..rows], col_fft_scratch);
+                for r in 0..rows {
+                    input_output[[r, c]] = scratch[r];
+                }
+            }
+        }
+
+        // 2. Transform rows into real output.
+        let norm_factor = F::one() / F::usize_as(rows * cols);
+        if row_scratch_len == 0 {
+            for r in 0..rows {
+                for c in 0..cols {
+                    scratch[c] = input_output[[r, c]];
+                }
+                ifft_row_plan.process_with_scratch(&mut scratch[..cols], &mut []);
+                for c in 0..cols {
+                    output[[r, c]] = scratch[c].re * norm_factor;
+                }
+            }
+        } else {
+            for r in 0..rows {
+                for c in 0..cols {
+                    scratch[c] = input_output[[r, c]];
+                }
+                ifft_row_plan.process_with_scratch(&mut scratch[..cols], row_fft_scratch);
+                for c in 0..cols {
+                    output[[r, c]] = scratch[c].re * norm_factor;
+                }
+            }
+        }
+    }
 }
 
 /// In-place Fast Walsh-Hadamard Transform (Natural Order) for 8 elements.
@@ -149,6 +621,17 @@ fn fwht8<F: Bm3dFloat>(buf: &mut [F; 8]) {
 
 /// 2D WHT for 8x8 patch. Returns Complex (im=0) for compatibility.
 pub fn wht2d_8x8_forward<F: Bm3dFloat>(input: ArrayView2<F>) -> Array2<Complex<F>> {
+    let mut output = Array2::<Complex<F>>::zeros((8, 8));
+    wht2d_8x8_forward_into_view(input, output.view_mut());
+    output
+}
+
+/// 2D WHT for 8x8 patch into a pre-allocated output view.
+pub fn wht2d_8x8_forward_into_view<F: Bm3dFloat>(
+    input: ArrayView2<F>,
+    mut output: ArrayViewMut2<Complex<F>>,
+) {
+    assert_eq!(output.dim(), (8, 8));
     let mut data = [F::zero(); 64];
     let mut idx = 0;
     for r in 0..8 {
@@ -174,7 +657,6 @@ pub fn wht2d_8x8_forward<F: Bm3dFloat>(input: ArrayView2<F>) -> Array2<Complex<F
             data[r * 8 + c] = col_buf[r];
         }
     }
-    let mut output = Array2::<Complex<F>>::zeros((8, 8));
     idx = 0;
     for r in 0..8 {
         for c in 0..8 {
@@ -182,11 +664,26 @@ pub fn wht2d_8x8_forward<F: Bm3dFloat>(input: ArrayView2<F>) -> Array2<Complex<F
             idx += 1;
         }
     }
-    output
 }
 
 /// 2D Inverse WHT for 8x8 patch.
 pub fn wht2d_8x8_inverse<F: Bm3dFloat>(input: &Array2<Complex<F>>) -> Array2<F> {
+    wht2d_8x8_inverse_view(input.view())
+}
+
+/// 2D Inverse WHT for 8x8 patch from a complex view.
+pub fn wht2d_8x8_inverse_view<F: Bm3dFloat>(input: ArrayView2<Complex<F>>) -> Array2<F> {
+    let mut output = Array2::<F>::zeros((8, 8));
+    wht2d_8x8_inverse_into_view(input, &mut output);
+    output
+}
+
+/// 2D Inverse WHT for 8x8 patch from a complex view into a pre-allocated output.
+pub fn wht2d_8x8_inverse_into_view<F: Bm3dFloat>(
+    input: ArrayView2<Complex<F>>,
+    output: &mut Array2<F>,
+) {
+    assert_eq!(output.dim(), (8, 8));
     let mut data = [F::zero(); 64];
     let mut idx = 0;
     for r in 0..8 {
@@ -213,7 +710,6 @@ pub fn wht2d_8x8_inverse<F: Bm3dFloat>(input: &Array2<Complex<F>>) -> Array2<F> 
         }
     }
     let norm_scale = F::one() / F::usize_as(64);
-    let mut output = Array2::<F>::zeros((8, 8));
     idx = 0;
     for r in 0..8 {
         for c in 0..8 {
@@ -221,7 +717,6 @@ pub fn wht2d_8x8_inverse<F: Bm3dFloat>(input: &Array2<Complex<F>>) -> Array2<F> 
             idx += 1;
         }
     }
-    output
 }
 
 #[cfg(test)]
@@ -229,6 +724,7 @@ mod tests {
     use super::*;
     use ndarray::Array2;
     use rustfft::FftPlanner;
+    use std::sync::Arc;
 
     // Helper: Simple Linear Congruential Generator for deterministic "random" test data
     // This avoids adding rand as a dependency while still providing varied test inputs
@@ -261,16 +757,14 @@ mod tests {
     }
 
     // Helper: Create FFT plans for a given size
-    #[allow(clippy::type_complexity)]
-    fn create_fft_plans_f32(
-        rows: usize,
-        cols: usize,
-    ) -> (
-        std::sync::Arc<dyn Fft<f32>>,
-        std::sync::Arc<dyn Fft<f32>>,
-        std::sync::Arc<dyn Fft<f32>>,
-        std::sync::Arc<dyn Fft<f32>>,
-    ) {
+    type FftPlanQuad32 = (
+        Arc<dyn Fft<f32>>,
+        Arc<dyn Fft<f32>>,
+        Arc<dyn Fft<f32>>,
+        Arc<dyn Fft<f32>>,
+    );
+
+    fn create_fft_plans_f32(rows: usize, cols: usize) -> FftPlanQuad32 {
         let mut planner = FftPlanner::<f32>::new();
         let fft_row = planner.plan_fft_forward(cols);
         let fft_col = planner.plan_fft_forward(rows);
@@ -279,16 +773,14 @@ mod tests {
         (fft_row, fft_col, ifft_row, ifft_col)
     }
 
-    #[allow(clippy::type_complexity)]
-    fn create_fft_plans_f64(
-        rows: usize,
-        cols: usize,
-    ) -> (
-        std::sync::Arc<dyn Fft<f64>>,
-        std::sync::Arc<dyn Fft<f64>>,
-        std::sync::Arc<dyn Fft<f64>>,
-        std::sync::Arc<dyn Fft<f64>>,
-    ) {
+    type FftPlanQuad64 = (
+        Arc<dyn Fft<f64>>,
+        Arc<dyn Fft<f64>>,
+        Arc<dyn Fft<f64>>,
+        Arc<dyn Fft<f64>>,
+    );
+
+    fn create_fft_plans_f64(rows: usize, cols: usize) -> FftPlanQuad64 {
         let mut planner = FftPlanner::<f64>::new();
         let fft_row = planner.plan_fft_forward(cols);
         let fft_col = planner.plan_fft_forward(rows);
@@ -911,5 +1403,133 @@ mod tests {
             arrays_approx_equal_f32(&output_clean, &output_imag, 1e-10),
             "WHT inverse should ignore imaginary part"
         );
+    }
+
+    #[test]
+    fn test_ifft2d_into_matches_ifft2d() {
+        let input = random_matrix_f32(8, 8, 88888);
+        let mut planner = FftPlanner::new();
+        let fft_row = planner.plan_fft_forward(8);
+        let fft_col = planner.plan_fft_forward(8);
+        let ifft_row = planner.plan_fft_inverse(8);
+        let ifft_col = planner.plan_fft_inverse(8);
+
+        let freq = fft2d(input.view(), &fft_row, &fft_col);
+        let expected = ifft2d(&freq, &ifft_row, &ifft_col);
+
+        let mut work = Array2::<Complex<f32>>::zeros((8, 8));
+        let mut output = Array2::<f32>::zeros((8, 8));
+        let mut scratch = vec![Complex::new(0.0f32, 0.0f32); 8];
+        ifft2d_into(
+            freq.view(),
+            &ifft_row,
+            &ifft_col,
+            &mut work,
+            &mut output,
+            &mut scratch,
+        );
+
+        assert!(
+            arrays_approx_equal_f32(&expected, &output, 1e-6),
+            "ifft2d_into should match ifft2d"
+        );
+    }
+
+    #[test]
+    fn test_ifft2d_inplace_to_real_matches_ifft2d() {
+        let input = random_matrix_f32(8, 8, 987654);
+        let mut planner = FftPlanner::new();
+        let fft_row = planner.plan_fft_forward(8);
+        let fft_col = planner.plan_fft_forward(8);
+        let ifft_row = planner.plan_fft_inverse(8);
+        let ifft_col = planner.plan_fft_inverse(8);
+
+        let mut freq = fft2d(input.view(), &fft_row, &fft_col);
+        let expected = ifft2d(&freq, &ifft_row, &ifft_col);
+
+        let mut output = Array2::<f32>::zeros((8, 8));
+        let mut scratch = vec![Complex::new(0.0f32, 0.0f32); 8];
+        let row_scratch_len = ifft_row.get_inplace_scratch_len();
+        let col_scratch_len = ifft_col.get_inplace_scratch_len();
+        let mut row_fft_scratch = vec![Complex::new(0.0f32, 0.0f32); row_scratch_len];
+        let mut col_fft_scratch = vec![Complex::new(0.0f32, 0.0f32); col_scratch_len];
+
+        ifft2d_inplace_to_real_with_plan_scratch(
+            freq.view_mut(),
+            &ifft_row,
+            &ifft_col,
+            &mut output,
+            &mut scratch,
+            &mut row_fft_scratch,
+            &mut col_fft_scratch,
+        );
+
+        assert!(
+            arrays_approx_equal_f32(&expected, &output, 1e-6),
+            "ifft2d_inplace_to_real_with_plan_scratch should match ifft2d"
+        );
+    }
+
+    #[test]
+    fn test_fft2d_into_matches_fft2d() {
+        let input = random_matrix_f32(8, 8, 123456);
+        let mut planner = FftPlanner::new();
+        let fft_row = planner.plan_fft_forward(8);
+        let fft_col = planner.plan_fft_forward(8);
+
+        let expected = fft2d(input.view(), &fft_row, &fft_col);
+
+        let mut work = Array2::<Complex<f32>>::zeros((8, 8));
+        let mut output = Array2::<Complex<f32>>::zeros((8, 8));
+        let mut scratch = vec![Complex::new(0.0f32, 0.0f32); 8];
+        fft2d_into(
+            input.view(),
+            &fft_row,
+            &fft_col,
+            &mut work,
+            output.view_mut(),
+            &mut scratch,
+        );
+
+        for r in 0..8 {
+            for c in 0..8 {
+                let diff = (expected[[r, c]] - output[[r, c]]).norm();
+                assert!(diff < 1e-6, "fft2d_into mismatch at ({}, {})", r, c);
+            }
+        }
+    }
+
+    #[test]
+    fn test_wht_inverse_into_matches_inverse() {
+        let input = random_matrix_f32(8, 8, 99999);
+        let freq = wht2d_8x8_forward(input.view());
+        let expected = wht2d_8x8_inverse(&freq);
+        let mut output = Array2::<f32>::zeros((8, 8));
+        wht2d_8x8_inverse_into_view(freq.view(), &mut output);
+
+        assert!(
+            arrays_approx_equal_f32(&expected, &output, 1e-6),
+            "wht2d_8x8_inverse_into_view should match wht2d_8x8_inverse"
+        );
+    }
+
+    #[test]
+    fn test_wht_forward_into_matches_forward() {
+        let input = random_matrix_f32(8, 8, 424242);
+        let expected = wht2d_8x8_forward(input.view());
+        let mut output = Array2::<Complex<f32>>::zeros((8, 8));
+        wht2d_8x8_forward_into_view(input.view(), output.view_mut());
+
+        for r in 0..8 {
+            for c in 0..8 {
+                let diff = (expected[[r, c]] - output[[r, c]]).norm();
+                assert!(
+                    diff < 1e-6,
+                    "wht2d_8x8_forward_into_view mismatch at ({}, {})",
+                    r,
+                    c
+                );
+            }
+        }
     }
 }

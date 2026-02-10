@@ -16,6 +16,8 @@ pub struct Bm3dParameters {
     pub patch_size: usize,
     pub search_window: usize,
     pub max_matches: usize,
+    /// Speed-first transform mode (8x8 Hadamard); can increase block artifacts.
+    pub use_hadamard_fast_mode: bool,
     /// Which axis to iterate over for sinogram processing (0, 1, or 2).
     /// Default is 1 (Y axis) for standard tomography data [angles, Y, X].
     pub processing_axis: usize,
@@ -44,6 +46,7 @@ impl Default for Bm3dParameters {
             patch_size: 8,
             search_window: 24,
             max_matches: 32,
+            use_hadamard_fast_mode: false,
             processing_axis: 1, // Default: Y axis (middle dimension)
             fft_alpha: 1.0,
             notch_width: 2.0,
@@ -77,6 +80,7 @@ impl Bm3dParameters {
             max_matches: self.max_matches,
             fft_alpha: self.fft_alpha,
             notch_width: self.notch_width,
+            use_hadamard_fast_path: Some(self.use_hadamard_fast_mode),
             ..default
         }
     }
@@ -432,6 +436,19 @@ impl Bm3dParameters {
                     }
                 });
 
+                ui.horizontal(|ui| {
+                    let response = ui
+                        .checkbox(&mut self.use_hadamard_fast_mode, "Fast Mode (Hadamard 8x8)")
+                        .on_hover_text(
+                            "Speed-first transform for 8x8 patches.\n\
+                         May introduce blocky/patchy artifacts near strong edges.\n\
+                         Keep OFF for highest quality.",
+                        );
+                    if response.changed() {
+                        changed = true;
+                    }
+                });
+
                 // Processing axis
                 changed |= self.show_processing_axis(ui);
 
@@ -444,6 +461,7 @@ impl Bm3dParameters {
                     self.patch_size = 8;
                     self.search_window = 24;
                     self.max_matches = 32;
+                    self.use_hadamard_fast_mode = false;
                     self.processing_axis = 1;
                     changed = true;
                 }

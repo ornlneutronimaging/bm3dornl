@@ -13,10 +13,11 @@
 //! - **Streak**: Streak pre-subtraction + anisotropic PSD for ring artifact removal
 
 use ndarray::{Array1, Array2, ArrayView2};
+use std::time::Instant;
 
 use crate::float_trait::Bm3dFloat;
 use crate::noise_estimation::estimate_noise_sigma;
-use crate::pipeline::{run_bm3d_step, Bm3dMode};
+use crate::pipeline::{run_bm3d_step, Bm3dKernelConfig, Bm3dMode};
 use crate::streak::{estimate_streak_profile_impl, gaussian_blur_1d};
 
 // =============================================================================
@@ -73,6 +74,7 @@ const DEFAULT_NOTCH_WIDTH: f64 = 2.0;
 
 /// Small epsilon to avoid division by zero during normalization
 const NORMALIZATION_EPSILON: f64 = 1e-10;
+const PROFILE_TIMING_ENV: &str = "BM3D_PROFILE_TIMING";
 
 // =============================================================================
 // Types
@@ -130,6 +132,9 @@ pub struct Bm3dConfig<F: Bm3dFloat> {
     pub fft_alpha: F,
     /// FFT-Guided SVD: Gaussian notch width. Default: 2.0
     pub notch_width: F,
+    /// Optional per-call override for 8x8 Hadamard fast path.
+    /// `Some(true/false)` takes precedence over env/global defaults.
+    pub use_hadamard_fast_path: Option<bool>,
 }
 
 impl<F: Bm3dFloat> Default for Bm3dConfig<F> {
@@ -149,6 +154,7 @@ impl<F: Bm3dFloat> Default for Bm3dConfig<F> {
             filter_strength: F::from_f64_c(DEFAULT_FILTER_STRENGTH),
             fft_alpha: F::from_f64_c(DEFAULT_FFT_ALPHA),
             notch_width: F::from_f64_c(DEFAULT_NOTCH_WIDTH),
+            use_hadamard_fast_path: None,
         }
     }
 }
@@ -196,6 +202,19 @@ impl<F: Bm3dFloat> Bm3dConfig<F> {
 // Helper Functions
 // =============================================================================
 
+fn profile_timing_enabled() -> bool {
+    std::env::var(PROFILE_TIMING_ENV)
+        .ok()
+        .map(|value| {
+            let v = value.trim();
+            v == "1"
+                || v.eq_ignore_ascii_case("true")
+                || v.eq_ignore_ascii_case("yes")
+                || v.eq_ignore_ascii_case("on")
+        })
+        .unwrap_or(false)
+}
+
 /// Compute the spatially adaptive sigma map from the input image.
 ///
 /// The sigma map captures local noise structure by:
@@ -209,7 +228,7 @@ fn compute_sigma_map<F: Bm3dFloat>(
     sigma_map_smoothing: F,
     streak_sigma_scale: F,
 ) -> Array2<F> {
-    let (rows, cols) = normalized_image.dim();
+    let (_rows, cols) = normalized_image.dim();
 
     // 1. Estimate streak profile with fixed parameters
     let streak_profile = estimate_streak_profile_impl(
@@ -227,11 +246,10 @@ fn compute_sigma_map<F: Bm3dFloat>(
     // 4. Take absolute value and scale
     let sigma_1d: Array1<F> = streak_signal.mapv(|x| x.abs() * streak_sigma_scale);
 
-    // 5. Tile to full image height
-    let mut sigma_map = Array2::zeros((rows, cols));
-    for r in 0..rows {
-        sigma_map.row_mut(r).assign(&sigma_1d);
-    }
+    // 5. Return a compact row-invariant map of shape (1, cols).
+    // BM3D kernel interprets this as "same sigma profile for every row".
+    let mut sigma_map = Array2::zeros((1, cols));
+    sigma_map.row_mut(0).assign(&sigma_1d);
 
     sigma_map
 }
@@ -296,6 +314,29 @@ pub fn bm3d_ring_artifact_removal_with_plans<F: Bm3dFloat>(
 ) -> Result<Array2<F>, String> {
     // Validate configuration
     config.validate()?;
+    let profile_timing = profile_timing_enabled();
+    let total_started = profile_timing.then(Instant::now);
+    let mut normalize_ns = 0u128;
+    let mut sigma_map_ns = 0u128;
+    let mut psd_ns = 0u128;
+    let mut prefilter_ns = 0u128;
+    let mut sigma_estimate_ns = 0u128;
+    let mut hard_pass_ns = 0u128;
+    let mut wiener_pass_ns = 0u128;
+    let mut denormalize_ns = 0u128;
+
+    macro_rules! timed {
+        ($enabled:expr, $acc:expr, $body:block) => {{
+            if $enabled {
+                let _t = Instant::now();
+                let _ret = { $body };
+                $acc += _t.elapsed().as_nanos();
+                _ret
+            } else {
+                $body
+            }
+        }};
+    }
 
     let (rows, cols) = sinogram.dim();
 
@@ -307,114 +348,160 @@ pub fn bm3d_ring_artifact_removal_with_plans<F: Bm3dFloat>(
         ));
     }
 
-    // Step 1: Compute global min/max for normalization
-    let d_min = sinogram
-        .iter()
-        .copied()
-        .fold(F::infinity(), |a, b| if b < a { b } else { a });
-    let d_max = sinogram
-        .iter()
-        .copied()
-        .fold(F::neg_infinity(), |a, b| if b > a { b } else { a });
+    let (d_min, _d_max, range, eps, mut z_norm) = timed!(profile_timing, normalize_ns, {
+        // Step 1: Compute global min/max for normalization
+        let d_min = sinogram
+            .iter()
+            .copied()
+            .fold(F::infinity(), |a, b| if b < a { b } else { a });
+        let d_max = sinogram
+            .iter()
+            .copied()
+            .fold(F::neg_infinity(), |a, b| if b > a { b } else { a });
 
-    let range = d_max - d_min;
-    let eps = F::from_f64_c(NORMALIZATION_EPSILON);
+        let range = d_max - d_min;
+        let eps = F::from_f64_c(NORMALIZATION_EPSILON);
 
-    // Step 2: Normalize to [0, 1]
-    let mut z_norm = if range > eps {
-        sinogram.mapv(|x| (x - d_min) / range)
-    } else {
-        // Constant image - just use zeros
-        Array2::zeros((rows, cols))
-    };
+        // Step 2: Normalize to [0, 1]
+        let z_norm = if range > eps {
+            sinogram.mapv(|x| (x - d_min) / range)
+        } else {
+            // Constant image - just use zeros
+            Array2::zeros((rows, cols))
+        };
+        (d_min, d_max, range, eps, z_norm)
+    });
 
     // Step 3: Compute sigma map
-    let sigma_map = compute_sigma_map(
-        z_norm.view(),
-        config.sigma_map_smoothing,
-        config.streak_sigma_scale,
-    );
+    let sigma_map = timed!(profile_timing, sigma_map_ns, {
+        compute_sigma_map(
+            z_norm.view(),
+            config.sigma_map_smoothing,
+            config.streak_sigma_scale,
+        )
+    });
 
     // Step 4: Prepare PSD based on mode
-    let sigma_psd = match mode {
-        RingRemovalMode::Generic => {
-            // Scalar PSD (no colored noise model)
-            Array2::zeros((1, 1))
+    let sigma_psd = timed!(profile_timing, psd_ns, {
+        match mode {
+            RingRemovalMode::Generic => {
+                // Scalar PSD (no colored noise model)
+                Array2::zeros((1, 1))
+            }
+            RingRemovalMode::Streak | RingRemovalMode::MultiscaleStreak => {
+                // Anisotropic PSD for streak modes
+                construct_psd(config.patch_size, config.psd_width)
+            }
+            RingRemovalMode::FourierSvd => {
+                // Fourier-SVD: No PSD needed (uses separate algorithm)
+                Array2::zeros((1, 1))
+            }
         }
-        RingRemovalMode::Streak | RingRemovalMode::MultiscaleStreak => {
-            // Anisotropic PSD for streak modes
-            construct_psd(config.patch_size, config.psd_width)
-        }
-        RingRemovalMode::FourierSvd => {
-            // Fourier-SVD: No PSD needed (uses separate algorithm)
-            Array2::zeros((1, 1))
-        }
-    };
+    });
 
     // Step 5: Streak pre-subtraction (streak modes) or Fourier-SVD
-    if mode == RingRemovalMode::Streak || mode == RingRemovalMode::MultiscaleStreak {
-        subtract_streak_profile(
-            &mut z_norm,
-            config.streak_sigma_smooth,
-            config.streak_iterations,
-        );
-    } else if mode == RingRemovalMode::FourierSvd {
-        // Fourier-SVD Streak Removal
-        z_norm = crate::fourier_svd::fourier_svd_removal(
-            z_norm.view(),
-            config.fft_alpha,
-            config.notch_width,
-        );
-    }
+    timed!(profile_timing, prefilter_ns, {
+        if mode == RingRemovalMode::Streak || mode == RingRemovalMode::MultiscaleStreak {
+            subtract_streak_profile(
+                &mut z_norm,
+                config.streak_sigma_smooth,
+                config.streak_iterations,
+            );
+        } else if mode == RingRemovalMode::FourierSvd {
+            // Fourier-SVD Streak Removal
+            z_norm = crate::fourier_svd::fourier_svd_removal(
+                z_norm.view(),
+                config.fft_alpha,
+                config.notch_width,
+            );
+        }
+    });
 
     // Step 5b: Auto-estimate sigma if not provided
     // If sigma_random is effectively 0, estimate from data.
-    let sigma_random = if config.sigma_random <= F::from_f64_c(1e-6) {
-        // Use z_norm for estimation (it has streaks removed if in Streak/FourierSvd mode)
-        estimate_noise_sigma(z_norm.view())
-    } else {
-        config.sigma_random
-    };
+    let sigma_random = timed!(profile_timing, sigma_estimate_ns, {
+        if config.sigma_random <= F::from_f64_c(1e-6) {
+            // Use z_norm for estimation (it has streaks removed if in Streak/FourierSvd mode)
+            estimate_noise_sigma(z_norm.view())
+        } else {
+            config.sigma_random
+        }
+    });
 
     // Step 6: BM3D Pass 1 - Hard Thresholding
-    let yhat_ht = run_bm3d_step(
-        z_norm.view(),
-        z_norm.view(), // pilot = noisy for first pass
-        Bm3dMode::HardThreshold,
-        sigma_psd.view(),
-        sigma_map.view(),
+    let hard_config = Bm3dKernelConfig {
         sigma_random,
-        config.threshold,
-        config.patch_size,
-        config.step_size,
-        config.search_window,
-        config.max_matches,
-        plans,
-    )?;
+        threshold: config.threshold,
+        patch_size: config.patch_size,
+        step_size: config.step_size,
+        search_window: config.search_window,
+        max_matches: config.max_matches,
+        use_hadamard_fast_path: config.use_hadamard_fast_path,
+    };
+    let yhat_ht = timed!(profile_timing, hard_pass_ns, {
+        run_bm3d_step(
+            z_norm.view(),
+            z_norm.view(), // pilot = noisy for first pass
+            Bm3dMode::HardThreshold,
+            sigma_psd.view(),
+            sigma_map.view(),
+            &hard_config,
+            plans,
+        )
+    })?;
 
     // Step 7: BM3D Pass 2 - Wiener Filtering
-    let yhat_final = run_bm3d_step(
-        z_norm.view(),
-        yhat_ht.view(), // pilot = HT result
-        Bm3dMode::Wiener,
-        sigma_psd.view(),
-        sigma_map.view(),
+    let wiener_config = Bm3dKernelConfig {
         sigma_random,
-        F::zero(), // threshold not used for Wiener
-        config.patch_size,
-        config.step_size,
-        config.search_window,
-        config.max_matches,
-        plans,
-    )?;
+        threshold: F::zero(), // not used for Wiener
+        patch_size: config.patch_size,
+        step_size: config.step_size,
+        search_window: config.search_window,
+        max_matches: config.max_matches,
+        use_hadamard_fast_path: config.use_hadamard_fast_path,
+    };
+    let yhat_final = timed!(profile_timing, wiener_pass_ns, {
+        run_bm3d_step(
+            z_norm.view(),
+            yhat_ht.view(), // pilot = HT result
+            Bm3dMode::Wiener,
+            sigma_psd.view(),
+            sigma_map.view(),
+            &wiener_config,
+            plans,
+        )
+    })?;
 
     // Step 8: Denormalize to original range
-    let output = if range > eps {
-        yhat_final.mapv(|x| x * range + d_min)
-    } else {
-        // Constant image - restore original mean/min
-        Array2::from_elem(yhat_final.raw_dim(), d_min)
-    };
+    let output = timed!(profile_timing, denormalize_ns, {
+        if range > eps {
+            yhat_final.mapv(|x| x * range + d_min)
+        } else {
+            // Constant image - restore original mean/min
+            Array2::from_elem(yhat_final.raw_dim(), d_min)
+        }
+    });
+
+    if profile_timing {
+        let total_ms = total_started
+            .map(|t| t.elapsed().as_secs_f64() * 1000.0)
+            .unwrap_or_default();
+        eprintln!(
+            "bm3d_orch_profile mode={:?} size={}x{} total_ms={:.3} normalize_ms={:.3} sigma_map_ms={:.3} psd_ms={:.3} prefilter_ms={:.3} sigma_est_ms={:.3} hard_ms={:.3} wiener_ms={:.3} denorm_ms={:.3}",
+            mode,
+            rows,
+            cols,
+            total_ms,
+            normalize_ns as f64 / 1_000_000.0,
+            sigma_map_ns as f64 / 1_000_000.0,
+            psd_ns as f64 / 1_000_000.0,
+            prefilter_ns as f64 / 1_000_000.0,
+            sigma_estimate_ns as f64 / 1_000_000.0,
+            hard_pass_ns as f64 / 1_000_000.0,
+            wiener_pass_ns as f64 / 1_000_000.0,
+            denormalize_ns as f64 / 1_000_000.0,
+        );
+    }
 
     Ok(output)
 }
@@ -464,7 +551,6 @@ pub fn bm3d_ring_artifact_removal<F: Bm3dFloat>(
 // =============================================================================
 
 #[cfg(test)]
-#[allow(clippy::field_reassign_with_default)]
 mod tests {
     use super::*;
     use ndarray::Array2;
@@ -527,22 +613,28 @@ mod tests {
 
     #[test]
     fn test_config_validation_invalid_patch_size() {
-        let mut config: Bm3dConfig<f32> = Bm3dConfig::default();
-        config.patch_size = 0;
+        let config: Bm3dConfig<f32> = Bm3dConfig {
+            patch_size: 0,
+            ..Bm3dConfig::default()
+        };
         assert!(config.validate().is_err());
     }
 
     #[test]
     fn test_config_validation_invalid_step_size() {
-        let mut config: Bm3dConfig<f32> = Bm3dConfig::default();
-        config.step_size = 0;
+        let config: Bm3dConfig<f32> = Bm3dConfig {
+            step_size: 0,
+            ..Bm3dConfig::default()
+        };
         assert!(config.validate().is_err());
     }
 
     #[test]
     fn test_config_validation_negative_sigma() {
-        let mut config: Bm3dConfig<f32> = Bm3dConfig::default();
-        config.sigma_random = -0.1;
+        let config = Bm3dConfig {
+            sigma_random: -0.1,
+            ..Bm3dConfig::default()
+        };
         assert!(config.validate().is_err());
     }
 
@@ -555,22 +647,16 @@ mod tests {
 
         let sigma_map = compute_sigma_map(normalized.view(), 20.0, 1.1);
 
-        assert_eq!(sigma_map.dim(), (64, 128));
+        assert_eq!(sigma_map.dim(), (1, 128));
     }
 
     #[test]
-    fn test_sigma_map_rows_identical() {
-        // Sigma map should have identical rows (tiled from 1D profile)
+    fn test_sigma_map_compact_row_profile() {
+        // Sigma map is represented compactly as a single row profile.
         let image = random_matrix(32, 64, 54321);
         let sigma_map = compute_sigma_map(image.view(), 20.0, 1.1);
-
-        let first_row: Vec<f32> = sigma_map.row(0).iter().copied().collect();
-        for r in 1..32 {
-            let row: Vec<f32> = sigma_map.row(r).iter().copied().collect();
-            for (a, b) in first_row.iter().zip(row.iter()) {
-                assert!(approx_eq(*a, *b, 1e-6), "Row {} differs from row 0", r);
-            }
-        }
+        assert_eq!(sigma_map.nrows(), 1);
+        assert_eq!(sigma_map.ncols(), 64);
     }
 
     #[test]
@@ -833,8 +919,10 @@ mod tests {
     #[test]
     fn test_invalid_config_rejected() {
         let image = random_matrix(32, 32, 88888);
-        let mut config: Bm3dConfig<f32> = Bm3dConfig::default();
-        config.patch_size = 0;
+        let config = Bm3dConfig {
+            patch_size: 0,
+            ..Bm3dConfig::default()
+        };
 
         let result = bm3d_ring_artifact_removal(image.view(), RingRemovalMode::Generic, &config);
 
@@ -876,9 +964,11 @@ mod tests {
         let image = random_matrix(48, 48, 11111);
 
         for patch_size in [4, 8] {
-            let mut config: Bm3dConfig<f32> = Bm3dConfig::default();
-            config.patch_size = patch_size;
-            config.step_size = patch_size / 2;
+            let config = Bm3dConfig {
+                patch_size,
+                step_size: patch_size / 2,
+                ..Bm3dConfig::default()
+            };
 
             let result =
                 bm3d_ring_artifact_removal(image.view(), RingRemovalMode::Generic, &config);
@@ -893,8 +983,10 @@ mod tests {
         let image = random_matrix(32, 32, 22222);
 
         for sigma in [0.05f32, 0.1, 0.2] {
-            let mut config: Bm3dConfig<f32> = Bm3dConfig::default();
-            config.sigma_random = sigma;
+            let config = Bm3dConfig {
+                sigma_random: sigma,
+                ..Bm3dConfig::default()
+            };
 
             let result =
                 bm3d_ring_artifact_removal(image.view(), RingRemovalMode::Generic, &config);
@@ -909,8 +1001,10 @@ mod tests {
         let image = Array2::from_shape_fn((64, 64), |_| rng.next_f32());
 
         // Config with sigma=0.0 to trigger auto-estimation
-        let mut config = Bm3dConfig::default();
-        config.sigma_random = 0.0;
+        let config = Bm3dConfig {
+            sigma_random: 0.0,
+            ..Bm3dConfig::default()
+        };
 
         let result = bm3d_ring_artifact_removal(image.view(), RingRemovalMode::Generic, &config);
 
