@@ -53,7 +53,7 @@ BM3DORNL provides the neutron imaging community with an open-source, MIT-license
 
 Several software packages implement pre-processing streak removal for tomography: TomoPy [@gürsoy2014] provides wavelet-Fourier filtering [@münch2009] and Vo's sorting/fitting methods [@vo2018]; ASTRA Toolbox [@van2016] offers GPU-accelerated preprocessing; and bm3d-streak-removal [@mäkinen2021] implements multiscale BM3D but remains closed-source and platform-limited.
 
-\autoref{fig:input} shows the benchmark input data: a synthetic sinogram (720$\times$725 pixels) with simulated ring artifacts and the corresponding clean ground truth.
+\autoref{fig:input} shows the benchmark input data: a synthetic sinogram ($720\times725$ pixels) with simulated ring artifacts and the corresponding clean ground truth.
 All benchmark results are from Linux x86_64 to enable comparison with bm3d-streak-removal, which provides only x86_64 binaries.
 We compared eight methods: four BM3DORNL variants (streak, generic, multiscale, and Fourier-SVD), three TomoPy algorithms (wavelet-Fourier, sorting-fitting, and sorting-based), and the original bm3d-streak-removal.
 The multiscale variant implements the pyramid approach from Mäkinen et al. [@mäkinen2021], while Fourier-SVD is a lightweight FFT-guided method that achieves comparable quality at 50$\times$ faster speeds.
@@ -69,7 +69,7 @@ Cross-platform performance differs substantially: TomoPy runs 2.5--3$\times$ slo
 **Quality analysis:** \autoref{fig:results} shows cropped results from all eight methods with their difference images (result minus ground truth).
 The benchmark reveals that quality metrics alone do not tell the full story.
 TomoPy SF achieves the highest SSIM (0.987, see \autoref{fig:metrics}(b)), but difference image analysis shows residual vertical stripes in its output.
-This occurs because SSIM uses local windows (7$\times$7 or 11$\times$11 pixels), and narrow vertical stripes affect few pixels per window.
+This occurs because SSIM uses local windows ($7\times7$ or $11\times11$ pixels), and narrow vertical stripes affect few pixels per window.
 Notably, all BM3DORNL variants achieve excellent SSIM scores (0.943--0.951), with both multiscale BM3DORNL and Fourier-SVD reaching 0.951.
 Fourier-SVD accomplishes this at 0.017 seconds, demonstrating that aggressive artifact removal and high-quality reconstruction are achievable without computationally expensive multi-scale processing.
 The difference images reveal that all BM3DORNL variants produce clean vertical patterns, indicating successful artifact removal, while TomoPy methods leave faint residual artifacts.
@@ -89,9 +89,9 @@ BM3DORNL employs a hybrid Python-Rust architecture: the core algorithm is implem
 
 - **Integral image pre-screening:** Before computing expensive patch distances, the block matching stage uses integral images to compute mean and norm bounds in O(1) time. Patches that fail these bounds are skipped, eliminating approximately 80% of distance calculations.
 
-- **FFT with SIMD acceleration:** BM3DORNL defaults to FFT-based transforms with batched row/column passes and specialized 8$\times$8 fast paths. FFT plans are computed once and shared across threads via Arc, and a direct-mapped transform cache eliminates redundant computations. An alternative Walsh-Hadamard path is available for multiplication-free processing.
+- **FFT with SIMD acceleration:** BM3DORNL defaults to FFT-based transforms with batched row/column passes and specialized $8\times8$ fast paths. FFT plans are computed once and shared across threads via Arc, and a direct-mapped transform cache eliminates redundant computations. An alternative Walsh-Hadamard path is available for multiplication-free processing.
 
-- **SIMD-optimized block matching:** The 8$\times$8 patch distance computation uses platform-specific SIMD instructions with a contiguous-memory fast path, reducing the block matching inner loop to near-hardware-limit throughput.
+- **SIMD-optimized block matching:** The $8\times8$ patch distance computation uses platform-specific SIMD instructions with a contiguous-memory fast path, reducing the block matching inner loop to near-hardware-limit throughput.
 
 - **Tile-owned aggregation:** Sinograms are processed in tiles that fit in L2/L3 cache, with SIMD-optimized weight accumulation. Per-worker scratch buffers are reused across kernel runs, minimizing memory allocation overhead.
 
