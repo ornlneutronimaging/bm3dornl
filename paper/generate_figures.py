@@ -37,26 +37,32 @@ CROP_X = slice(235, 485)  # columns (250 pixels, centered on artifact region)
 METHODS = [
     {"key": "bm3dornl_streak", "name": "bm3dornl\n(streak)", "color": "#1f77b4", "file": "result_bm3dornl_streak.npy"},
     {"key": "bm3dornl_generic", "name": "bm3dornl\n(generic)", "color": "#1f77b4", "file": "result_bm3dornl_generic.npy"},
+    {"key": "bm3dornl_multiscale", "name": "bm3dornl\n(multiscale)", "color": "#1f77b4", "file": "result_bm3dornl_multiscale.npy"},
+    {"key": "Fourier_SVD", "name": "Fourier\n-SVD", "color": "#17becf", "file": "result_Fourier-SVD.npy"},
     {"key": "TomoPy_FW", "name": "TomoPy FW\n(Münch)", "color": "#ff7f0e", "file": "result_TomoPy_FW_Münch.npy"},
     {"key": "TomoPy_SF", "name": "TomoPy SF\n(Vo)", "color": "#ff7f0e", "file": "result_TomoPy_SF_Vo.npy"},
     {"key": "TomoPy_BSD", "name": "TomoPy BSD\n(sort)", "color": "#ff7f0e", "file": "result_TomoPy_BSD_sort.npy"},
     {"key": "bm3d_streak", "name": "bm3d-streak\n-removal", "color": "#2ca02c", "file": "result_bm3d-streak-removal.npy"},
 ]
 
-# Timing and metrics data (from consolidated_results.csv)
+# Timing and metrics data (from consolidated_results.csv, v0.8.1 benchmark)
 METRICS = {
-    "bm3dornl_streak": {"time": 0.256, "std": 0.009, "psnr": 32.63, "ssim": 0.6160},
-    "bm3dornl_generic": {"time": 0.219, "std": 0.002, "psnr": 32.93, "ssim": 0.5760},
-    "TomoPy_FW": {"time": 0.318, "std": 0.008, "psnr": 20.61, "ssim": 0.5831},
-    "TomoPy_SF": {"time": 0.278, "std": 0.008, "psnr": 34.50, "ssim": 0.9591},
-    "TomoPy_BSD": {"time": 0.349, "std": 0.009, "psnr": 34.69, "ssim": 0.9333},
-    "bm3d_streak": {"time": 41.033, "std": 0.139, "psnr": 36.34, "ssim": 0.8697},
+    "bm3dornl_streak": {"time": 0.078, "std": 0.006, "psnr": 39.40, "ssim": 0.9431},
+    "bm3dornl_generic": {"time": 0.074, "std": 0.007, "psnr": 35.10, "ssim": 0.9476},
+    "bm3dornl_multiscale": {"time": 0.475, "std": 0.018, "psnr": 34.72, "ssim": 0.9510},
+    "Fourier_SVD": {"time": 0.017, "std": 0.001, "psnr": 34.72, "ssim": 0.9510},
+    "TomoPy_FW": {"time": 0.317, "std": 0.011, "psnr": 20.63, "ssim": 0.5840},
+    "TomoPy_SF": {"time": 0.276, "std": 0.008, "psnr": 42.01, "ssim": 0.9868},
+    "TomoPy_BSD": {"time": 0.346, "std": 0.011, "psnr": 42.86, "ssim": 0.9829},
+    "bm3d_streak": {"time": 39.878, "std": 0.106, "psnr": 43.79, "ssim": 0.9670},
 }
 
 # Marker styles for scatter plot
 MARKERS = {
     "bm3dornl_streak": "s",  # square
     "bm3dornl_generic": "D",  # diamond
+    "bm3dornl_multiscale": "P",  # plus (filled)
+    "Fourier_SVD": "*",  # star
     "TomoPy_FW": "^",  # triangle up
     "TomoPy_SF": "v",  # triangle down
     "TomoPy_BSD": ">",  # triangle right
@@ -164,14 +170,14 @@ def figure2_results_diff(data):
     diff_vmin, diff_vmax = -diff_absmax, diff_absmax
 
     # Create figure with GridSpec
-    # 6 image columns + 1 narrow colorbar column
+    # 8 image columns + 1 narrow colorbar column
     # Crop is 250x250 pixels, so aspect is 1:1
-    # Figure width: 6 images + colorbar, height: 2 rows
-    fig = plt.figure(figsize=(13, 4.5), dpi=DPI)
+    # Figure width: 8 images + colorbar, height: 2 rows
+    fig = plt.figure(figsize=(17, 4.5), dpi=DPI)
     gs = GridSpec(
-        2, 7,  # 2 rows, 7 columns (6 images + 1 colorbar)
+        2, 9,  # 2 rows, 9 columns (8 images + 1 colorbar)
         figure=fig,
-        width_ratios=[1, 1, 1, 1, 1, 1, 0.05],  # colorbar is narrow
+        width_ratios=[1, 1, 1, 1, 1, 1, 1, 1, 0.05],  # colorbar is narrow
         height_ratios=[1, 1],
         wspace=0.03,
         hspace=0.08
@@ -204,7 +210,7 @@ def figure2_results_diff(data):
             ax.set_ylabel("Diff", fontsize=ANNOTATION_SIZE)
 
     # Colorbar spanning row 2 only
-    cbar_ax = fig.add_subplot(gs[1, 6])
+    cbar_ax = fig.add_subplot(gs[1, 8])
     cbar = fig.colorbar(diff_im, cax=cbar_ax)
     cbar.ax.tick_params(labelsize=TICK_SIZE)
 
@@ -237,7 +243,7 @@ def figure3_metrics():
     ax.set_xticks(range(len(METHODS)))
     ax.set_xticklabels(names, fontsize=TICK_SIZE, rotation=45, ha="right")
     ax.set_ylabel("Processing Time (s)", fontsize=LABEL_SIZE)
-    ax.set_title("(a) Processing Time (n=30 runs)", fontsize=TITLE_SIZE)
+    ax.set_title("(a) Processing Time (n=100 runs)", fontsize=TITLE_SIZE)
     ax.tick_params(labelsize=TICK_SIZE)
 
     # Add value labels on bars
