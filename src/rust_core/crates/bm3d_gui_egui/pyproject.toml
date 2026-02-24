@@ -7,7 +7,7 @@ name = "bm3dornl-gui"
 version = "0.8.2"
 description = "GUI application for BM3D ring artifact removal in neutron imaging"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.12"
 license = "MIT"
 keywords = ["BM3D", "image processing", "neutron imaging", "GUI", "ring artifacts"]
 classifiers = [
