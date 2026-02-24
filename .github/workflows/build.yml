@@ -19,7 +19,7 @@ jobs:
         with:
           target: x86_64
           manylinux: auto
-          args: --release --out dist
+          args: --release --out dist -i python3.12 python3.13 python3.14
 
       - name: Upload wheel
         uses: actions/upload-artifact@v6
@@ -37,7 +37,7 @@ jobs:
         uses: PyO3/maturin-action@v1
         with:
           target: aarch64-apple-darwin
-          args: --release --out dist
+          args: --release --out dist -i python3.12 python3.13 python3.14
 
       - name: Upload wheel
         uses: actions/upload-artifact@v6

@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "bm3dornl-gui"
-version = "0.8.1"
+version = "0.8.2"
 description = "GUI application for BM3D ring artifact removal in neutron imaging"
 readme = "README.md"
 requires-python = ">=3.10"
