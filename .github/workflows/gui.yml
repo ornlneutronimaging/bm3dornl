@@ -32,7 +32,7 @@ jobs:
             ln -sf /usr/bin/cmake3 /usr/bin/cmake || true
 
       - name: Upload wheel
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: gui-wheel-linux-x86_64
           path: src/rust_core/crates/bm3d_gui_egui/dist/*.whl
@@ -55,7 +55,7 @@ jobs:
         # No HDF5_DIR - let it build from source with static feature
 
       - name: Upload wheel
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: gui-wheel-macos-arm64
           path: src/rust_core/crates/bm3d_gui_egui/dist/*.whl
@@ -91,7 +91,7 @@ jobs:
             bm3dornl-${VERSION}-macos-arm64.dmg
 
       - name: Upload DMG artifact
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: gui-macos-app
           path: "*.dmg"
