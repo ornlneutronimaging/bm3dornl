@@ -11,7 +11,7 @@ Output images are saved to output_recon/ for visual inspection.
 Usage:
     pixi run python scripts/reconstruct_and_compare.py
     pixi run python scripts/reconstruct_and_compare.py --slice 0140
-    pixi run python scripts/reconstruct_and_compare.py --center 2116.5 --angles 360
+    pixi run python scripts/reconstruct_and_compare.py --center 2100 --angles 180
 """
 
 import argparse
