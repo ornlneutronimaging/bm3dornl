@@ -21,6 +21,7 @@ issues = "https://github.com/ornlneutronimaging/bm3dornl/issues"
 
 [project.optional-dependencies]
 gui = ["bm3dornl-gui==0.8.2"]
+progress = ["tqdm"]
 
 [build-system]
 requires = ["maturin>=1.0,<2.0"]
