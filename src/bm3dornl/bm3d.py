@@ -246,7 +246,8 @@ def bm3d_ring_artifact_removal(
     if mode == "streak" and patch_size > 0:
         sigma_psd = np.zeros((patch_size, patch_size), dtype=np.float32)
         y_coords = np.arange(patch_size)
-        psd_profile = np.exp(-0.5 * (y_coords / psd_width) ** 2)
+        freq_dist = np.minimum(y_coords, patch_size - y_coords)
+        psd_profile = np.exp(-0.5 * (freq_dist / psd_width) ** 2)
         for x in range(patch_size):
             sigma_psd[:, x] = psd_profile
         sigma_psd = sigma_psd.astype(np.float32)

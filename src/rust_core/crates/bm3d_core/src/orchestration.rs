@@ -256,16 +256,19 @@ fn compute_sigma_map<F: Bm3dFloat>(
 
 /// Construct anisotropic PSD for streak mode.
 ///
-/// Creates a 2D array with Gaussian profile along Y-axis (rows),
-/// replicated across X-axis (columns). This models vertical streak noise.
+/// Creates a 2D array with FFT-symmetric Gaussian profile along Y-axis (rows),
+/// replicated across X-axis (columns). Uses circular frequency distance
+/// `min(y, N-y)` so that conjugate FFT bins share the same PSD value,
+/// preserving Hermitian symmetry. This models vertical streak noise.
 fn construct_psd<F: Bm3dFloat>(patch_size: usize, psd_width: F) -> Array2<F> {
     let mut sigma_psd = Array2::zeros((patch_size, patch_size));
 
     // Gaussian profile along Y-axis
     let neg_half = F::from_f64_c(-0.5);
     for y in 0..patch_size {
-        let y_f = F::usize_as(y);
-        let normalized = y_f / psd_width;
+        let freq_dist = y.min(patch_size - y);
+        let freq_dist_f = F::usize_as(freq_dist);
+        let normalized = freq_dist_f / psd_width;
         let value = (neg_half * normalized * normalized).exp();
 
         // Replicate across X-axis
@@ -701,9 +704,22 @@ mod tests {
         let psd = construct_psd::<f32>(8, 0.6);
         assert!(approx_eq(psd[[0, 0]], 1.0, 1e-6));
 
-        // Values should decrease as y increases
-        for y in 1..8 {
-            assert!(psd[[y, 0]] < psd[[y - 1, 0]], "PSD should decrease with y");
+        // Values should decrease from DC (y=0) to Nyquist (y=4),
+        // then increase symmetrically back toward DC
+        let nyquist = 4; // patch_size / 2
+        for y in 1..=nyquist {
+            assert!(
+                psd[[y, 0]] < psd[[y - 1, 0]],
+                "PSD should decrease from DC to Nyquist at y={}",
+                y
+            );
+        }
+        for y in (nyquist + 1)..8 {
+            assert!(
+                psd[[y, 0]] > psd[[y - 1, 0]],
+                "PSD should increase from Nyquist back to DC at y={}",
+                y
+            );
         }
     }
 
@@ -712,6 +728,65 @@ mod tests {
         let psd = construct_psd::<f32>(8, 0.6);
         for &val in psd.iter() {
             assert!(val > 0.0, "PSD values should be positive");
+        }
+    }
+
+    #[test]
+    fn test_psd_fft_symmetry() {
+        // In FFT layout, psd[y] must equal psd[N-y] for all y
+        for &patch_size in &[4usize, 8, 16] {
+            let psd = construct_psd::<f32>(patch_size, 0.6);
+            for y in 1..patch_size {
+                let mirror = patch_size - y;
+                assert!(
+                    approx_eq(psd[[y, 0]], psd[[mirror, 0]], 1e-6),
+                    "PSD symmetry broken: psd[{},0]={} != psd[{},0]={} for patch_size={}",
+                    y,
+                    psd[[y, 0]],
+                    mirror,
+                    psd[[mirror, 0]],
+                    patch_size,
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_psd_symmetry_known_values() {
+        // For patch_size=8, psd_width=0.6:
+        // freq_dist for y=1 is min(1,7)=1, for y=7 is min(7,1)=1 → same value
+        let psd = construct_psd::<f32>(8, 0.6);
+        let expected_bin1 = (-0.5_f32 * (1.0_f32 / 0.6).powi(2)).exp();
+        assert!(
+            approx_eq(psd[[1, 0]], expected_bin1, 1e-6),
+            "Bin 1: expected {} got {}",
+            expected_bin1,
+            psd[[1, 0]]
+        );
+        assert!(
+            approx_eq(psd[[7, 0]], expected_bin1, 1e-6),
+            "Bin 7 should equal Bin 1: expected {} got {}",
+            expected_bin1,
+            psd[[7, 0]]
+        );
+    }
+
+    #[test]
+    fn test_psd_odd_patch_size_symmetry() {
+        for &patch_size in &[5usize, 7, 9] {
+            let psd = construct_psd::<f32>(patch_size, 0.6);
+            for y in 1..patch_size {
+                let mirror = patch_size - y;
+                assert!(
+                    approx_eq(psd[[y, 0]], psd[[mirror, 0]], 1e-6),
+                    "Odd patch_size={}: psd[{},0]={} != psd[{},0]={}",
+                    patch_size,
+                    y,
+                    psd[[y, 0]],
+                    mirror,
+                    psd[[mirror, 0]],
+                );
+            }
         }
     }
 
