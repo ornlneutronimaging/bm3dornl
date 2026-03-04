@@ -189,6 +189,11 @@ def bm3d_ring_artifact_removal(
     elif callable(progress):
         _progress_cb = progress
         _use_tqdm = False
+    elif progress is not False:
+        raise TypeError(
+            f"Unsupported value for 'progress': {progress!r}. "
+            "Expected True, False, or a callable."
+        )
     else:
         _use_tqdm = False
 
@@ -251,16 +256,16 @@ def bm3d_ring_artifact_removal(
 
     n_slices = sinogram.shape[0]
 
-    # Create tqdm bar for batch path
-    if _use_tqdm:
-        _progress_bar = tqdm(total=n_slices, desc="BM3D", unit="slice")
-
-    # Validate sigma_map if provided
+    # Validate sigma_map if provided (before creating progress bar)
     sigma_map_full = None
     if sigma_map is not None:
         sigma_map_full = np.ascontiguousarray(sigma_map, dtype=np.float32)
         if sigma_map_full.ndim != 3:
             raise ValueError("sigma_map must be 3D for stack input")
+
+    # Create tqdm bar for batch path (after validation so bar is not leaked on error)
+    if _use_tqdm:
+        _progress_bar = tqdm(total=n_slices, desc="BM3D", unit="slice")
 
     # Process in batches to control memory usage
     try:

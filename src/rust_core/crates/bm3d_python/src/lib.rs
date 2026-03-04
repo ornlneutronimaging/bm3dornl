@@ -19,6 +19,41 @@ use bm3d_core::{Bm3dFloat, Bm3dKernelConfig, Bm3dPlans};
 /// Boxed progress callback: `(current, total) -> Result<(), String>`.
 type ProgressFn = Box<dyn Fn(usize, usize) -> Result<(), String>>;
 
+/// Sentinel prefix for KeyboardInterrupt errors propagated from Python callbacks.
+const KEYBOARD_INTERRUPT_SENTINEL: &str = "KeyboardInterrupt:";
+
+/// Build a progress closure that bridges Python callbacks across the GIL boundary.
+///
+/// KeyboardInterrupt is tagged with a sentinel prefix so it can be re-raised
+/// as `PyKeyboardInterrupt` instead of being swallowed into a generic `PyValueError`.
+fn make_progress_fn(cb: PyObject) -> ProgressFn {
+    Box::new(move |current: usize, total: usize| -> Result<(), String> {
+        Python::with_gil(|py| {
+            cb.call(py, (current, total), None)
+                .map(|_| ())
+                .map_err(|e| {
+                    if e.is_instance_of::<pyo3::exceptions::PyKeyboardInterrupt>(py) {
+                        format!("{KEYBOARD_INTERRUPT_SENTINEL} {e}")
+                    } else {
+                        format!("Progress callback error: {e}")
+                    }
+                })
+        })
+    })
+}
+
+/// Convert a `Result<Array, String>` from Rust into a `PyResult`, preserving
+/// `KeyboardInterrupt` when the error originated from a progress callback.
+fn map_stack_error<T>(result: Result<T, String>) -> PyResult<T> {
+    result.map_err(|e| {
+        if e.starts_with(KEYBOARD_INTERRUPT_SENTINEL) {
+            pyo3::exceptions::PyKeyboardInterrupt::new_err(e)
+        } else {
+            pyo3::exceptions::PyValueError::new_err(e)
+        }
+    })
+}
+
 fn run_bm3d_step_compat<F: Bm3dFloat>(
     input_noisy: ArrayView2<F>,
     input_pilot: ArrayView2<F>,
@@ -178,34 +213,25 @@ pub fn bm3d_hard_thresholding_stack<'py>(
     let psd = sigma_psd.as_array().to_owned();
     let smap = sigma_map.as_array().to_owned();
     let plans = bm3d_core::pipeline::Bm3dPlans::new(patch_size, max_matches);
-    let output = py
-        .allow_threads(|| {
-            let progress_fn: Option<ProgressFn> = progress_callback.map(|cb| {
-                Box::new(move |current: usize, total: usize| -> Result<(), String> {
-                    Python::with_gil(|py| {
-                        cb.call(py, (current, total), None)
-                            .map(|_| ())
-                            .map_err(|e| format!("Progress callback error: {e}"))
-                    })
-                }) as ProgressFn
-            });
-            run_bm3d_step_stack_compat(
-                noisy.view(),
-                pilot.view(),
-                Bm3dMode::HardThreshold,
-                psd.view(),
-                smap.view(),
-                sigma_random,
-                threshold,
-                patch_size,
-                step_size,
-                search_window,
-                max_matches,
-                &plans,
-                progress_fn.as_deref(),
-            )
-        })
-        .map_err(pyo3::exceptions::PyValueError::new_err)?;
+    let output = py.allow_threads(|| {
+        let progress_fn: Option<ProgressFn> = progress_callback.map(make_progress_fn);
+        run_bm3d_step_stack_compat(
+            noisy.view(),
+            pilot.view(),
+            Bm3dMode::HardThreshold,
+            psd.view(),
+            smap.view(),
+            sigma_random,
+            threshold,
+            patch_size,
+            step_size,
+            search_window,
+            max_matches,
+            &plans,
+            progress_fn.as_deref(),
+        )
+    });
+    let output = map_stack_error(output)?;
     Ok(output.to_pyarray(py))
 }
 
@@ -230,34 +256,25 @@ pub fn bm3d_wiener_filtering_stack<'py>(
     let psd = sigma_psd.as_array().to_owned();
     let smap = sigma_map.as_array().to_owned();
     let plans = bm3d_core::pipeline::Bm3dPlans::new(patch_size, max_matches);
-    let output = py
-        .allow_threads(|| {
-            let progress_fn: Option<ProgressFn> = progress_callback.map(|cb| {
-                Box::new(move |current: usize, total: usize| -> Result<(), String> {
-                    Python::with_gil(|py| {
-                        cb.call(py, (current, total), None)
-                            .map(|_| ())
-                            .map_err(|e| format!("Progress callback error: {e}"))
-                    })
-                }) as ProgressFn
-            });
-            run_bm3d_step_stack_compat(
-                noisy.view(),
-                pilot.view(),
-                Bm3dMode::Wiener,
-                psd.view(),
-                smap.view(),
-                sigma_random,
-                0.0,
-                patch_size,
-                step_size,
-                search_window,
-                max_matches,
-                &plans,
-                progress_fn.as_deref(),
-            )
-        })
-        .map_err(pyo3::exceptions::PyValueError::new_err)?;
+    let output = py.allow_threads(|| {
+        let progress_fn: Option<ProgressFn> = progress_callback.map(make_progress_fn);
+        run_bm3d_step_stack_compat(
+            noisy.view(),
+            pilot.view(),
+            Bm3dMode::Wiener,
+            psd.view(),
+            smap.view(),
+            sigma_random,
+            0.0,
+            patch_size,
+            step_size,
+            search_window,
+            max_matches,
+            &plans,
+            progress_fn.as_deref(),
+        )
+    });
+    let output = map_stack_error(output)?;
     Ok(output.to_pyarray(py))
 }
 
@@ -389,34 +406,25 @@ pub fn bm3d_hard_thresholding_stack_f64<'py>(
     let psd = sigma_psd.as_array().to_owned();
     let smap = sigma_map.as_array().to_owned();
     let plans = bm3d_core::pipeline::Bm3dPlans::new(patch_size, max_matches);
-    let output = py
-        .allow_threads(|| {
-            let progress_fn: Option<ProgressFn> = progress_callback.map(|cb| {
-                Box::new(move |current: usize, total: usize| -> Result<(), String> {
-                    Python::with_gil(|py| {
-                        cb.call(py, (current, total), None)
-                            .map(|_| ())
-                            .map_err(|e| format!("Progress callback error: {e}"))
-                    })
-                }) as ProgressFn
-            });
-            run_bm3d_step_stack_compat(
-                noisy.view(),
-                pilot.view(),
-                Bm3dMode::HardThreshold,
-                psd.view(),
-                smap.view(),
-                sigma_random,
-                threshold,
-                patch_size,
-                step_size,
-                search_window,
-                max_matches,
-                &plans,
-                progress_fn.as_deref(),
-            )
-        })
-        .map_err(pyo3::exceptions::PyValueError::new_err)?;
+    let output = py.allow_threads(|| {
+        let progress_fn: Option<ProgressFn> = progress_callback.map(make_progress_fn);
+        run_bm3d_step_stack_compat(
+            noisy.view(),
+            pilot.view(),
+            Bm3dMode::HardThreshold,
+            psd.view(),
+            smap.view(),
+            sigma_random,
+            threshold,
+            patch_size,
+            step_size,
+            search_window,
+            max_matches,
+            &plans,
+            progress_fn.as_deref(),
+        )
+    });
+    let output = map_stack_error(output)?;
     Ok(output.to_pyarray(py))
 }
 
@@ -441,34 +449,25 @@ pub fn bm3d_wiener_filtering_stack_f64<'py>(
     let psd = sigma_psd.as_array().to_owned();
     let smap = sigma_map.as_array().to_owned();
     let plans = bm3d_core::pipeline::Bm3dPlans::new(patch_size, max_matches);
-    let output = py
-        .allow_threads(|| {
-            let progress_fn: Option<ProgressFn> = progress_callback.map(|cb| {
-                Box::new(move |current: usize, total: usize| -> Result<(), String> {
-                    Python::with_gil(|py| {
-                        cb.call(py, (current, total), None)
-                            .map(|_| ())
-                            .map_err(|e| format!("Progress callback error: {e}"))
-                    })
-                }) as ProgressFn
-            });
-            run_bm3d_step_stack_compat(
-                noisy.view(),
-                pilot.view(),
-                Bm3dMode::Wiener,
-                psd.view(),
-                smap.view(),
-                sigma_random,
-                0.0,
-                patch_size,
-                step_size,
-                search_window,
-                max_matches,
-                &plans,
-                progress_fn.as_deref(),
-            )
-        })
-        .map_err(pyo3::exceptions::PyValueError::new_err)?;
+    let output = py.allow_threads(|| {
+        let progress_fn: Option<ProgressFn> = progress_callback.map(make_progress_fn);
+        run_bm3d_step_stack_compat(
+            noisy.view(),
+            pilot.view(),
+            Bm3dMode::Wiener,
+            psd.view(),
+            smap.view(),
+            sigma_random,
+            0.0,
+            patch_size,
+            step_size,
+            search_window,
+            max_matches,
+            &plans,
+            progress_fn.as_deref(),
+        )
+    });
+    let output = map_stack_error(output)?;
     Ok(output.to_pyarray(py))
 }
 

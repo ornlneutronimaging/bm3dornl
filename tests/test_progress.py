@@ -61,10 +61,10 @@ class TestProgressTqdmMissing(unittest.TestCase):
 class TestProgress2DIgnored(unittest.TestCase):
     """2D input should silently ignore progress parameter."""
 
-    def test_2d_with_progress_true(self):
+    def test_2d_with_progress_callable(self):
         sinogram = _make_2d()
-        # progress=True on 2D should not crash (tqdm import may or may not be available)
-        # If tqdm is not available, it should still not raise because 2D skips progress
+        # progress callable on 2D should not crash
+        # 2D skips progress handling entirely, so this should work regardless
         result = bm3d_ring_artifact_removal(sinogram, progress=lambda c, t: None)
         self.assertEqual(result.shape, sinogram.shape)
 
@@ -80,6 +80,21 @@ class TestProgressTqdmAvailable(unittest.TestCase):
         stack = _make_stack()
         result = bm3d_ring_artifact_removal(stack, progress=True)
         self.assertEqual(result.shape, stack.shape)
+
+
+class TestProgressInvalidType(unittest.TestCase):
+    """Invalid progress values should raise TypeError for 3D input."""
+
+    def test_string_raises_type_error(self):
+        stack = _make_stack()
+        with self.assertRaises(TypeError) as ctx:
+            bm3d_ring_artifact_removal(stack, progress="yes")
+        self.assertIn("progress", str(ctx.exception))
+
+    def test_int_raises_type_error(self):
+        stack = _make_stack()
+        with self.assertRaises(TypeError):
+            bm3d_ring_artifact_removal(stack, progress=42)
 
 
 class TestProgressMultiscale(unittest.TestCase):
