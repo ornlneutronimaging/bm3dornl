@@ -194,6 +194,9 @@ impl<F: Bm3dFloat> Bm3dConfig<F> {
         if self.notch_width <= F::zero() {
             return Err("notch_width must be > 0".to_string());
         }
+        if self.psd_width <= F::zero() {
+            return Err("psd_width must be > 0".to_string());
+        }
         Ok(())
     }
 }
@@ -636,6 +639,21 @@ mod tests {
     fn test_config_validation_negative_sigma() {
         let config = Bm3dConfig {
             sigma_random: -0.1,
+            ..Bm3dConfig::default()
+        };
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_config_validation_invalid_psd_width() {
+        let config = Bm3dConfig {
+            psd_width: 0.0,
+            ..Bm3dConfig::default()
+        };
+        assert!(config.validate().is_err());
+
+        let config = Bm3dConfig {
+            psd_width: -0.1,
             ..Bm3dConfig::default()
         };
         assert!(config.validate().is_err());

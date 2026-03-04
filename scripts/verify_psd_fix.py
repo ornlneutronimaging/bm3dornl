@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 """Diagnostic script to verify the PSD symmetry fix for streak mode.
 
 Loads sinograms from sinogram_extract/, processes with streak mode,
@@ -13,21 +13,27 @@ import numpy as np
 try:
     from PIL import Image
 except ImportError:
-    import tifffile  # type: ignore[import-untyped]
+    try:
+        import tifffile  # type: ignore[import-untyped]
 
-    class _TiffReader:
-        @staticmethod
-        def open(path):
-            class _Img:
-                def __init__(self, arr):
-                    self._arr = arr
+        class _TiffReader:
+            @staticmethod
+            def open(path):
+                class _Img:
+                    def __init__(self, arr):
+                        self._arr = arr
 
-                def __array__(self):
-                    return self._arr
+                    def __array__(self):
+                        return self._arr
 
-            return _Img(tifffile.imread(str(path)))
+                return _Img(tifffile.imread(str(path)))
 
-    Image = _TiffReader  # type: ignore[misc,assignment]
+        Image = _TiffReader  # type: ignore[misc,assignment]
+    except ImportError as e:
+        raise ImportError(
+            "Neither Pillow (PIL) nor tifffile is installed. "
+            "Install one of them to run this script: pip install Pillow"
+        ) from e
 
 from bm3dornl.bm3d import bm3d_ring_artifact_removal
 
