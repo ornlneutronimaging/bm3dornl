@@ -2014,6 +2014,10 @@ pub fn run_bm3d_step<F: Bm3dFloat>(
 }
 
 /// Run BM3D step on a 3D stack of images.
+///
+/// An optional `progress_fn` callback is invoked after each slice with
+/// `(completed, total)` counts, enabling progress reporting from higher layers.
+/// If the callback returns `Err`, the loop aborts and the error is propagated.
 pub fn run_bm3d_step_stack<F: Bm3dFloat>(
     input_noisy: ArrayView3<F>,
     input_pilot: ArrayView3<F>,
@@ -2022,6 +2026,7 @@ pub fn run_bm3d_step_stack<F: Bm3dFloat>(
     sigma_map: ArrayView3<F>,
     config: &Bm3dKernelConfig<F>,
     plans: &Bm3dPlans<F>,
+    progress_fn: Option<&dyn Fn(usize, usize) -> Result<(), String>>,
 ) -> Result<Array3<F>, String> {
     let (n, rows, cols) = input_noisy.dim();
     if input_pilot.dim() != (n, rows, cols) {
@@ -2068,6 +2073,10 @@ pub fn run_bm3d_step_stack<F: Bm3dFloat>(
             &mut scratch_pool,
         );
         output.slice_mut(s![i, .., ..]).assign(&res);
+
+        if let Some(cb) = &progress_fn {
+            cb(i + 1, n)?;
+        }
     }
     Ok(output)
 }
@@ -2425,6 +2434,7 @@ mod tests {
             sigma_map,
             &config,
             plans,
+            None,
         )
     }
 

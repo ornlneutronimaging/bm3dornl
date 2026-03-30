@@ -16,6 +16,44 @@ use bm3d_core::{multiscale_bm3d_streak_removal, MultiscaleConfig};
 use bm3d_core::{run_bm3d_step, run_bm3d_step_stack, Bm3dMode};
 use bm3d_core::{Bm3dFloat, Bm3dKernelConfig, Bm3dPlans};
 
+/// Boxed progress callback: `(current, total) -> Result<(), String>`.
+type ProgressFn = Box<dyn Fn(usize, usize) -> Result<(), String>>;
+
+/// Sentinel prefix for KeyboardInterrupt errors propagated from Python callbacks.
+const KEYBOARD_INTERRUPT_SENTINEL: &str = "KeyboardInterrupt:";
+
+/// Build a progress closure that bridges Python callbacks across the GIL boundary.
+///
+/// KeyboardInterrupt is tagged with a sentinel prefix so it can be re-raised
+/// as `PyKeyboardInterrupt` instead of being swallowed into a generic `PyValueError`.
+fn make_progress_fn(cb: PyObject) -> ProgressFn {
+    Box::new(move |current: usize, total: usize| -> Result<(), String> {
+        Python::with_gil(|py| {
+            cb.call(py, (current, total), None)
+                .map(|_| ())
+                .map_err(|e| {
+                    if e.is_instance_of::<pyo3::exceptions::PyKeyboardInterrupt>(py) {
+                        format!("{KEYBOARD_INTERRUPT_SENTINEL} {e}")
+                    } else {
+                        format!("Progress callback error: {e}")
+                    }
+                })
+        })
+    })
+}
+
+/// Convert a `Result<Array, String>` from Rust into a `PyResult`, preserving
+/// `KeyboardInterrupt` when the error originated from a progress callback.
+fn map_stack_error<T>(result: Result<T, String>) -> PyResult<T> {
+    result.map_err(|e| {
+        if e.starts_with(KEYBOARD_INTERRUPT_SENTINEL) {
+            pyo3::exceptions::PyKeyboardInterrupt::new_err(e)
+        } else {
+            pyo3::exceptions::PyValueError::new_err(e)
+        }
+    })
+}
+
 fn run_bm3d_step_compat<F: Bm3dFloat>(
     input_noisy: ArrayView2<F>,
     input_pilot: ArrayView2<F>,
@@ -63,6 +101,7 @@ fn run_bm3d_step_stack_compat<F: Bm3dFloat>(
     search_window: usize,
     max_matches: usize,
     plans: &Bm3dPlans<F>,
+    progress_fn: Option<&dyn Fn(usize, usize) -> Result<(), String>>,
 ) -> Result<Array3<F>, String> {
     let config = Bm3dKernelConfig {
         sigma_random,
@@ -81,6 +120,7 @@ fn run_bm3d_step_stack_compat<F: Bm3dFloat>(
         sigma_map,
         &config,
         plans,
+        progress_fn,
     )
 }
 
@@ -153,6 +193,7 @@ pub fn bm3d_wiener_filtering<'py>(
 
 /// Hard thresholding step of BM3D for a 3D stack of images.
 #[pyfunction]
+#[pyo3(signature = (input_noisy, input_pilot, sigma_psd, sigma_map, sigma_random, threshold, patch_size, step_size, search_window, max_matches, progress_callback=None))]
 pub fn bm3d_hard_thresholding_stack<'py>(
     py: Python<'py>,
     input_noisy: PyReadonlyArray3<'py, f32>,
@@ -165,28 +206,38 @@ pub fn bm3d_hard_thresholding_stack<'py>(
     step_size: usize,
     search_window: usize,
     max_matches: usize,
+    progress_callback: Option<PyObject>,
 ) -> PyResult<Bound<'py, PyArray3<f32>>> {
+    let noisy = input_noisy.as_array().to_owned();
+    let pilot = input_pilot.as_array().to_owned();
+    let psd = sigma_psd.as_array().to_owned();
+    let smap = sigma_map.as_array().to_owned();
     let plans = bm3d_core::pipeline::Bm3dPlans::new(patch_size, max_matches);
-    let output = run_bm3d_step_stack_compat(
-        input_noisy.as_array(),
-        input_pilot.as_array(),
-        Bm3dMode::HardThreshold,
-        sigma_psd.as_array(),
-        sigma_map.as_array(),
-        sigma_random,
-        threshold,
-        patch_size,
-        step_size,
-        search_window,
-        max_matches,
-        &plans,
-    )
-    .map_err(pyo3::exceptions::PyValueError::new_err)?;
+    let output = py.allow_threads(|| {
+        let progress_fn: Option<ProgressFn> = progress_callback.map(make_progress_fn);
+        run_bm3d_step_stack_compat(
+            noisy.view(),
+            pilot.view(),
+            Bm3dMode::HardThreshold,
+            psd.view(),
+            smap.view(),
+            sigma_random,
+            threshold,
+            patch_size,
+            step_size,
+            search_window,
+            max_matches,
+            &plans,
+            progress_fn.as_deref(),
+        )
+    });
+    let output = map_stack_error(output)?;
     Ok(output.to_pyarray(py))
 }
 
 /// Wiener filtering step of BM3D for a 3D stack of images.
 #[pyfunction]
+#[pyo3(signature = (input_noisy, input_pilot, sigma_psd, sigma_map, sigma_random, patch_size, step_size, search_window, max_matches, progress_callback=None))]
 pub fn bm3d_wiener_filtering_stack<'py>(
     py: Python<'py>,
     input_noisy: PyReadonlyArray3<'py, f32>,
@@ -198,23 +249,32 @@ pub fn bm3d_wiener_filtering_stack<'py>(
     step_size: usize,
     search_window: usize,
     max_matches: usize,
+    progress_callback: Option<PyObject>,
 ) -> PyResult<Bound<'py, PyArray3<f32>>> {
+    let noisy = input_noisy.as_array().to_owned();
+    let pilot = input_pilot.as_array().to_owned();
+    let psd = sigma_psd.as_array().to_owned();
+    let smap = sigma_map.as_array().to_owned();
     let plans = bm3d_core::pipeline::Bm3dPlans::new(patch_size, max_matches);
-    let output = run_bm3d_step_stack_compat(
-        input_noisy.as_array(),
-        input_pilot.as_array(),
-        Bm3dMode::Wiener,
-        sigma_psd.as_array(),
-        sigma_map.as_array(),
-        sigma_random,
-        0.0,
-        patch_size,
-        step_size,
-        search_window,
-        max_matches,
-        &plans,
-    )
-    .map_err(pyo3::exceptions::PyValueError::new_err)?;
+    let output = py.allow_threads(|| {
+        let progress_fn: Option<ProgressFn> = progress_callback.map(make_progress_fn);
+        run_bm3d_step_stack_compat(
+            noisy.view(),
+            pilot.view(),
+            Bm3dMode::Wiener,
+            psd.view(),
+            smap.view(),
+            sigma_random,
+            0.0,
+            patch_size,
+            step_size,
+            search_window,
+            max_matches,
+            &plans,
+            progress_fn.as_deref(),
+        )
+    });
+    let output = map_stack_error(output)?;
     Ok(output.to_pyarray(py))
 }
 
@@ -326,6 +386,7 @@ pub fn bm3d_wiener_filtering_f64<'py>(
 
 /// Hard thresholding step of BM3D for a 3D stack of images (f64 precision).
 #[pyfunction]
+#[pyo3(signature = (input_noisy, input_pilot, sigma_psd, sigma_map, sigma_random, threshold, patch_size, step_size, search_window, max_matches, progress_callback=None))]
 pub fn bm3d_hard_thresholding_stack_f64<'py>(
     py: Python<'py>,
     input_noisy: PyReadonlyArray3<'py, f64>,
@@ -338,28 +399,38 @@ pub fn bm3d_hard_thresholding_stack_f64<'py>(
     step_size: usize,
     search_window: usize,
     max_matches: usize,
+    progress_callback: Option<PyObject>,
 ) -> PyResult<Bound<'py, PyArray3<f64>>> {
+    let noisy = input_noisy.as_array().to_owned();
+    let pilot = input_pilot.as_array().to_owned();
+    let psd = sigma_psd.as_array().to_owned();
+    let smap = sigma_map.as_array().to_owned();
     let plans = bm3d_core::pipeline::Bm3dPlans::new(patch_size, max_matches);
-    let output = run_bm3d_step_stack_compat(
-        input_noisy.as_array(),
-        input_pilot.as_array(),
-        Bm3dMode::HardThreshold,
-        sigma_psd.as_array(),
-        sigma_map.as_array(),
-        sigma_random,
-        threshold,
-        patch_size,
-        step_size,
-        search_window,
-        max_matches,
-        &plans,
-    )
-    .map_err(pyo3::exceptions::PyValueError::new_err)?;
+    let output = py.allow_threads(|| {
+        let progress_fn: Option<ProgressFn> = progress_callback.map(make_progress_fn);
+        run_bm3d_step_stack_compat(
+            noisy.view(),
+            pilot.view(),
+            Bm3dMode::HardThreshold,
+            psd.view(),
+            smap.view(),
+            sigma_random,
+            threshold,
+            patch_size,
+            step_size,
+            search_window,
+            max_matches,
+            &plans,
+            progress_fn.as_deref(),
+        )
+    });
+    let output = map_stack_error(output)?;
     Ok(output.to_pyarray(py))
 }
 
 /// Wiener filtering step of BM3D for a 3D stack of images (f64 precision).
 #[pyfunction]
+#[pyo3(signature = (input_noisy, input_pilot, sigma_psd, sigma_map, sigma_random, patch_size, step_size, search_window, max_matches, progress_callback=None))]
 pub fn bm3d_wiener_filtering_stack_f64<'py>(
     py: Python<'py>,
     input_noisy: PyReadonlyArray3<'py, f64>,
@@ -371,23 +442,32 @@ pub fn bm3d_wiener_filtering_stack_f64<'py>(
     step_size: usize,
     search_window: usize,
     max_matches: usize,
+    progress_callback: Option<PyObject>,
 ) -> PyResult<Bound<'py, PyArray3<f64>>> {
+    let noisy = input_noisy.as_array().to_owned();
+    let pilot = input_pilot.as_array().to_owned();
+    let psd = sigma_psd.as_array().to_owned();
+    let smap = sigma_map.as_array().to_owned();
     let plans = bm3d_core::pipeline::Bm3dPlans::new(patch_size, max_matches);
-    let output = run_bm3d_step_stack_compat(
-        input_noisy.as_array(),
-        input_pilot.as_array(),
-        Bm3dMode::Wiener,
-        sigma_psd.as_array(),
-        sigma_map.as_array(),
-        sigma_random,
-        0.0,
-        patch_size,
-        step_size,
-        search_window,
-        max_matches,
-        &plans,
-    )
-    .map_err(pyo3::exceptions::PyValueError::new_err)?;
+    let output = py.allow_threads(|| {
+        let progress_fn: Option<ProgressFn> = progress_callback.map(make_progress_fn);
+        run_bm3d_step_stack_compat(
+            noisy.view(),
+            pilot.view(),
+            Bm3dMode::Wiener,
+            psd.view(),
+            smap.view(),
+            sigma_random,
+            0.0,
+            patch_size,
+            step_size,
+            search_window,
+            max_matches,
+            &plans,
+            progress_fn.as_deref(),
+        )
+    });
+    let output = map_stack_error(output)?;
     Ok(output.to_pyarray(py))
 }
 
