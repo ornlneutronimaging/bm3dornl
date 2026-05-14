@@ -297,29 +297,31 @@ unsafe fn compute_squared_distance_at_strided_8x8_f32_neon(
     cand_c: usize,
     threshold: f32,
 ) -> f32 {
-    let mut sum_sq = 0.0f32;
-    for dr in 0..8 {
-        let ref_base = (ref_r + dr) * image_cols + ref_c;
-        let cand_base = (cand_r + dr) * image_cols + cand_c;
-        let ref_ptr = image_data.as_ptr().add(ref_base);
-        let cand_ptr = image_data.as_ptr().add(cand_base);
+    unsafe {
+        let mut sum_sq = 0.0f32;
+        for dr in 0..8 {
+            let ref_base = (ref_r + dr) * image_cols + ref_c;
+            let cand_base = (cand_r + dr) * image_cols + cand_c;
+            let ref_ptr = image_data.as_ptr().add(ref_base);
+            let cand_ptr = image_data.as_ptr().add(cand_base);
 
-        let ref_lo = vld1q_f32(ref_ptr);
-        let cand_lo = vld1q_f32(cand_ptr);
-        let diff_lo = vsubq_f32(ref_lo, cand_lo);
-        let sq_lo = vmulq_f32(diff_lo, diff_lo);
+            let ref_lo = vld1q_f32(ref_ptr);
+            let cand_lo = vld1q_f32(cand_ptr);
+            let diff_lo = vsubq_f32(ref_lo, cand_lo);
+            let sq_lo = vmulq_f32(diff_lo, diff_lo);
 
-        let ref_hi = vld1q_f32(ref_ptr.add(4));
-        let cand_hi = vld1q_f32(cand_ptr.add(4));
-        let diff_hi = vsubq_f32(ref_hi, cand_hi);
-        let sq_hi = vmulq_f32(diff_hi, diff_hi);
+            let ref_hi = vld1q_f32(ref_ptr.add(4));
+            let cand_hi = vld1q_f32(cand_ptr.add(4));
+            let diff_hi = vsubq_f32(ref_hi, cand_hi);
+            let sq_hi = vmulq_f32(diff_hi, diff_hi);
 
-        sum_sq += vaddvq_f32(sq_lo) + vaddvq_f32(sq_hi);
-        if sum_sq >= threshold {
-            return sum_sq;
+            sum_sq += vaddvq_f32(sq_lo) + vaddvq_f32(sq_hi);
+            if sum_sq >= threshold {
+                return sum_sq;
+            }
         }
+        sum_sq
     }
-    sum_sq
 }
 
 #[inline(always)]

@@ -1,11 +1,11 @@
 //! BM3D Pipeline - Core denoising kernel and multi-image processing.
 
-use ndarray::{s, Array2, Array3, ArrayView2, ArrayView3, Axis};
+use ndarray::{Array2, Array3, ArrayView2, ArrayView3, Axis, s};
 use rayon::prelude::*;
-use rustfft::num_complex::Complex;
 use rustfft::Fft;
-use std::sync::atomic::{AtomicU8, Ordering};
+use rustfft::num_complex::Complex;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::time::Instant;
 
 use crate::block_matching::{self, PatchMatch};
@@ -1118,23 +1118,25 @@ unsafe fn aggregate_patch_row8_neon(
     local_c0: usize,
     weight: f32,
 ) {
-    use std::arch::aarch64::*;
-    let wv = vdupq_n_f32(weight);
-    for pr in 0..8 {
-        let src_base = pr * 8;
-        let dst_base = (local_r0 + pr) * tile_w + local_c0;
-        for offset in [0usize, 4usize] {
-            let src = src_base + offset;
-            let dst = dst_base + offset;
-            let s = vld1q_f32(spatial_vals.as_ptr().add(src));
-            let b = vld1q_f32(blend_vals.as_ptr().add(src));
-            let wr = vmulq_f32(b, wv);
-            let num = vld1q_f32(num_data.as_ptr().add(dst));
-            let den = vld1q_f32(den_data.as_ptr().add(dst));
-            let num_new = vaddq_f32(num, vmulq_f32(s, wr));
-            let den_new = vaddq_f32(den, wr);
-            vst1q_f32(num_data.as_mut_ptr().add(dst), num_new);
-            vst1q_f32(den_data.as_mut_ptr().add(dst), den_new);
+    unsafe {
+        use std::arch::aarch64::*;
+        let wv = vdupq_n_f32(weight);
+        for pr in 0..8 {
+            let src_base = pr * 8;
+            let dst_base = (local_r0 + pr) * tile_w + local_c0;
+            for offset in [0usize, 4usize] {
+                let src = src_base + offset;
+                let dst = dst_base + offset;
+                let s = vld1q_f32(spatial_vals.as_ptr().add(src));
+                let b = vld1q_f32(blend_vals.as_ptr().add(src));
+                let wr = vmulq_f32(b, wv);
+                let num = vld1q_f32(num_data.as_ptr().add(dst));
+                let den = vld1q_f32(den_data.as_ptr().add(dst));
+                let num_new = vaddq_f32(num, vmulq_f32(s, wr));
+                let den_new = vaddq_f32(den, wr);
+                vst1q_f32(num_data.as_mut_ptr().add(dst), num_new);
+                vst1q_f32(den_data.as_mut_ptr().add(dst), den_new);
+            }
         }
     }
 }
@@ -1890,7 +1892,7 @@ fn run_bm3d_kernel_with_scratch<F: Bm3dFloat>(
                 (tile_accumulators, stats)
             })
             .reduce_with(|(mut a_tiles, a_stats), (b_tiles, b_stats)| {
-                for (a_slot, b_slot) in a_tiles.iter_mut().zip(b_tiles.into_iter()) {
+                for (a_slot, b_slot) in a_tiles.iter_mut().zip(b_tiles) {
                     if let Some((b_num, b_den)) = b_slot {
                         if let Some((a_num, a_den)) = a_slot.as_mut() {
                             *a_num += &b_num;

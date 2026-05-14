@@ -1,5 +1,5 @@
 use ndarray::{Array2, ArrayView2, ArrayViewMut2};
-use rustfft::{num_complex::Complex, Fft};
+use rustfft::{Fft, num_complex::Complex};
 use std::sync::Arc;
 
 use crate::float_trait::Bm3dFloat;

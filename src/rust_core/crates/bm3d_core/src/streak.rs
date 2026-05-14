@@ -632,11 +632,7 @@ mod tests {
         let input = Array2::from_shape_fn(
             (16, 16),
             |(r, c)| {
-                if r == 8 && c == 8 {
-                    1.0f32
-                } else {
-                    0.0
-                }
+                if r == 8 && c == 8 { 1.0f32 } else { 0.0 }
             },
         );
 

@@ -258,7 +258,7 @@ pub fn save_volume(data: &Array3<f32>, request: &SaveRequest) -> Result<(), Stri
 fn save_as_tiff(data: &Array3<f32>, path: &PathBuf) -> Result<(), String> {
     use std::fs::File;
     use std::io::BufWriter;
-    use tiff::encoder::{colortype::Gray32Float, TiffEncoder};
+    use tiff::encoder::{TiffEncoder, colortype::Gray32Float};
 
     let file = File::create(path).map_err(|e| format!("Failed to create file: {}", e))?;
     let writer = BufWriter::new(file);

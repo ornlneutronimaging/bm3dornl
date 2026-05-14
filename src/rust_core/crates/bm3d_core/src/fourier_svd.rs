@@ -21,8 +21,8 @@ use crate::float_trait::Bm3dFloat;
 use crate::transforms;
 use crate::utils::{compute_1d_median_filter, estimate_robust_sigma};
 use ndarray::{Array1, Array2, ArrayView2};
-use rustfft::num_complex::Complex;
 use rustfft::FftPlanner;
+use rustfft::num_complex::Complex;
 
 /// Power Iteration to find the First Principal Component (K=1).
 /// Returns (u, s, v_t) for the largest singular value.
@@ -212,8 +212,8 @@ pub fn fourier_svd_removal<F: Bm3dFloat>(
 
     // 2. Filter v (Horizontal Profile)
     let v_slice = v.as_slice().unwrap(); // Assuming standard layout, safe for owned arrays usually.
-                                         // If strided, map to vec.
-                                         // v is owned Array1, so it is contiguous.
+    // If strided, map to vec.
+    // v is owned Array1, so it is contiguous.
     let v_smooth_vec = compute_1d_median_filter(v_slice, 51);
     let v_smooth = Array1::from(v_smooth_vec);
     let v_detail = &v - &v_smooth;

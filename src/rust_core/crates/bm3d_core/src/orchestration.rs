@@ -17,7 +17,7 @@ use std::time::Instant;
 
 use crate::float_trait::Bm3dFloat;
 use crate::noise_estimation::estimate_noise_sigma;
-use crate::pipeline::{run_bm3d_step, Bm3dKernelConfig, Bm3dMode};
+use crate::pipeline::{Bm3dKernelConfig, Bm3dMode, run_bm3d_step};
 use crate::streak::{estimate_streak_profile_impl, gaussian_blur_1d};
 
 // =============================================================================
