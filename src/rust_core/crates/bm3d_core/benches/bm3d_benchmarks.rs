@@ -5,7 +5,7 @@
 //!
 //! This benchmark imports from bm3d_core - no code duplication.
 
-use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
+use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
 use ndarray::Array2;
 use rand::prelude::*;
 use rustfft::FftPlanner;
@@ -13,8 +13,8 @@ use rustfft::FftPlanner;
 // Import from bm3d_core - the whole point of this restructure!
 use bm3d_core::block_matching::{compute_integral_images, find_similar_patches};
 use bm3d_core::{
-    estimate_streak_profile_impl, fft2d, ifft2d, run_bm3d_kernel, wht2d_8x8_forward,
-    wht2d_8x8_inverse, Bm3dKernelConfig, Bm3dMode, Bm3dPlans,
+    Bm3dKernelConfig, Bm3dMode, Bm3dPlans, estimate_streak_profile_impl, fft2d, ifft2d,
+    run_bm3d_kernel, wht2d_8x8_forward, wht2d_8x8_inverse,
 };
 
 // =============================================================================
@@ -23,12 +23,12 @@ use bm3d_core::{
 
 fn random_matrix_f32(rows: usize, cols: usize, seed: u64) -> Array2<f32> {
     let mut rng = StdRng::seed_from_u64(seed);
-    Array2::from_shape_fn((rows, cols), |_| rng.gen())
+    Array2::from_shape_fn((rows, cols), |_| rng.r#gen())
 }
 
 fn random_matrix_f64(rows: usize, cols: usize, seed: u64) -> Array2<f64> {
     let mut rng = StdRng::seed_from_u64(seed);
-    Array2::from_shape_fn((rows, cols), |_| rng.gen())
+    Array2::from_shape_fn((rows, cols), |_| rng.r#gen())
 }
 
 fn run_bm3d_kernel_compat<F: bm3d_core::Bm3dFloat>(

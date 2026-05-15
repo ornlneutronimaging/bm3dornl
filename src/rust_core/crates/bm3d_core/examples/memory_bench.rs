@@ -1,4 +1,4 @@
-use bm3d_core::{bm3d_ring_artifact_removal, Bm3dConfig, RingRemovalMode};
+use bm3d_core::{Bm3dConfig, RingRemovalMode, bm3d_ring_artifact_removal};
 use ndarray::Array2;
 use std::time::Instant;
 

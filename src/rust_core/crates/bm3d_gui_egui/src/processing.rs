@@ -1,13 +1,13 @@
 use bm3d_core::orchestration::bm3d_ring_artifact_removal_with_plans;
 use bm3d_core::{
-    bm3d_ring_artifact_removal, estimate_noise_sigma, fourier_svd::fourier_svd_removal,
-    multiscale_bm3d_streak_removal, multiscale_bm3d_streak_removal_with_plans, Bm3dConfig,
-    Bm3dPlans, MultiscaleConfig, RingRemovalMode,
+    Bm3dConfig, Bm3dPlans, MultiscaleConfig, RingRemovalMode, bm3d_ring_artifact_removal,
+    estimate_noise_sigma, fourier_svd::fourier_svd_removal, multiscale_bm3d_streak_removal,
+    multiscale_bm3d_streak_removal_with_plans,
 };
 use ndarray::{Array2, Array3, Axis};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{Receiver, Sender, channel};
 use std::thread::{self, JoinHandle};
 
 const REUSE_VOLUME_SIGMA_ENV: &str = "BM3D_REUSE_VOLUME_SIGMA";

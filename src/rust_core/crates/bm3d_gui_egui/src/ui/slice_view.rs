@@ -97,12 +97,12 @@ impl RoiState {
 
     /// Finish drawing and create the ROI if valid.
     pub fn finish_draw(&mut self) {
-        if self.drawing {
-            if let (Some((x1, y1)), Some((x2, y2))) = (self.draw_start, self.draw_end) {
-                let roi = ImageRoi::from_corners(x1, y1, x2, y2);
-                if roi.is_valid() {
-                    self.roi = Some(roi);
-                }
+        if self.drawing
+            && let (Some((x1, y1)), Some((x2, y2))) = (self.draw_start, self.draw_end)
+        {
+            let roi = ImageRoi::from_corners(x1, y1, x2, y2);
+            if roi.is_valid() {
+                self.roi = Some(roi);
             }
         }
         self.drawing = false;
@@ -112,10 +112,10 @@ impl RoiState {
 
     /// Get the current drawing rectangle (for preview), if any.
     pub fn drawing_rect(&self) -> Option<ImageRoi> {
-        if self.drawing {
-            if let (Some((x1, y1)), Some((x2, y2))) = (self.draw_start, self.draw_end) {
-                return Some(ImageRoi::from_corners(x1, y1, x2, y2));
-            }
+        if self.drawing
+            && let (Some((x1, y1)), Some((x2, y2))) = (self.draw_start, self.draw_end)
+        {
+            return Some(ImageRoi::from_corners(x1, y1, x2, y2));
         }
         None
     }
@@ -148,26 +148,26 @@ impl RoiState {
         img_width: usize,
         img_height: usize,
     ) {
-        if self.moving {
-            if let (Some(roi), Some((off_x, off_y))) = (&self.roi, self.move_offset) {
-                let width = roi.width();
-                let height = roi.height();
+        if self.moving
+            && let (Some(roi), Some((off_x, off_y))) = (&self.roi, self.move_offset)
+        {
+            let width = roi.width();
+            let height = roi.height();
 
-                // Calculate new top-left position
-                let new_min_x = (cursor_x as i32 - off_x).max(0) as usize;
-                let new_min_y = (cursor_y as i32 - off_y).max(0) as usize;
+            // Calculate new top-left position
+            let new_min_x = (cursor_x as i32 - off_x).max(0) as usize;
+            let new_min_y = (cursor_y as i32 - off_y).max(0) as usize;
 
-                // Clamp to image bounds
-                let new_min_x = new_min_x.min(img_width.saturating_sub(width));
-                let new_min_y = new_min_y.min(img_height.saturating_sub(height));
+            // Clamp to image bounds
+            let new_min_x = new_min_x.min(img_width.saturating_sub(width));
+            let new_min_y = new_min_y.min(img_height.saturating_sub(height));
 
-                self.roi = Some(ImageRoi {
-                    min_x: new_min_x,
-                    min_y: new_min_y,
-                    max_x: new_min_x + width - 1,
-                    max_y: new_min_y + height - 1,
-                });
-            }
+            self.roi = Some(ImageRoi {
+                min_x: new_min_x,
+                min_y: new_min_y,
+                max_x: new_min_x + width - 1,
+                max_y: new_min_y + height - 1,
+            });
         }
     }
 

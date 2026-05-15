@@ -11,10 +11,10 @@ use ndarray::{Array2, Array3, ArrayView2, ArrayView3};
 use numpy::{PyArray1, PyArray2, PyArray3, PyReadonlyArray2, PyReadonlyArray3, ToPyArray};
 use pyo3::prelude::*;
 
-use bm3d_core::{bm3d_ring_artifact_removal, Bm3dConfig, RingRemovalMode};
-use bm3d_core::{multiscale_bm3d_streak_removal, MultiscaleConfig};
-use bm3d_core::{run_bm3d_step, run_bm3d_step_stack, Bm3dMode};
+use bm3d_core::{Bm3dConfig, RingRemovalMode, bm3d_ring_artifact_removal};
 use bm3d_core::{Bm3dFloat, Bm3dKernelConfig, Bm3dPlans};
+use bm3d_core::{Bm3dMode, run_bm3d_step, run_bm3d_step_stack};
+use bm3d_core::{MultiscaleConfig, multiscale_bm3d_streak_removal};
 
 /// Boxed progress callback: `(current, total) -> Result<(), String>`.
 type ProgressFn = Box<dyn Fn(usize, usize) -> Result<(), String>>;
@@ -602,7 +602,7 @@ pub fn bm3d_ring_artifact_removal_2d<'py>(
             return Err(pyo3::exceptions::PyValueError::new_err(format!(
                 "Invalid mode '{}'. Expected 'generic', 'streak', 'multiscale_streak', or 'fourier_svd'.",
                 mode
-            )))
+            )));
         }
     };
 
@@ -705,7 +705,7 @@ pub fn bm3d_ring_artifact_removal_2d_f64<'py>(
             return Err(pyo3::exceptions::PyValueError::new_err(format!(
                 "Invalid mode '{}'. Expected 'generic', 'streak', 'multiscale_streak', or 'fourier_svd'.",
                 mode
-            )))
+            )));
         }
     };
 
