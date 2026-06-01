@@ -216,10 +216,10 @@ unsafe fn compute_squared_distance_at_strided_8x8_f32_sse2(
     cand_c: usize,
     threshold: f32,
 ) -> f32 {
-    // SAFETY: The required SIMD feature (SSE2) is runtime-checked by
+    // SAFETY: SSE2 is guaranteed baseline on x86_64 and runtime-checked on x86 by
     // `compute_squared_distance_at_strided_8x8_f32_dispatch` before this function is
-    // called, and callers only pass block positions whose strided 8x8 window lies
-    // fully within `image_data`, so every pointer `add`/load stays in bounds.
+    // called. Callers only pass block positions whose full strided 8x8 window (both
+    // `ref` and `cand`) lies within `image_data`, so every pointer `add`/load is in bounds.
     unsafe {
         let mut sum_sq = 0.0f32;
         for dr in 0..8 {

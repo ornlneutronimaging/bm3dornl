@@ -1054,10 +1054,11 @@ unsafe fn aggregate_patch_row8_avx2(
     local_c0: usize,
     weight: f32,
 ) {
-    // SAFETY: The required SIMD feature (AVX2) is runtime-checked by
-    // `try_aggregate_patch_row8_simd_f32` before this function is called, which also
-    // verifies `local_c0 + 8 <= tile_w`; the buffers are contiguous and sized for the
-    // tile, so every pointer `add`/load/store stays in bounds.
+    // SAFETY: AVX2 is runtime-checked by `try_aggregate_patch_row8_simd_f32` before this
+    // function is called, which also verifies the column bound `local_c0 + 8 <= tile_w`.
+    // Its caller only aggregates patches whose full 8x8 window (rows `local_r0..+8`, cols
+    // `local_c0..+8`) lies within the contiguous, tile-sized `num_data`/`den_data`
+    // buffers, so every pointer `add`/load/store stays in bounds.
     unsafe {
         use std::arch::x86_64::*;
         let wv = _mm256_set1_ps(weight);
@@ -1089,10 +1090,11 @@ unsafe fn aggregate_patch_row8_sse2(
     local_c0: usize,
     weight: f32,
 ) {
-    // SAFETY: The required SIMD feature (SSE2) is runtime-checked by
-    // `try_aggregate_patch_row8_simd_f32` before this function is called, which also
-    // verifies `local_c0 + 8 <= tile_w`; the buffers are contiguous and sized for the
-    // tile, so every pointer `add`/load/store stays in bounds.
+    // SAFETY: SSE2 is runtime-checked by `try_aggregate_patch_row8_simd_f32` before this
+    // function is called, which also verifies the column bound `local_c0 + 8 <= tile_w`.
+    // Its caller only aggregates patches whose full 8x8 window (rows `local_r0..+8`, cols
+    // `local_c0..+8`) lies within the contiguous, tile-sized `num_data`/`den_data`
+    // buffers, so every pointer `add`/load/store stays in bounds.
     unsafe {
         use std::arch::x86_64::*;
         let wv = _mm_set1_ps(weight);
@@ -1127,9 +1129,11 @@ unsafe fn aggregate_patch_row8_neon(
     local_c0: usize,
     weight: f32,
 ) {
-    // SAFETY: NEON is baseline on aarch64; `try_aggregate_patch_row8_simd_f32` verifies
-    // `local_c0 + 8 <= tile_w` before calling, and the buffers are contiguous and sized
-    // for the tile, so every pointer `add`/load/store stays in bounds.
+    // SAFETY: NEON is baseline on aarch64; `try_aggregate_patch_row8_simd_f32` verifies the
+    // column bound `local_c0 + 8 <= tile_w` before calling. Its caller only aggregates
+    // patches whose full 8x8 window (rows `local_r0..+8`, cols `local_c0..+8`) lies within
+    // the contiguous, tile-sized `num_data`/`den_data` buffers, so every `add`/load/store
+    // stays in bounds.
     unsafe {
         use std::arch::aarch64::*;
         let wv = vdupq_n_f32(weight);
