@@ -216,41 +216,47 @@ unsafe fn compute_squared_distance_at_strided_8x8_f32_sse2(
     cand_c: usize,
     threshold: f32,
 ) -> f32 {
-    let mut sum_sq = 0.0f32;
-    for dr in 0..8 {
-        let ref_base = (ref_r + dr) * image_cols + ref_c;
-        let cand_base = (cand_r + dr) * image_cols + cand_c;
-        let ref_ptr = image_data.as_ptr().add(ref_base);
-        let cand_ptr = image_data.as_ptr().add(cand_base);
+    // SAFETY: SSE2 is guaranteed baseline on x86_64 and runtime-checked on x86 by
+    // `compute_squared_distance_at_strided_8x8_f32_dispatch` before this function is
+    // called. Callers only pass block positions whose full strided 8x8 window (both
+    // `ref` and `cand`) lies within `image_data`, so every pointer `add`/load is in bounds.
+    unsafe {
+        let mut sum_sq = 0.0f32;
+        for dr in 0..8 {
+            let ref_base = (ref_r + dr) * image_cols + ref_c;
+            let cand_base = (cand_r + dr) * image_cols + cand_c;
+            let ref_ptr = image_data.as_ptr().add(ref_base);
+            let cand_ptr = image_data.as_ptr().add(cand_base);
 
-        let ref_lo = _mm_loadu_ps(ref_ptr);
-        let cand_lo = _mm_loadu_ps(cand_ptr);
-        let diff_lo = _mm_sub_ps(ref_lo, cand_lo);
-        let sq_lo = _mm_mul_ps(diff_lo, diff_lo);
+            let ref_lo = _mm_loadu_ps(ref_ptr);
+            let cand_lo = _mm_loadu_ps(cand_ptr);
+            let diff_lo = _mm_sub_ps(ref_lo, cand_lo);
+            let sq_lo = _mm_mul_ps(diff_lo, diff_lo);
 
-        let ref_hi = _mm_loadu_ps(ref_ptr.add(4));
-        let cand_hi = _mm_loadu_ps(cand_ptr.add(4));
-        let diff_hi = _mm_sub_ps(ref_hi, cand_hi);
-        let sq_hi = _mm_mul_ps(diff_hi, diff_hi);
+            let ref_hi = _mm_loadu_ps(ref_ptr.add(4));
+            let cand_hi = _mm_loadu_ps(cand_ptr.add(4));
+            let diff_hi = _mm_sub_ps(ref_hi, cand_hi);
+            let sq_hi = _mm_mul_ps(diff_hi, diff_hi);
 
-        let mut lanes_lo = [0.0f32; 4];
-        let mut lanes_hi = [0.0f32; 4];
-        _mm_storeu_ps(lanes_lo.as_mut_ptr(), sq_lo);
-        _mm_storeu_ps(lanes_hi.as_mut_ptr(), sq_hi);
+            let mut lanes_lo = [0.0f32; 4];
+            let mut lanes_hi = [0.0f32; 4];
+            _mm_storeu_ps(lanes_lo.as_mut_ptr(), sq_lo);
+            _mm_storeu_ps(lanes_hi.as_mut_ptr(), sq_hi);
 
-        sum_sq += lanes_lo[0]
-            + lanes_lo[1]
-            + lanes_lo[2]
-            + lanes_lo[3]
-            + lanes_hi[0]
-            + lanes_hi[1]
-            + lanes_hi[2]
-            + lanes_hi[3];
-        if sum_sq >= threshold {
-            return sum_sq;
+            sum_sq += lanes_lo[0]
+                + lanes_lo[1]
+                + lanes_lo[2]
+                + lanes_lo[3]
+                + lanes_hi[0]
+                + lanes_hi[1]
+                + lanes_hi[2]
+                + lanes_hi[3];
+            if sum_sq >= threshold {
+                return sum_sq;
+            }
         }
+        sum_sq
     }
-    sum_sq
 }
 
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
@@ -264,27 +270,39 @@ unsafe fn compute_squared_distance_at_strided_8x8_f32_avx2(
     cand_c: usize,
     threshold: f32,
 ) -> f32 {
-    let mut sum_sq = 0.0f32;
-    for dr in 0..8 {
-        let ref_base = (ref_r + dr) * image_cols + ref_c;
-        let cand_base = (cand_r + dr) * image_cols + cand_c;
-        let ref_ptr = image_data.as_ptr().add(ref_base);
-        let cand_ptr = image_data.as_ptr().add(cand_base);
+    // SAFETY: The required SIMD feature (AVX2) is runtime-checked by
+    // `compute_squared_distance_at_strided_8x8_f32_dispatch` before this function is
+    // called, and callers only pass block positions whose strided 8x8 window lies
+    // fully within `image_data`, so every pointer `add`/load stays in bounds.
+    unsafe {
+        let mut sum_sq = 0.0f32;
+        for dr in 0..8 {
+            let ref_base = (ref_r + dr) * image_cols + ref_c;
+            let cand_base = (cand_r + dr) * image_cols + cand_c;
+            let ref_ptr = image_data.as_ptr().add(ref_base);
+            let cand_ptr = image_data.as_ptr().add(cand_base);
 
-        let ref_vec = _mm256_loadu_ps(ref_ptr);
-        let cand_vec = _mm256_loadu_ps(cand_ptr);
-        let diff = _mm256_sub_ps(ref_vec, cand_vec);
-        let sq = _mm256_mul_ps(diff, diff);
+            let ref_vec = _mm256_loadu_ps(ref_ptr);
+            let cand_vec = _mm256_loadu_ps(cand_ptr);
+            let diff = _mm256_sub_ps(ref_vec, cand_vec);
+            let sq = _mm256_mul_ps(diff, diff);
 
-        let mut lanes = [0.0f32; 8];
-        _mm256_storeu_ps(lanes.as_mut_ptr(), sq);
-        sum_sq +=
-            lanes[0] + lanes[1] + lanes[2] + lanes[3] + lanes[4] + lanes[5] + lanes[6] + lanes[7];
-        if sum_sq >= threshold {
-            return sum_sq;
+            let mut lanes = [0.0f32; 8];
+            _mm256_storeu_ps(lanes.as_mut_ptr(), sq);
+            sum_sq += lanes[0]
+                + lanes[1]
+                + lanes[2]
+                + lanes[3]
+                + lanes[4]
+                + lanes[5]
+                + lanes[6]
+                + lanes[7];
+            if sum_sq >= threshold {
+                return sum_sq;
+            }
         }
+        sum_sq
     }
-    sum_sq
 }
 
 #[cfg(target_arch = "aarch64")]

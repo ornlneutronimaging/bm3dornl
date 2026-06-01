@@ -1043,7 +1043,6 @@ fn get_or_insert_tile<F: Bm3dFloat>(
 }
 
 #[cfg(target_arch = "x86_64")]
-#[allow(unsafe_op_in_unsafe_fn)]
 #[target_feature(enable = "avx2")]
 unsafe fn aggregate_patch_row8_avx2(
     num_data: &mut [f32],
@@ -1055,25 +1054,31 @@ unsafe fn aggregate_patch_row8_avx2(
     local_c0: usize,
     weight: f32,
 ) {
-    use std::arch::x86_64::*;
-    let wv = _mm256_set1_ps(weight);
-    for pr in 0..8 {
-        let src_base = pr * 8;
-        let dst_base = (local_r0 + pr) * tile_w + local_c0;
-        let s = _mm256_loadu_ps(spatial_vals.as_ptr().add(src_base));
-        let b = _mm256_loadu_ps(blend_vals.as_ptr().add(src_base));
-        let wr = _mm256_mul_ps(b, wv);
-        let num = _mm256_loadu_ps(num_data.as_ptr().add(dst_base));
-        let den = _mm256_loadu_ps(den_data.as_ptr().add(dst_base));
-        let num_new = _mm256_add_ps(num, _mm256_mul_ps(s, wr));
-        let den_new = _mm256_add_ps(den, wr);
-        _mm256_storeu_ps(num_data.as_mut_ptr().add(dst_base), num_new);
-        _mm256_storeu_ps(den_data.as_mut_ptr().add(dst_base), den_new);
+    // SAFETY: AVX2 is runtime-checked by `try_aggregate_patch_row8_simd_f32` before this
+    // function is called, which also verifies the column bound `local_c0 + 8 <= tile_w`.
+    // Its caller only aggregates patches whose full 8x8 window (rows `local_r0..+8`, cols
+    // `local_c0..+8`) lies within the contiguous, tile-sized `num_data`/`den_data`
+    // buffers, so every pointer `add`/load/store stays in bounds.
+    unsafe {
+        use std::arch::x86_64::*;
+        let wv = _mm256_set1_ps(weight);
+        for pr in 0..8 {
+            let src_base = pr * 8;
+            let dst_base = (local_r0 + pr) * tile_w + local_c0;
+            let s = _mm256_loadu_ps(spatial_vals.as_ptr().add(src_base));
+            let b = _mm256_loadu_ps(blend_vals.as_ptr().add(src_base));
+            let wr = _mm256_mul_ps(b, wv);
+            let num = _mm256_loadu_ps(num_data.as_ptr().add(dst_base));
+            let den = _mm256_loadu_ps(den_data.as_ptr().add(dst_base));
+            let num_new = _mm256_add_ps(num, _mm256_mul_ps(s, wr));
+            let den_new = _mm256_add_ps(den, wr);
+            _mm256_storeu_ps(num_data.as_mut_ptr().add(dst_base), num_new);
+            _mm256_storeu_ps(den_data.as_mut_ptr().add(dst_base), den_new);
+        }
     }
 }
 
 #[cfg(target_arch = "x86_64")]
-#[allow(unsafe_op_in_unsafe_fn)]
 #[target_feature(enable = "sse2")]
 unsafe fn aggregate_patch_row8_sse2(
     num_data: &mut [f32],
@@ -1085,29 +1090,35 @@ unsafe fn aggregate_patch_row8_sse2(
     local_c0: usize,
     weight: f32,
 ) {
-    use std::arch::x86_64::*;
-    let wv = _mm_set1_ps(weight);
-    for pr in 0..8 {
-        let src_base = pr * 8;
-        let dst_base = (local_r0 + pr) * tile_w + local_c0;
-        for offset in [0usize, 4usize] {
-            let src = src_base + offset;
-            let dst = dst_base + offset;
-            let s = _mm_loadu_ps(spatial_vals.as_ptr().add(src));
-            let b = _mm_loadu_ps(blend_vals.as_ptr().add(src));
-            let wr = _mm_mul_ps(b, wv);
-            let num = _mm_loadu_ps(num_data.as_ptr().add(dst));
-            let den = _mm_loadu_ps(den_data.as_ptr().add(dst));
-            let num_new = _mm_add_ps(num, _mm_mul_ps(s, wr));
-            let den_new = _mm_add_ps(den, wr);
-            _mm_storeu_ps(num_data.as_mut_ptr().add(dst), num_new);
-            _mm_storeu_ps(den_data.as_mut_ptr().add(dst), den_new);
+    // SAFETY: SSE2 is runtime-checked by `try_aggregate_patch_row8_simd_f32` before this
+    // function is called, which also verifies the column bound `local_c0 + 8 <= tile_w`.
+    // Its caller only aggregates patches whose full 8x8 window (rows `local_r0..+8`, cols
+    // `local_c0..+8`) lies within the contiguous, tile-sized `num_data`/`den_data`
+    // buffers, so every pointer `add`/load/store stays in bounds.
+    unsafe {
+        use std::arch::x86_64::*;
+        let wv = _mm_set1_ps(weight);
+        for pr in 0..8 {
+            let src_base = pr * 8;
+            let dst_base = (local_r0 + pr) * tile_w + local_c0;
+            for offset in [0usize, 4usize] {
+                let src = src_base + offset;
+                let dst = dst_base + offset;
+                let s = _mm_loadu_ps(spatial_vals.as_ptr().add(src));
+                let b = _mm_loadu_ps(blend_vals.as_ptr().add(src));
+                let wr = _mm_mul_ps(b, wv);
+                let num = _mm_loadu_ps(num_data.as_ptr().add(dst));
+                let den = _mm_loadu_ps(den_data.as_ptr().add(dst));
+                let num_new = _mm_add_ps(num, _mm_mul_ps(s, wr));
+                let den_new = _mm_add_ps(den, wr);
+                _mm_storeu_ps(num_data.as_mut_ptr().add(dst), num_new);
+                _mm_storeu_ps(den_data.as_mut_ptr().add(dst), den_new);
+            }
         }
     }
 }
 
 #[cfg(target_arch = "aarch64")]
-#[allow(unsafe_op_in_unsafe_fn)]
 unsafe fn aggregate_patch_row8_neon(
     num_data: &mut [f32],
     den_data: &mut [f32],
@@ -1118,6 +1129,11 @@ unsafe fn aggregate_patch_row8_neon(
     local_c0: usize,
     weight: f32,
 ) {
+    // SAFETY: NEON is baseline on aarch64; `try_aggregate_patch_row8_simd_f32` verifies the
+    // column bound `local_c0 + 8 <= tile_w` before calling. Its caller only aggregates
+    // patches whose full 8x8 window (rows `local_r0..+8`, cols `local_c0..+8`) lies within
+    // the contiguous, tile-sized `num_data`/`den_data` buffers, so every `add`/load/store
+    // stays in bounds.
     unsafe {
         use std::arch::aarch64::*;
         let wv = vdupq_n_f32(weight);

@@ -3,7 +3,7 @@ name: Test
 on:
   workflow_dispatch:
   pull_request:
-    branches: [main]
+    branches: [main, next, qa]
   push:
     branches: [main, next, qa]
 
@@ -32,8 +32,15 @@ jobs:
           cargo test -p bm3d_core --release
 
   rust-lint:
-    name: Rust Lint
-    runs-on: ubuntu-latest
+    name: Rust Lint (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # Lint on both x86_64 and aarch64 so the arch-gated SIMD paths are all
+        # covered: SSE2/AVX2 compile only on x86, NEON only on aarch64. A single-arch
+        # gate let the edition-2024 unsafe_op_in_unsafe_fn break hide on x86. See #109.
+        os: [ubuntu-latest, ubuntu-24.04-arm]
     steps:
       - uses: actions/checkout@v6
 
@@ -51,9 +58,10 @@ jobs:
         working-directory: src/rust_core
         run: cargo fmt --all -- --check
 
-      - name: Run clippy (bm3d_core only)
+      - name: Run clippy (entire workspace)
         working-directory: src/rust_core
-        run: cargo clippy -p bm3d_core -- -D warnings
+        # Lint every crate (bm3d_core, bm3d_python, bm3d_gui_egui), not just bm3d_core.
+        run: cargo clippy --workspace --all-targets -- -D warnings
 
   python-test:
     name: Python Tests
