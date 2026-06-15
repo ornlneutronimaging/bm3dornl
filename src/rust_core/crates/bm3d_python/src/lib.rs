@@ -26,9 +26,9 @@ const KEYBOARD_INTERRUPT_SENTINEL: &str = "KeyboardInterrupt:";
 ///
 /// KeyboardInterrupt is tagged with a sentinel prefix so it can be re-raised
 /// as `PyKeyboardInterrupt` instead of being swallowed into a generic `PyValueError`.
-fn make_progress_fn(cb: PyObject) -> ProgressFn {
+fn make_progress_fn(cb: Py<PyAny>) -> ProgressFn {
     Box::new(move |current: usize, total: usize| -> Result<(), String> {
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             cb.call(py, (current, total), None)
                 .map(|_| ())
                 .map_err(|e| {
@@ -206,14 +206,14 @@ pub fn bm3d_hard_thresholding_stack<'py>(
     step_size: usize,
     search_window: usize,
     max_matches: usize,
-    progress_callback: Option<PyObject>,
+    progress_callback: Option<Py<PyAny>>,
 ) -> PyResult<Bound<'py, PyArray3<f32>>> {
     let noisy = input_noisy.as_array().to_owned();
     let pilot = input_pilot.as_array().to_owned();
     let psd = sigma_psd.as_array().to_owned();
     let smap = sigma_map.as_array().to_owned();
     let plans = bm3d_core::pipeline::Bm3dPlans::new(patch_size, max_matches);
-    let output = py.allow_threads(|| {
+    let output = py.detach(|| {
         let progress_fn: Option<ProgressFn> = progress_callback.map(make_progress_fn);
         run_bm3d_step_stack_compat(
             noisy.view(),
@@ -249,14 +249,14 @@ pub fn bm3d_wiener_filtering_stack<'py>(
     step_size: usize,
     search_window: usize,
     max_matches: usize,
-    progress_callback: Option<PyObject>,
+    progress_callback: Option<Py<PyAny>>,
 ) -> PyResult<Bound<'py, PyArray3<f32>>> {
     let noisy = input_noisy.as_array().to_owned();
     let pilot = input_pilot.as_array().to_owned();
     let psd = sigma_psd.as_array().to_owned();
     let smap = sigma_map.as_array().to_owned();
     let plans = bm3d_core::pipeline::Bm3dPlans::new(patch_size, max_matches);
-    let output = py.allow_threads(|| {
+    let output = py.detach(|| {
         let progress_fn: Option<ProgressFn> = progress_callback.map(make_progress_fn);
         run_bm3d_step_stack_compat(
             noisy.view(),
@@ -399,14 +399,14 @@ pub fn bm3d_hard_thresholding_stack_f64<'py>(
     step_size: usize,
     search_window: usize,
     max_matches: usize,
-    progress_callback: Option<PyObject>,
+    progress_callback: Option<Py<PyAny>>,
 ) -> PyResult<Bound<'py, PyArray3<f64>>> {
     let noisy = input_noisy.as_array().to_owned();
     let pilot = input_pilot.as_array().to_owned();
     let psd = sigma_psd.as_array().to_owned();
     let smap = sigma_map.as_array().to_owned();
     let plans = bm3d_core::pipeline::Bm3dPlans::new(patch_size, max_matches);
-    let output = py.allow_threads(|| {
+    let output = py.detach(|| {
         let progress_fn: Option<ProgressFn> = progress_callback.map(make_progress_fn);
         run_bm3d_step_stack_compat(
             noisy.view(),
@@ -442,14 +442,14 @@ pub fn bm3d_wiener_filtering_stack_f64<'py>(
     step_size: usize,
     search_window: usize,
     max_matches: usize,
-    progress_callback: Option<PyObject>,
+    progress_callback: Option<Py<PyAny>>,
 ) -> PyResult<Bound<'py, PyArray3<f64>>> {
     let noisy = input_noisy.as_array().to_owned();
     let pilot = input_pilot.as_array().to_owned();
     let psd = sigma_psd.as_array().to_owned();
     let smap = sigma_map.as_array().to_owned();
     let plans = bm3d_core::pipeline::Bm3dPlans::new(patch_size, max_matches);
-    let output = py.allow_threads(|| {
+    let output = py.detach(|| {
         let progress_fn: Option<ProgressFn> = progress_callback.map(make_progress_fn);
         run_bm3d_step_stack_compat(
             noisy.view(),
