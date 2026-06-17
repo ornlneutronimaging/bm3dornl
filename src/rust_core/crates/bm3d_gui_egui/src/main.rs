@@ -320,15 +320,35 @@ impl App {
     fn handle_save_request(&mut self, request: &ui::SaveRequest) {
         use ui::save_dialog::SaveState;
 
+        enum SaveData<'a> {
+            Borrowed(&'a ndarray::Array3<f32>),
+            Owned(ndarray::Array3<f32>),
+        }
+
+        impl<'a> SaveData<'a> {
+            fn as_array(&self) -> &ndarray::Array3<f32> {
+                match self {
+                    SaveData::Borrowed(data) => data,
+                    SaveData::Owned(data) => data,
+                }
+            }
+        }
+
         let data = match request.data_type {
-            SaveDataType::Original => self.volume.as_ref().map(|v| v.raw_data().to_owned()),
+            SaveDataType::Original => self
+                .volume
+                .as_ref()
+                .map(|v| SaveData::Borrowed(v.raw_data())),
             SaveDataType::Processed => self
                 .processed_volume
                 .as_ref()
-                .map(|v| v.raw_data().to_owned()),
+                .map(|v| SaveData::Borrowed(v.raw_data())),
             SaveDataType::Difference => {
                 if let (Some(orig), Some(proc)) = (&self.volume, &self.processed_volume) {
-                    Some(compute_difference(orig.raw_data(), proc.raw_data()))
+                    Some(SaveData::Owned(compute_difference(
+                        orig.raw_data(),
+                        proc.raw_data(),
+                    )))
                 } else {
                     None
                 }
@@ -341,7 +361,7 @@ impl App {
                 message: "Saving...".to_string(),
             };
 
-            match save_volume(&data, request) {
+            match save_volume(data.as_array(), request) {
                 Ok(()) => {
                     self.save_dialog.state = SaveState::Completed {
                         path: request.path.clone(),

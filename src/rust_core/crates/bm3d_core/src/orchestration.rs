@@ -24,8 +24,8 @@ use crate::streak::{estimate_streak_profile_impl, gaussian_blur_1d};
 // Constants
 // =============================================================================
 
-/// Default random noise standard deviation (0.0 = auto-estimate)
-const DEFAULT_SIGMA_RANDOM: f64 = 0.0;
+/// Default random noise standard deviation.
+const DEFAULT_SIGMA_RANDOM: f64 = 0.1;
 
 /// Default patch size for block matching
 const DEFAULT_PATCH_SIZE: usize = 8;
@@ -88,10 +88,10 @@ pub enum RingRemovalMode {
     Generic,
     /// Streak pre-subtraction + anisotropic PSD.
     /// Designed for ring artifact removal in sinograms.
+    #[default]
     Streak,
     /// Multi-scale BM3D with streak pre-subtraction.
     /// Handles wide streaks via pyramid processing.
-    #[default]
     MultiscaleStreak,
     /// Fourier-SVD algorithm.
     /// Uses FFT-guided energy detection with rank-1 SVD for streak removal.
@@ -597,7 +597,8 @@ mod tests {
     fn test_default_config_matches_spec() {
         let config: Bm3dConfig<f32> = Bm3dConfig::default();
 
-        assert!(approx_eq(config.sigma_random, 0.0, 1e-6));
+        assert_eq!(RingRemovalMode::default(), RingRemovalMode::Streak);
+        assert!(approx_eq(config.sigma_random, 0.1, 1e-6));
         assert_eq!(config.patch_size, 8);
         assert_eq!(config.step_size, 4);
         assert_eq!(config.search_window, 24);

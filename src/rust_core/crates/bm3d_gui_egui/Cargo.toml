@@ -9,7 +9,6 @@ repository = "https://github.com/ornlneutronimaging/bm3dornl"
 [[bin]]
 name = "bm3dornl-gui"
 path = "src/main.rs"
-test = false  # GUI binary requires HDF5 runtime; tested manually
 
 # macOS app bundle configuration for cargo-bundle
 # Note: version is inherited from [package].version (which uses workspace inheritance)
