@@ -7,7 +7,6 @@ from . import bm3d_rust
 from .bm3d_rust import estimate_streak_profile_rust
 
 DEFAULT_SINGLE_SCALE_THRESHOLD = 2.7
-DEFAULT_MULTISCALE_THRESHOLD = 3.5
 
 
 def estimate_streak_profile(sinogram, sigma_smooth=3.0, iterations=3):

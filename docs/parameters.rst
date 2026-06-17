@@ -115,8 +115,9 @@ Advanced Parameters
      - Default
      - Description
    * - ``threshold``
-     - ``2.7``
-     - Hard thresholding coefficient for the first BM3D stage.
+     - ``None``
+     - Hard thresholding coefficient. ``None`` uses the backend default:
+       ``2.7`` for single-scale BM3D and ``3.5`` for multi-scale BM3D.
    * - ``batch_size``
      - ``32``
      - Chunk size for 3D stack processing (controls memory usage).
