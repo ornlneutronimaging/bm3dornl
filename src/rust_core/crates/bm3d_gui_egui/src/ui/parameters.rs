@@ -41,7 +41,7 @@ impl Default for Bm3dParameters {
         Self {
             mode: RingRemovalMode::default(),
             sigma_random: bm3d_default.sigma_random,
-            auto_sigma: bm3d_default.sigma_random <= 1e-6,
+            auto_sigma: true,
             patch_size: bm3d_default.patch_size,
             search_window: bm3d_default.search_window,
             max_matches: bm3d_default.max_matches,
