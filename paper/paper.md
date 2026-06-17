@@ -100,11 +100,9 @@ The library provides a minimal Python API:
 ```python
 from bm3dornl import bm3d_ring_artifact_removal
 
-cleaned = bm3d_ring_artifact_removal(
-    sinogram,
-    mode="streak",
-    sigma=0.0, # default to automatic noise estimation
-)
+# "streak" mode is the default; sigma_random=0.0 enables
+# automatic noise estimation (default is 0.1)
+cleaned = bm3d_ring_artifact_removal(sinogram, sigma_random=0.0)
 ```
 
 **GUI application:** BM3DORNL includes a native GUI built with the egui framework for Rust, installable via `pip install bm3dornl[gui]` or Homebrew on macOS.
