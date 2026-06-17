@@ -173,3 +173,6 @@ research*/**
 # ignore prototypes (local only)
 prototyping*/**
 .DS_Store
+
+# Claude Code: commit CLAUDE.md / skills/ / settings.json; keep personal local settings out
+.claude/settings.local.json
