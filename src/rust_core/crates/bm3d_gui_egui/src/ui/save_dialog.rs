@@ -384,6 +384,14 @@ mod tests {
     use ndarray::Array3;
     use std::time::{SystemTime, UNIX_EPOCH};
 
+    struct TempFileCleanup(std::path::PathBuf);
+
+    impl Drop for TempFileCleanup {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+
     #[test]
     fn estimated_tiff_payload_bytes_uses_checked_arithmetic() {
         assert_eq!(estimated_tiff_payload_bytes((2, 3, 4)), Some(96));
@@ -423,10 +431,10 @@ mod tests {
             std::process::id(),
             unique_id
         ));
+        let _cleanup = TempFileCleanup(path.clone());
 
         save_as_bigtiff(&data, &path).unwrap();
         let loaded = load_tiff_stack(&path).unwrap();
-        let _ = std::fs::remove_file(&path);
 
         assert_eq!(loaded.raw_data().shape(), data.shape());
         assert_eq!(loaded.raw_data(), &data);
