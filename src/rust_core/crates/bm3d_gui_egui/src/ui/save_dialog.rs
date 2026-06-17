@@ -376,3 +376,59 @@ fn save_as_hdf5(data: &Array3<f32>, path: &PathBuf, dataset_path: &str) -> Resul
 pub fn compute_difference(original: &Array3<f32>, processed: &Array3<f32>) -> Array3<f32> {
     original - processed
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::data::load_tiff_stack;
+    use ndarray::Array3;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn estimated_tiff_payload_bytes_uses_checked_arithmetic() {
+        assert_eq!(estimated_tiff_payload_bytes((2, 3, 4)), Some(96));
+        assert_eq!(
+            estimated_tiff_payload_bytes((usize::MAX, usize::MAX, usize::MAX)),
+            None
+        );
+    }
+
+    #[test]
+    fn should_use_bigtiff_switches_at_classic_tiff_safety_limit() {
+        let safe_pixels =
+            (CLASSIC_TIFF_MAX_SAFE_BYTES / TIFF_GRAY32_FLOAT_BYTES_PER_PIXEL) as usize;
+        let too_many_pixels = safe_pixels + 1;
+
+        assert!(!should_use_bigtiff((1, 1, safe_pixels)));
+        assert!(should_use_bigtiff((1, 1, too_many_pixels)));
+        assert!(should_use_bigtiff((usize::MAX, usize::MAX, usize::MAX)));
+    }
+
+    #[test]
+    fn tiny_bigtiff_round_trips_through_stack_loader() {
+        let data = Array3::from_shape_vec(
+            (2, 2, 3),
+            vec![
+                1.0, 2.0, 3.0, 4.5, 5.5, 6.5, 7.0, 8.0, 9.0, 10.5, 11.5, 12.5,
+            ],
+        )
+        .unwrap();
+        let mut path = std::env::temp_dir();
+        let unique_id = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        path.push(format!(
+            "bm3dornl-bigtiff-test-{}-{}.tiff",
+            std::process::id(),
+            unique_id
+        ));
+
+        save_as_bigtiff(&data, &path).unwrap();
+        let loaded = load_tiff_stack(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+
+        assert_eq!(loaded.raw_data().shape(), data.shape());
+        assert_eq!(loaded.raw_data(), &data);
+    }
+}
