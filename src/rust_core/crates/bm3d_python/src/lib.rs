@@ -11,10 +11,10 @@ use ndarray::{Array2, Array3, ArrayView2, ArrayView3};
 use numpy::{PyArray1, PyArray2, PyArray3, PyReadonlyArray2, PyReadonlyArray3, ToPyArray};
 use pyo3::prelude::*;
 
-use bm3d_core::{bm3d_ring_artifact_removal, Bm3dConfig, RingRemovalMode};
-use bm3d_core::{multiscale_bm3d_streak_removal, MultiscaleConfig};
-use bm3d_core::{run_bm3d_step, run_bm3d_step_stack, Bm3dMode};
+use bm3d_core::{Bm3dConfig, RingRemovalMode, bm3d_ring_artifact_removal};
 use bm3d_core::{Bm3dFloat, Bm3dKernelConfig, Bm3dPlans};
+use bm3d_core::{Bm3dMode, run_bm3d_step, run_bm3d_step_stack};
+use bm3d_core::{MultiscaleConfig, multiscale_bm3d_streak_removal};
 
 /// Boxed progress callback: `(current, total) -> Result<(), String>`.
 type ProgressFn = Box<dyn Fn(usize, usize) -> Result<(), String>>;
@@ -26,9 +26,9 @@ const KEYBOARD_INTERRUPT_SENTINEL: &str = "KeyboardInterrupt:";
 ///
 /// KeyboardInterrupt is tagged with a sentinel prefix so it can be re-raised
 /// as `PyKeyboardInterrupt` instead of being swallowed into a generic `PyValueError`.
-fn make_progress_fn(cb: PyObject) -> ProgressFn {
+fn make_progress_fn(cb: Py<PyAny>) -> ProgressFn {
     Box::new(move |current: usize, total: usize| -> Result<(), String> {
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             cb.call(py, (current, total), None)
                 .map(|_| ())
                 .map_err(|e| {
@@ -206,14 +206,14 @@ pub fn bm3d_hard_thresholding_stack<'py>(
     step_size: usize,
     search_window: usize,
     max_matches: usize,
-    progress_callback: Option<PyObject>,
+    progress_callback: Option<Py<PyAny>>,
 ) -> PyResult<Bound<'py, PyArray3<f32>>> {
     let noisy = input_noisy.as_array().to_owned();
     let pilot = input_pilot.as_array().to_owned();
     let psd = sigma_psd.as_array().to_owned();
     let smap = sigma_map.as_array().to_owned();
     let plans = bm3d_core::pipeline::Bm3dPlans::new(patch_size, max_matches);
-    let output = py.allow_threads(|| {
+    let output = py.detach(|| {
         let progress_fn: Option<ProgressFn> = progress_callback.map(make_progress_fn);
         run_bm3d_step_stack_compat(
             noisy.view(),
@@ -249,14 +249,14 @@ pub fn bm3d_wiener_filtering_stack<'py>(
     step_size: usize,
     search_window: usize,
     max_matches: usize,
-    progress_callback: Option<PyObject>,
+    progress_callback: Option<Py<PyAny>>,
 ) -> PyResult<Bound<'py, PyArray3<f32>>> {
     let noisy = input_noisy.as_array().to_owned();
     let pilot = input_pilot.as_array().to_owned();
     let psd = sigma_psd.as_array().to_owned();
     let smap = sigma_map.as_array().to_owned();
     let plans = bm3d_core::pipeline::Bm3dPlans::new(patch_size, max_matches);
-    let output = py.allow_threads(|| {
+    let output = py.detach(|| {
         let progress_fn: Option<ProgressFn> = progress_callback.map(make_progress_fn);
         run_bm3d_step_stack_compat(
             noisy.view(),
@@ -399,14 +399,14 @@ pub fn bm3d_hard_thresholding_stack_f64<'py>(
     step_size: usize,
     search_window: usize,
     max_matches: usize,
-    progress_callback: Option<PyObject>,
+    progress_callback: Option<Py<PyAny>>,
 ) -> PyResult<Bound<'py, PyArray3<f64>>> {
     let noisy = input_noisy.as_array().to_owned();
     let pilot = input_pilot.as_array().to_owned();
     let psd = sigma_psd.as_array().to_owned();
     let smap = sigma_map.as_array().to_owned();
     let plans = bm3d_core::pipeline::Bm3dPlans::new(patch_size, max_matches);
-    let output = py.allow_threads(|| {
+    let output = py.detach(|| {
         let progress_fn: Option<ProgressFn> = progress_callback.map(make_progress_fn);
         run_bm3d_step_stack_compat(
             noisy.view(),
@@ -442,14 +442,14 @@ pub fn bm3d_wiener_filtering_stack_f64<'py>(
     step_size: usize,
     search_window: usize,
     max_matches: usize,
-    progress_callback: Option<PyObject>,
+    progress_callback: Option<Py<PyAny>>,
 ) -> PyResult<Bound<'py, PyArray3<f64>>> {
     let noisy = input_noisy.as_array().to_owned();
     let pilot = input_pilot.as_array().to_owned();
     let psd = sigma_psd.as_array().to_owned();
     let smap = sigma_map.as_array().to_owned();
     let plans = bm3d_core::pipeline::Bm3dPlans::new(patch_size, max_matches);
-    let output = py.allow_threads(|| {
+    let output = py.detach(|| {
         let progress_fn: Option<ProgressFn> = progress_callback.map(make_progress_fn);
         run_bm3d_step_stack_compat(
             noisy.view(),
@@ -602,7 +602,7 @@ pub fn bm3d_ring_artifact_removal_2d<'py>(
             return Err(pyo3::exceptions::PyValueError::new_err(format!(
                 "Invalid mode '{}'. Expected 'generic', 'streak', 'multiscale_streak', or 'fourier_svd'.",
                 mode
-            )))
+            )));
         }
     };
 
@@ -705,7 +705,7 @@ pub fn bm3d_ring_artifact_removal_2d_f64<'py>(
             return Err(pyo3::exceptions::PyValueError::new_err(format!(
                 "Invalid mode '{}'. Expected 'generic', 'streak', 'multiscale_streak', or 'fourier_svd'.",
                 mode
-            )))
+            )));
         }
     };
 

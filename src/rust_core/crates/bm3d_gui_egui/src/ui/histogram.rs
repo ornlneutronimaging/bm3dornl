@@ -347,15 +347,14 @@ impl SingleViewHistogram {
 
         // Update cached histogram if slice changed or ROI changed
         let roi_changed = self.cached_roi != roi.copied();
-        if let Some(data) = slice_data {
-            if self.cached_slice_index != Some(slice_index)
+        if let Some(data) = slice_data
+            && (self.cached_slice_index != Some(slice_index)
                 || roi_changed
-                || self.cached_histogram.is_none()
-            {
-                self.cached_histogram = Some(HistogramData::compute_with_roi(data, 256, roi));
-                self.cached_slice_index = Some(slice_index);
-                self.cached_roi = roi.copied();
-            }
+                || self.cached_histogram.is_none())
+        {
+            self.cached_histogram = Some(HistogramData::compute_with_roi(data, 256, roi));
+            self.cached_slice_index = Some(slice_index);
+            self.cached_roi = roi.copied();
         }
 
         if let Some(histogram) = &self.cached_histogram {
@@ -616,38 +615,38 @@ impl CompareViewHistogram {
         let original_color = colors::original_bar(ui, 150);
         let processed_color = colors::processed_bar(ui, 150);
 
-        if self.show_original {
-            if let Some(hist) = &self.cached_original {
-                let bars: Vec<Bar> = hist
-                    .counts
-                    .iter()
-                    .enumerate()
-                    .map(|(i, &count)| {
-                        let bin_width = (hist.max_val - hist.min_val) / hist.counts.len() as f32;
-                        let x = hist.min_val + (i as f32 + 0.5) * bin_width;
-                        Bar::new(x as f64, count as f64).width(bin_width as f64 * 0.8)
-                    })
-                    .collect();
+        if self.show_original
+            && let Some(hist) = &self.cached_original
+        {
+            let bars: Vec<Bar> = hist
+                .counts
+                .iter()
+                .enumerate()
+                .map(|(i, &count)| {
+                    let bin_width = (hist.max_val - hist.min_val) / hist.counts.len() as f32;
+                    let x = hist.min_val + (i as f32 + 0.5) * bin_width;
+                    Bar::new(x as f64, count as f64).width(bin_width as f64 * 0.8)
+                })
+                .collect();
 
-                charts.push(BarChart::new(bars).color(original_color).name("Original"));
-            }
+            charts.push(BarChart::new(bars).color(original_color).name("Original"));
         }
 
-        if self.show_processed {
-            if let Some(hist) = &self.cached_processed {
-                let bars: Vec<Bar> = hist
-                    .counts
-                    .iter()
-                    .enumerate()
-                    .map(|(i, &count)| {
-                        let bin_width = (hist.max_val - hist.min_val) / hist.counts.len() as f32;
-                        let x = hist.min_val + (i as f32 + 0.5) * bin_width;
-                        Bar::new(x as f64, count as f64).width(bin_width as f64 * 0.8)
-                    })
-                    .collect();
+        if self.show_processed
+            && let Some(hist) = &self.cached_processed
+        {
+            let bars: Vec<Bar> = hist
+                .counts
+                .iter()
+                .enumerate()
+                .map(|(i, &count)| {
+                    let bin_width = (hist.max_val - hist.min_val) / hist.counts.len() as f32;
+                    let x = hist.min_val + (i as f32 + 0.5) * bin_width;
+                    Bar::new(x as f64, count as f64).width(bin_width as f64 * 0.8)
+                })
+                .collect();
 
-                charts.push(BarChart::new(bars).color(processed_color).name("Processed"));
-            }
+            charts.push(BarChart::new(bars).color(processed_color).name("Processed"));
         }
 
         Plot::new("compare_main_histogram")
@@ -706,43 +705,43 @@ impl CompareViewHistogram {
         let diff_color = colors::difference(ui);
 
         ui.horizontal(|ui| {
-            if self.show_original {
-                if let Some(hist) = &self.cached_original {
-                    ui.label(
-                        egui::RichText::new(format!(
-                            "Orig: μ={:.3} σ={:.3}",
-                            hist.stats.mean, hist.stats.std
-                        ))
-                        .small()
-                        .color(original_color),
-                    );
-                }
+            if self.show_original
+                && let Some(hist) = &self.cached_original
+            {
+                ui.label(
+                    egui::RichText::new(format!(
+                        "Orig: μ={:.3} σ={:.3}",
+                        hist.stats.mean, hist.stats.std
+                    ))
+                    .small()
+                    .color(original_color),
+                );
             }
 
-            if self.show_processed {
-                if let Some(hist) = &self.cached_processed {
-                    ui.label(
-                        egui::RichText::new(format!(
-                            "Proc: μ={:.3} σ={:.3}",
-                            hist.stats.mean, hist.stats.std
-                        ))
-                        .small()
-                        .color(processed_color),
-                    );
-                }
+            if self.show_processed
+                && let Some(hist) = &self.cached_processed
+            {
+                ui.label(
+                    egui::RichText::new(format!(
+                        "Proc: μ={:.3} σ={:.3}",
+                        hist.stats.mean, hist.stats.std
+                    ))
+                    .small()
+                    .color(processed_color),
+                );
             }
 
-            if self.show_difference {
-                if let Some(hist) = &self.cached_difference {
-                    ui.label(
-                        egui::RichText::new(format!(
-                            "Diff: μ={:.3} σ={:.3}",
-                            hist.stats.mean, hist.stats.std
-                        ))
-                        .small()
-                        .color(diff_color),
-                    );
-                }
+            if self.show_difference
+                && let Some(hist) = &self.cached_difference
+            {
+                ui.label(
+                    egui::RichText::new(format!(
+                        "Diff: μ={:.3} σ={:.3}",
+                        hist.stats.mean, hist.stats.std
+                    ))
+                    .small()
+                    .color(diff_color),
+                );
             }
         });
     }

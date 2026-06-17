@@ -2,6 +2,10 @@ use eframe::egui;
 use ndarray::Array3;
 use std::path::PathBuf;
 
+const TIFF_GRAY32_FLOAT_BYTES_PER_PIXEL: u64 = std::mem::size_of::<f32>() as u64;
+const CLASSIC_TIFF_SAFETY_MARGIN_BYTES: u64 = 64 * 1024 * 1024;
+const CLASSIC_TIFF_MAX_SAFE_BYTES: u64 = u32::MAX as u64 - CLASSIC_TIFF_SAFETY_MARGIN_BYTES;
+
 /// What data to save
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SaveDataType {
@@ -179,7 +183,7 @@ impl SaveDialog {
                                 .selected_text(self.format.name())
                                 .show_ui(ui, |ui| {
                                     ui.selectable_value(&mut self.format, SaveFormat::Tiff, "TIFF Stack")
-                                        .on_hover_text("Multi-page TIFF with 32-bit float values");
+                                        .on_hover_text("Multi-page TIFF with 32-bit float values; large stacks are saved as BigTIFF automatically");
                                     ui.selectable_value(&mut self.format, SaveFormat::Hdf5, "HDF5")
                                         .on_hover_text("HDF5 file with single dataset");
                                 });
@@ -256,9 +260,35 @@ pub fn save_volume(data: &Array3<f32>, request: &SaveRequest) -> Result<(), Stri
 }
 
 fn save_as_tiff(data: &Array3<f32>, path: &PathBuf) -> Result<(), String> {
+    if should_use_bigtiff(data.dim()) {
+        save_as_bigtiff(data, path)
+    } else {
+        save_as_classic_tiff(data, path)
+    }
+}
+
+fn estimated_tiff_payload_bytes((num_slices, height, width): (usize, usize, usize)) -> Option<u64> {
+    let num_slices = u64::try_from(num_slices).ok()?;
+    let height = u64::try_from(height).ok()?;
+    let width = u64::try_from(width).ok()?;
+
+    num_slices
+        .checked_mul(height)?
+        .checked_mul(width)?
+        .checked_mul(TIFF_GRAY32_FLOAT_BYTES_PER_PIXEL)
+}
+
+fn should_use_bigtiff(dim: (usize, usize, usize)) -> bool {
+    match estimated_tiff_payload_bytes(dim) {
+        Some(bytes) => bytes > CLASSIC_TIFF_MAX_SAFE_BYTES,
+        None => true,
+    }
+}
+
+fn save_as_classic_tiff(data: &Array3<f32>, path: &PathBuf) -> Result<(), String> {
     use std::fs::File;
     use std::io::BufWriter;
-    use tiff::encoder::{colortype::Gray32Float, TiffEncoder};
+    use tiff::encoder::TiffEncoder;
 
     let file = File::create(path).map_err(|e| format!("Failed to create file: {}", e))?;
     let writer = BufWriter::new(file);
@@ -266,17 +296,47 @@ fn save_as_tiff(data: &Array3<f32>, path: &PathBuf) -> Result<(), String> {
     let mut encoder =
         TiffEncoder::new(writer).map_err(|e| format!("Failed to create TIFF encoder: {}", e))?;
 
+    write_tiff_pages(data, &mut encoder)
+}
+
+fn save_as_bigtiff(data: &Array3<f32>, path: &PathBuf) -> Result<(), String> {
+    use std::fs::File;
+    use std::io::BufWriter;
+    use tiff::encoder::TiffEncoder;
+
+    let file = File::create(path).map_err(|e| format!("Failed to create file: {}", e))?;
+    let writer = BufWriter::new(file);
+
+    let mut encoder = TiffEncoder::new_big(writer)
+        .map_err(|e| format!("Failed to create BigTIFF encoder: {}", e))?;
+
+    write_tiff_pages(data, &mut encoder)
+}
+
+fn write_tiff_pages<W, K>(
+    data: &Array3<f32>,
+    encoder: &mut tiff::encoder::TiffEncoder<W, K>,
+) -> Result<(), String>
+where
+    W: std::io::Write + std::io::Seek,
+    K: tiff::encoder::TiffKind,
+{
+    use std::borrow::Cow;
+    use tiff::encoder::colortype::Gray32Float;
+
     let (num_slices, height, width) = data.dim();
+    let width = u32::try_from(width).map_err(|_| "TIFF width exceeds u32 limit".to_string())?;
+    let height = u32::try_from(height).map_err(|_| "TIFF height exceeds u32 limit".to_string())?;
 
     for slice_idx in 0..num_slices {
-        let slice_data: Vec<f32> = data
-            .slice(ndarray::s![slice_idx, .., ..])
-            .iter()
-            .copied()
-            .collect();
+        let slice = data.slice(ndarray::s![slice_idx, .., ..]);
+        let slice_data: Cow<'_, [f32]> = match slice.as_slice_memory_order() {
+            Some(values) => Cow::Borrowed(values),
+            None => Cow::Owned(slice.iter().copied().collect()),
+        };
 
         encoder
-            .write_image::<Gray32Float>(width as u32, height as u32, &slice_data)
+            .write_image::<Gray32Float>(width, height, &slice_data)
             .map_err(|e| format!("Failed to write TIFF page {}: {}", slice_idx, e))?;
     }
 
@@ -315,4 +375,68 @@ fn save_as_hdf5(data: &Array3<f32>, path: &PathBuf, dataset_path: &str) -> Resul
 /// Compute difference array (Original - Processed)
 pub fn compute_difference(original: &Array3<f32>, processed: &Array3<f32>) -> Array3<f32> {
     original - processed
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::data::load_tiff_stack;
+    use ndarray::Array3;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    struct TempFileCleanup(std::path::PathBuf);
+
+    impl Drop for TempFileCleanup {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+
+    #[test]
+    fn estimated_tiff_payload_bytes_uses_checked_arithmetic() {
+        assert_eq!(estimated_tiff_payload_bytes((2, 3, 4)), Some(96));
+        assert_eq!(
+            estimated_tiff_payload_bytes((usize::MAX, usize::MAX, usize::MAX)),
+            None
+        );
+    }
+
+    #[test]
+    fn should_use_bigtiff_switches_at_classic_tiff_safety_limit() {
+        let safe_pixels =
+            (CLASSIC_TIFF_MAX_SAFE_BYTES / TIFF_GRAY32_FLOAT_BYTES_PER_PIXEL) as usize;
+        let too_many_pixels = safe_pixels + 1;
+
+        assert!(!should_use_bigtiff((1, 1, safe_pixels)));
+        assert!(should_use_bigtiff((1, 1, too_many_pixels)));
+        assert!(should_use_bigtiff((usize::MAX, usize::MAX, usize::MAX)));
+    }
+
+    #[test]
+    fn tiny_bigtiff_round_trips_through_stack_loader() {
+        let data = Array3::from_shape_vec(
+            (2, 2, 3),
+            vec![
+                1.0, 2.0, 3.0, 4.5, 5.5, 6.5, 7.0, 8.0, 9.0, 10.5, 11.5, 12.5,
+            ],
+        )
+        .unwrap();
+        let mut path = std::env::temp_dir();
+        let unique_id = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        path.push(format!(
+            "bm3dornl-bigtiff-test-{}-{}.tiff",
+            std::process::id(),
+            unique_id
+        ));
+        let _cleanup = TempFileCleanup(path.clone());
+
+        save_as_bigtiff(&data, &path).unwrap();
+        let loaded = load_tiff_stack(&path).unwrap();
+
+        assert_eq!(loaded.raw_data().shape(), data.shape());
+        assert_eq!(loaded.raw_data(), &data);
+    }
 }

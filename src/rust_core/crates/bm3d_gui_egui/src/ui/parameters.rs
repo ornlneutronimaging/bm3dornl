@@ -35,22 +35,21 @@ pub struct Bm3dParameters {
 
 impl Default for Bm3dParameters {
     fn default() -> Self {
-        // GUI defaults optimized for neutron sinogram data:
-        // - MultiscaleStreak as default mode for best quality
-        // - sigma_random: 0.005 (vs Rust default 0.1) - typical noise level for neutron imaging
-        // - max_matches: 32 (vs Rust default 16) - better quality for interactive use
+        let bm3d_default = Bm3dConfig::<f32>::default();
+        let multiscale_default = MultiscaleConfig::<f32>::default();
+
         Self {
-            mode: RingRemovalMode::MultiscaleStreak,
-            sigma_random: 0.005,
-            auto_sigma: true, // Default to auto
-            patch_size: 8,
-            search_window: 24,
-            max_matches: 32,
+            mode: RingRemovalMode::default(),
+            sigma_random: bm3d_default.sigma_random,
+            auto_sigma: true,
+            patch_size: bm3d_default.patch_size,
+            search_window: bm3d_default.search_window,
+            max_matches: bm3d_default.max_matches,
             use_hadamard_fast_mode: false,
             processing_axis: 1, // Default: Y axis (middle dimension)
-            fft_alpha: 1.0,
-            notch_width: 2.0,
-            num_scales: 0, // 0 = auto
+            fft_alpha: bm3d_default.fft_alpha,
+            notch_width: bm3d_default.notch_width,
+            num_scales: multiscale_default.num_scales.unwrap_or(0),
             show_advanced: false,
         }
     }
@@ -141,8 +140,8 @@ impl Bm3dParameters {
 
         ui.horizontal(|ui| {
             ui.label("Method:").on_hover_text(
-                "Multiscale Streak: Best quality for wide ring artifacts (default)\n\
-                 Streak: Single-scale BM3D for narrow streaks\n\
+                "Streak: Default single-scale BM3D for ring artifacts\n\
+                 Multiscale Streak: Best quality for wide ring artifacts\n\
                  Generic: Standard denoising for white noise\n\
                  Fourier-SVD: Fast FFT-guided SVD for subtle artifacts",
             );
@@ -458,9 +457,10 @@ impl Bm3dParameters {
                     .on_hover_text("Reset advanced parameters to their default values")
                     .clicked()
                 {
-                    self.patch_size = 8;
-                    self.search_window = 24;
-                    self.max_matches = 32;
+                    let bm3d_default = Bm3dConfig::<f32>::default();
+                    self.patch_size = bm3d_default.patch_size;
+                    self.search_window = bm3d_default.search_window;
+                    self.max_matches = bm3d_default.max_matches;
                     self.use_hadamard_fast_mode = false;
                     self.processing_axis = 1;
                     changed = true;

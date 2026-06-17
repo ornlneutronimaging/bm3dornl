@@ -8,14 +8,14 @@ mod data;
 mod processing;
 mod ui;
 
-use data::{build_hdf5_tree, load_hdf5_dataset, load_tiff_sequence, load_tiff_stack, Volume3D};
+use data::{Volume3D, build_hdf5_tree, load_hdf5_dataset, load_tiff_sequence, load_tiff_stack};
 use eframe::egui;
 use processing::{ProcessingManager, ProcessingState};
 use std::path::PathBuf;
 use ui::{
-    compute_difference, save_volume, AxisMappingWidget, Bm3dParameters, ColormapSelector,
-    CompareView, CompareViewHistogram, Hdf5TreeBrowser, SaveDataType, SaveDialog,
-    SingleViewHistogram, SliceViewer, WindowLevel,
+    AxisMappingWidget, Bm3dParameters, ColormapSelector, CompareView, CompareViewHistogram,
+    Hdf5TreeBrowser, SaveDataType, SaveDialog, SingleViewHistogram, SliceViewer, WindowLevel,
+    compute_difference, save_volume,
 };
 
 /// Load application icon from embedded PNG (256x256 for reasonable binary size)
@@ -273,18 +273,18 @@ impl App {
         };
 
         let vol = self.current_volume();
-        if let Some(vol) = vol {
-            if let Some(slice) = vol.get_slice(slice_index) {
-                let mut min = f32::INFINITY;
-                let mut max = f32::NEG_INFINITY;
-                for &val in slice.iter() {
-                    if val.is_finite() {
-                        min = min.min(val);
-                        max = max.max(val);
-                    }
+        if let Some(vol) = vol
+            && let Some(slice) = vol.get_slice(slice_index)
+        {
+            let mut min = f32::INFINITY;
+            let mut max = f32::NEG_INFINITY;
+            for &val in slice.iter() {
+                if val.is_finite() {
+                    min = min.min(val);
+                    max = max.max(val);
                 }
-                self.window_level.set_data_range(min, max);
             }
+            self.window_level.set_data_range(min, max);
         }
     }
 
@@ -320,15 +320,35 @@ impl App {
     fn handle_save_request(&mut self, request: &ui::SaveRequest) {
         use ui::save_dialog::SaveState;
 
+        enum SaveData<'a> {
+            Borrowed(&'a ndarray::Array3<f32>),
+            Owned(ndarray::Array3<f32>),
+        }
+
+        impl<'a> SaveData<'a> {
+            fn as_array(&self) -> &ndarray::Array3<f32> {
+                match self {
+                    SaveData::Borrowed(data) => data,
+                    SaveData::Owned(data) => data,
+                }
+            }
+        }
+
         let data = match request.data_type {
-            SaveDataType::Original => self.volume.as_ref().map(|v| v.raw_data().to_owned()),
+            SaveDataType::Original => self
+                .volume
+                .as_ref()
+                .map(|v| SaveData::Borrowed(v.raw_data())),
             SaveDataType::Processed => self
                 .processed_volume
                 .as_ref()
-                .map(|v| v.raw_data().to_owned()),
+                .map(|v| SaveData::Borrowed(v.raw_data())),
             SaveDataType::Difference => {
                 if let (Some(orig), Some(proc)) = (&self.volume, &self.processed_volume) {
-                    Some(compute_difference(orig.raw_data(), proc.raw_data()))
+                    Some(SaveData::Owned(compute_difference(
+                        orig.raw_data(),
+                        proc.raw_data(),
+                    )))
                 } else {
                     None
                 }
@@ -341,7 +361,7 @@ impl App {
                 message: "Saving...".to_string(),
             };
 
-            match save_volume(&data, request) {
+            match save_volume(data.as_array(), request) {
                 Ok(()) => {
                     self.save_dialog.state = SaveState::Completed {
                         path: request.path.clone(),
@@ -528,19 +548,19 @@ impl eframe::App for App {
         self.processing_manager.poll_progress();
 
         // Check if processing completed and store result
-        if matches!(self.processing_manager.state(), ProcessingState::Completed) {
-            if let Some(result) = self.processing_manager.take_processed_result() {
-                let processed_vol = Volume3D::new(result);
-                if let Some(original) = &self.volume {
-                    let mut processed = processed_vol;
-                    processed.set_axis_mapping(original.axis_mapping());
-                    self.processed_volume = Some(processed);
-                } else {
-                    self.processed_volume = Some(processed_vol);
-                }
-                self.view_mode = ViewMode::Processed;
-                self.update_window_level_for_slice();
+        if matches!(self.processing_manager.state(), ProcessingState::Completed)
+            && let Some(result) = self.processing_manager.take_processed_result()
+        {
+            let processed_vol = Volume3D::new(result);
+            if let Some(original) = &self.volume {
+                let mut processed = processed_vol;
+                processed.set_axis_mapping(original.axis_mapping());
+                self.processed_volume = Some(processed);
+            } else {
+                self.processed_volume = Some(processed_vol);
             }
+            self.view_mode = ViewMode::Processed;
+            self.update_window_level_for_slice();
         }
 
         // Request repaint while processing
@@ -636,32 +656,28 @@ impl eframe::App for App {
 
                     let mut dataset_to_load: Option<String> = None;
 
-                    if let Some(tree) = &mut self.hdf5_tree {
-                        if let Some(selection) = tree.show(ui) {
-                            if selection.shape.len() == 3 {
-                                dataset_to_load = Some(selection.dataset_path);
-                            } else {
-                                self.error_message = Some(format!(
-                                    "Dataset must be 3D, got {}D",
-                                    selection.shape.len()
-                                ));
-                            }
+                    if let Some(tree) = &mut self.hdf5_tree
+                        && let Some(selection) = tree.show(ui)
+                    {
+                        if selection.shape.len() == 3 {
+                            dataset_to_load = Some(selection.dataset_path);
+                        } else {
+                            self.error_message = Some(format!(
+                                "Dataset must be 3D, got {}D",
+                                selection.shape.len()
+                            ));
                         }
                     }
 
                     ui.add_space(10.0);
-                    if let Some(tree) = &self.hdf5_tree {
-                        if let Some(selected) = tree.selected_path() {
-                            if ui
-                                .button(format!("Load: {}", selected))
-                                .on_hover_text(
-                                    "Load the selected dataset for viewing and processing",
-                                )
-                                .clicked()
-                            {
-                                dataset_to_load = Some(selected.clone());
-                            }
-                        }
+                    if let Some(tree) = &self.hdf5_tree
+                        && let Some(selected) = tree.selected_path()
+                        && ui
+                            .button(format!("Load: {}", selected))
+                            .on_hover_text("Load the selected dataset for viewing and processing")
+                            .clicked()
+                    {
+                        dataset_to_load = Some(selected.clone());
                     }
 
                     if let Some(path) = dataset_to_load {

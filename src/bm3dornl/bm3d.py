@@ -6,6 +6,8 @@ from scipy.ndimage import gaussian_filter1d
 from . import bm3d_rust
 from .bm3d_rust import estimate_streak_profile_rust
 
+DEFAULT_SINGLE_SCALE_THRESHOLD = 2.7
+
 
 def estimate_streak_profile(sinogram, sigma_smooth=3.0, iterations=3):
     """
@@ -34,14 +36,14 @@ def estimate_streak_profile(sinogram, sigma_smooth=3.0, iterations=3):
 
 def bm3d_ring_artifact_removal(
     sinogram: np.ndarray,
-    mode: str = "generic",
+    mode: str = "streak",
     sigma_random: float = 0.1,
     patch_size: int = 8,
     step_size: int = 4,
     search_window: int = 24,
     max_matches: int = 16,
     batch_size: int = 32,
-    threshold: float = 2.7,
+    threshold: float | None = None,
     streak_sigma_smooth: float = 3.0,
     streak_iterations: int = 2,
     sigma_map_smoothing: float = 20.0,
@@ -70,7 +72,7 @@ def bm3d_ring_artifact_removal(
         Operation mode:
         - "generic": Standard BM3D (assume white noise).
         - "streak": Additive Streak Removal (Residual Median) + Standard BM3D.
-        By default "generic".
+        By default "streak".
     sigma_random : float, optional
         Random noise standard deviation, by default 0.1.
     patch_size : int, optional
@@ -83,8 +85,9 @@ def bm3d_ring_artifact_removal(
         Maximum number of similar patches per group, by default 16.
     batch_size : int, optional
         Chunk size for 3D stack processing, by default 32.
-    threshold : float, optional
-        Hard thresholding coefficient, by default 2.7.
+    threshold : float | None, optional
+        Hard thresholding coefficient. If None, the backend default is used:
+        2.7 for single-scale BM3D and 3.5 for multi-scale BM3D.
     streak_sigma_smooth : float, optional
         Sigma for smoothing in streak estimation, by default 3.0.
     streak_iterations : int, optional
@@ -313,7 +316,7 @@ def bm3d_ring_artifact_removal(
                 sigma_psd,
                 chunk_map,
                 sigma_random,
-                threshold,
+                DEFAULT_SINGLE_SCALE_THRESHOLD if threshold is None else threshold,
                 patch_size,
                 step_size,
                 search_window,

@@ -3,8 +3,8 @@ members = ["crates/bm3d_core", "crates/bm3d_python", "crates/bm3d_gui_egui"]
 resolver = "2"
 
 [workspace.package]
-version = "0.9.0"
-edition = "2021"
+version = "0.10.0"
+edition = "2024"
 
 [workspace.dependencies]
 ndarray = "0.15"

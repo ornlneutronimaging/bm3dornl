@@ -14,11 +14,11 @@
 //! This enables handling of wide streaks that single-scale BM3D cannot capture.
 
 use crate::utils::compute_1d_median_filter;
-use ndarray::{s, Array1, Array2, ArrayView1, ArrayView2};
+use ndarray::{Array1, Array2, ArrayView1, ArrayView2, s};
 
 use crate::float_trait::Bm3dFloat;
 use crate::orchestration::{
-    bm3d_ring_artifact_removal, bm3d_ring_artifact_removal_with_plans, Bm3dConfig, RingRemovalMode,
+    Bm3dConfig, RingRemovalMode, bm3d_ring_artifact_removal, bm3d_ring_artifact_removal_with_plans,
 };
 
 // =============================================================================
@@ -32,7 +32,7 @@ const MIN_SCALE_WIDTH: usize = 40;
 const BINNING_FACTOR: usize = 2;
 
 /// Default number of debinning iterations
-const DEFAULT_DEBIN_ITERATIONS: usize = 10;
+const DEFAULT_DEBIN_ITERATIONS: usize = 30;
 
 /// Default filter strength for multi-scale (reference uses 1.0)
 const DEFAULT_MULTISCALE_FILTER_STRENGTH: f64 = 1.0;
@@ -469,7 +469,7 @@ pub fn generate_psd_shapes<F: Bm3dFloat>(denoise_sizes: &[usize]) -> Vec<Array1<
 
 /// Compute |FFT(kernel)|² padded/truncated to target size.
 fn compute_fft_psd<F: Bm3dFloat>(kernel: &[f64], target_size: usize) -> Array1<F> {
-    use rustfft::{num_complex::Complex, FftPlanner};
+    use rustfft::{FftPlanner, num_complex::Complex};
 
     // Pad or truncate kernel to target size
     let mut padded = vec![Complex::new(0.0, 0.0); target_size];
@@ -1290,7 +1290,7 @@ mod tests {
         assert!(config.num_scales.is_none());
         assert!(approx_eq(config.filter_strength, 1.0, 1e-6));
         assert!(approx_eq(config.threshold, 3.5, 1e-6));
-        assert_eq!(config.debin_iterations, 10);
+        assert_eq!(config.debin_iterations, 30);
     }
 
     #[test]

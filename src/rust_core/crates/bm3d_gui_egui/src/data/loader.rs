@@ -3,8 +3,8 @@ use ndarray::Array3;
 use std::fs::{self, File};
 use std::io::BufReader;
 use std::path::Path;
-use tiff::decoder::{Decoder, DecodingResult};
 use tiff::ColorType;
+use tiff::decoder::{Decoder, DecodingResult};
 
 use super::Volume3D;
 
@@ -109,27 +109,30 @@ pub fn load_hdf5_dataset(path: &Path, dataset_path: &str) -> Result<Volume3D, Da
     }
 
     // Try to read as various types and convert to f32
-    let data: Array3<f32> = if let Ok(arr) = dataset.read::<f32, ndarray::Ix3>() {
-        arr
-    } else if let Ok(arr) = dataset.read::<f64, ndarray::Ix3>() {
-        arr.mapv(|v| v as f32)
-    } else if let Ok(arr) = dataset.read::<u16, ndarray::Ix3>() {
-        arr.mapv(|v| v as f32)
-    } else if let Ok(arr) = dataset.read::<i16, ndarray::Ix3>() {
-        arr.mapv(|v| v as f32)
-    } else if let Ok(arr) = dataset.read::<u32, ndarray::Ix3>() {
-        arr.mapv(|v| v as f32)
-    } else if let Ok(arr) = dataset.read::<i32, ndarray::Ix3>() {
-        arr.mapv(|v| v as f32)
-    } else if let Ok(arr) = dataset.read::<u8, ndarray::Ix3>() {
-        arr.mapv(|v| v as f32)
-    } else {
-        return Err(DataLoadError::UnsupportedDataType(
-            "Could not read dataset as f32, f64, u16, i16, u32, i32, or u8".to_string(),
-        ));
-    };
-
-    Ok(Volume3D::new(data))
+    if let Ok(arr) = dataset.read::<f32, ndarray::Ix3>() {
+        return Ok(Volume3D::new(arr));
+    }
+    if let Ok(arr) = dataset.read::<f64, ndarray::Ix3>() {
+        return Ok(Volume3D::new(arr.mapv(|v| v as f32)));
+    }
+    if let Ok(arr) = dataset.read::<u16, ndarray::Ix3>() {
+        return Ok(Volume3D::new(arr.mapv(|v| v as f32)));
+    }
+    if let Ok(arr) = dataset.read::<i16, ndarray::Ix3>() {
+        return Ok(Volume3D::new(arr.mapv(|v| v as f32)));
+    }
+    if let Ok(arr) = dataset.read::<u32, ndarray::Ix3>() {
+        return Ok(Volume3D::new(arr.mapv(|v| v as f32)));
+    }
+    if let Ok(arr) = dataset.read::<i32, ndarray::Ix3>() {
+        return Ok(Volume3D::new(arr.mapv(|v| v as f32)));
+    }
+    if let Ok(arr) = dataset.read::<u8, ndarray::Ix3>() {
+        return Ok(Volume3D::new(arr.mapv(|v| v as f32)));
+    }
+    Err(DataLoadError::UnsupportedDataType(
+        "Could not read dataset as f32, f64, u16, i16, u32, i32, or u8".to_string(),
+    ))
 }
 
 /// Load a multi-page TIFF as a 3D volume.

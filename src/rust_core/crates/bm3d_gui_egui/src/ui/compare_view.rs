@@ -348,15 +348,17 @@ impl CompareView {
                 self.cursor_info.y = Some(y);
 
                 // Look up intensities
-                if let Some(orig_data) = orig_slice {
-                    if y < orig_data.nrows() && x < orig_data.ncols() {
-                        self.cursor_info.orig_intensity = Some(orig_data[[y, x]]);
-                    }
+                if let Some(orig_data) = orig_slice
+                    && y < orig_data.nrows()
+                    && x < orig_data.ncols()
+                {
+                    self.cursor_info.orig_intensity = Some(orig_data[[y, x]]);
                 }
-                if let Some(proc_data) = proc_slice {
-                    if y < proc_data.nrows() && x < proc_data.ncols() {
-                        self.cursor_info.proc_intensity = Some(proc_data[[y, x]]);
-                    }
+                if let Some(proc_data) = proc_slice
+                    && y < proc_data.nrows()
+                    && x < proc_data.ncols()
+                {
+                    self.cursor_info.proc_intensity = Some(proc_data[[y, x]]);
                 }
                 // Compute difference
                 if let (Some(orig_val), Some(proc_val)) = (
@@ -808,39 +810,38 @@ impl CompareView {
 
         // Handle drag
         if response.dragged() {
-            if let Some(pointer_pos) = response.interact_pointer_pos() {
-                if let Some((img_x, img_y)) =
+            if let Some(pointer_pos) = response.interact_pointer_pos()
+                && let Some((img_x, img_y)) =
                     self.screen_to_image(pointer_pos, image_rect, img_width, img_height)
-                {
-                    // Check if we're already in a dragging operation
-                    if self.roi_state.drawing {
-                        // Continue drawing ROI
-                        self.roi_state.update_draw(img_x, img_y);
-                        self.is_dragging = false;
-                        self.last_drag_pos = None;
-                    } else if self.roi_state.moving {
-                        // Continue moving ROI
-                        self.roi_state
-                            .update_move(img_x, img_y, img_width, img_height);
-                        self.is_dragging = false;
-                        self.last_drag_pos = None;
-                    } else {
-                        // Starting a new drag - determine what to do
-                        let inside_roi = self.roi_state.cursor_inside_roi(img_x, img_y);
+            {
+                // Check if we're already in a dragging operation
+                if self.roi_state.drawing {
+                    // Continue drawing ROI
+                    self.roi_state.update_draw(img_x, img_y);
+                    self.is_dragging = false;
+                    self.last_drag_pos = None;
+                } else if self.roi_state.moving {
+                    // Continue moving ROI
+                    self.roi_state
+                        .update_move(img_x, img_y, img_width, img_height);
+                    self.is_dragging = false;
+                    self.last_drag_pos = None;
+                } else {
+                    // Starting a new drag - determine what to do
+                    let inside_roi = self.roi_state.cursor_inside_roi(img_x, img_y);
 
-                        if inside_roi {
-                            // Drag inside existing ROI → always move ROI (even in ROI mode)
-                            self.roi_state.start_move(img_x, img_y);
-                            self.is_dragging = false;
-                            self.last_drag_pos = None;
-                        } else if should_draw_roi {
-                            // ROI drawing mode (roi_mode ON or Shift held) outside ROI → draw new ROI
-                            self.roi_state.start_draw(img_x, img_y);
-                            self.is_dragging = false;
-                            self.last_drag_pos = None;
-                        }
-                        // Note: No panning in compare view, just ignore non-ROI drags
+                    if inside_roi {
+                        // Drag inside existing ROI → always move ROI (even in ROI mode)
+                        self.roi_state.start_move(img_x, img_y);
+                        self.is_dragging = false;
+                        self.last_drag_pos = None;
+                    } else if should_draw_roi {
+                        // ROI drawing mode (roi_mode ON or Shift held) outside ROI → draw new ROI
+                        self.roi_state.start_draw(img_x, img_y);
+                        self.is_dragging = false;
+                        self.last_drag_pos = None;
                     }
+                    // Note: No panning in compare view, just ignore non-ROI drags
                 }
             }
         } else {

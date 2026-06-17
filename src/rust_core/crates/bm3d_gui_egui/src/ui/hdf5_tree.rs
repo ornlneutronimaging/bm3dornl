@@ -130,12 +130,12 @@ impl Hdf5TreeBrowser {
         });
 
         // Show children if expanded
-        if let Hdf5Entry::Group { path, children, .. } = entry {
-            if self.expanded.contains(path) {
-                for child in children {
-                    if let Some(sel) = self.show_entry(ui, child, depth + 1) {
-                        selection = Some(sel);
-                    }
+        if let Hdf5Entry::Group { path, children, .. } = entry
+            && self.expanded.contains(path)
+        {
+            for child in children {
+                if let Some(sel) = self.show_entry(ui, child, depth + 1) {
+                    selection = Some(sel);
                 }
             }
         }
