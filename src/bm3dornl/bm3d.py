@@ -34,7 +34,7 @@ def estimate_streak_profile(sinogram, sigma_smooth=3.0, iterations=3):
 
 def bm3d_ring_artifact_removal(
     sinogram: np.ndarray,
-    mode: str = "generic",
+    mode: str = "streak",
     sigma_random: float = 0.1,
     patch_size: int = 8,
     step_size: int = 4,
@@ -70,7 +70,7 @@ def bm3d_ring_artifact_removal(
         Operation mode:
         - "generic": Standard BM3D (assume white noise).
         - "streak": Additive Streak Removal (Residual Median) + Standard BM3D.
-        By default "generic".
+        By default "streak".
     sigma_random : float, optional
         Random noise standard deviation, by default 0.1.
     patch_size : int, optional

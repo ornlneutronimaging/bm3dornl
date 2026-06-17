@@ -32,7 +32,7 @@ const MIN_SCALE_WIDTH: usize = 40;
 const BINNING_FACTOR: usize = 2;
 
 /// Default number of debinning iterations
-const DEFAULT_DEBIN_ITERATIONS: usize = 10;
+const DEFAULT_DEBIN_ITERATIONS: usize = 30;
 
 /// Default filter strength for multi-scale (reference uses 1.0)
 const DEFAULT_MULTISCALE_FILTER_STRENGTH: f64 = 1.0;
@@ -1290,7 +1290,7 @@ mod tests {
         assert!(config.num_scales.is_none());
         assert!(approx_eq(config.filter_strength, 1.0, 1e-6));
         assert!(approx_eq(config.threshold, 3.5, 1e-6));
-        assert_eq!(config.debin_iterations, 10);
+        assert_eq!(config.debin_iterations, 30);
     }
 
     #[test]

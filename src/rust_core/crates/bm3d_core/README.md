@@ -34,17 +34,16 @@ let image: Array2<f32> = /* your image data */;
 
 // Configure BM3D for streak removal
 let config = Bm3dConfig {
-    mode: RingRemovalMode::Streak,
     sigma_random: 0.1,
     patch_size: 8,
-    step_size: 3,
-    search_window: 39,
+    step_size: 4,
+    search_window: 24,
     max_matches: 16,
     ..Default::default()
 };
 
 // Run denoising
-let denoised = bm3d_ring_artifact_removal(&image, &config);
+let denoised = bm3d_ring_artifact_removal(image.view(), RingRemovalMode::Streak, &config);
 ```
 
 ## Main API

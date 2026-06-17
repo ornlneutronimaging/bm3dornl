@@ -14,7 +14,7 @@ Mode Selection
      - Default
      - Description
    * - ``mode``
-     - ``"generic"``
+     - ``"streak"``
      - Operation mode. Use ``"generic"`` for white noise, ``"streak"`` for ring artifacts.
 
 .. note::

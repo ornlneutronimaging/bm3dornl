@@ -185,11 +185,11 @@ Parameter Reference
 | `mode` | `"streak"` | `"generic"` for white noise, `"streak"` for ring artifacts |
 | `sigma_random` | `0.1` | Noise standard deviation |
 | `patch_size` | `8` | Patch size (7 or 8 recommended) |
-| `step_size` | `3` | Step size for patch extraction |
-| `search_window` | `39` | Maximum search distance for similar patches |
+| `step_size` | `4` | Step size for patch extraction |
+| `search_window` | `24` | Maximum search distance for similar patches |
 | `max_matches` | `16` | Maximum similar patches per 3D group |
 | `batch_size` | `32` | Batch size for stack processing |
-| `streak_sigma_smooth` | `1.0` | Smoothing for streak mode (streak mode only) |
+| `streak_sigma_smooth` | `3.0` | Smoothing for streak mode (streak mode only) |
 | `multiscale` | `False` | Enable multi-scale processing for wide streaks |
 | `num_scales` | `None` | Number of scales (auto-detected if None) |
 | `filter_strength` | `1.0` | Filtering strength multiplier for multi-scale |
