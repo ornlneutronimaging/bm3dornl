@@ -550,7 +550,7 @@ impl CompareView {
         painter.rect_stroke(
             response.rect,
             0.0,
-            egui::Stroke::new(1.0, egui::Color32::GRAY),
+            egui::Stroke::new(1.0_f32, egui::Color32::GRAY),
         );
 
         (response, computed_image_rect, painter)
@@ -586,7 +586,7 @@ impl CompareView {
             }
 
             // Border
-            painter.rect_stroke(rect, 0.0, egui::Stroke::new(1.0, egui::Color32::GRAY));
+            painter.rect_stroke(rect, 0.0, egui::Stroke::new(1.0_f32, egui::Color32::GRAY));
 
             // Labels row
             ui.horizontal(|ui| {
@@ -622,7 +622,7 @@ impl CompareView {
             }
 
             // Border
-            painter.rect_stroke(rect, 0.0, egui::Stroke::new(1.0, egui::Color32::GRAY));
+            painter.rect_stroke(rect, 0.0, egui::Stroke::new(1.0_f32, egui::Color32::GRAY));
 
             // Labels row: -max | 0 | +max
             ui.horizontal(|ui| {
@@ -902,9 +902,9 @@ impl CompareView {
                 egui::Color32::from_rgb(255, 255, 0) // Yellow when finalized
             };
             let stroke_width = if self.cursor_in_roi || self.roi_state.moving {
-                3.0
+                3.0_f32
             } else {
-                2.0
+                2.0_f32
             };
             painter.rect_stroke(
                 screen_rect,
