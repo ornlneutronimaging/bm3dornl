@@ -1,0 +1,53 @@
+name: Auto-merge bot PRs
+
+# Automatically approve + auto-merge low-risk maintenance PRs from trusted bots.
+# GitHub performs the merge only after ALL required status checks pass, so a
+# broken update can never be merged. Dependabot MAJOR version bumps are NOT
+# auto-merged (only patch/minor + GitHub Actions updates) and stay open for
+# manual review. See ornlneutronimaging bot-PR management policy.
+
+on: pull_request
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  dependabot:
+    runs-on: ubuntu-latest
+    if: ${{ github.event.pull_request.user.login == 'dependabot[bot]' }}
+    steps:
+      - name: Fetch Dependabot metadata
+        id: meta
+        uses: dependabot/fetch-metadata@v2
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Approve and enable auto-merge (patch / minor / GitHub Actions only)
+        if: >-
+          steps.meta.outputs.update-type == 'version-update:semver-patch' ||
+          steps.meta.outputs.update-type == 'version-update:semver-minor' ||
+          steps.meta.outputs.package-ecosystem == 'github_actions'
+        run: |
+          gh pr review --approve "$PR_URL"
+          gh pr merge --auto --squash --delete-branch "$PR_URL"
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  trusted-bots:
+    runs-on: ubuntu-latest
+    # pre-commit.ci and the pixi-lockfile app open PRs from the same repo, so a
+    # green build here means the maintenance change is safe to merge. (Note:
+    # PRs opened by github-actions[bot] via GITHUB_TOKEN do not re-trigger
+    # workflows, so those are handled by the daily maintenance scan instead.)
+    if: >-
+      github.event.pull_request.user.login == 'pre-commit-ci[bot]' ||
+      github.event.pull_request.user.login == 'neutronimaging-lockfile-bot[bot]'
+    steps:
+      - name: Approve and enable auto-merge
+        run: |
+          gh pr review --approve "$PR_URL"
+          gh pr merge --auto --squash --delete-branch "$PR_URL"
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
