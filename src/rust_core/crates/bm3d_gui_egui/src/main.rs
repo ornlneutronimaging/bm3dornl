@@ -106,8 +106,10 @@ fn main() -> eframe::Result<()> {
         "bm3dornl - BM3D Ring Artifact Removal",
         options,
         Box::new(move |_cc| {
-            let mut app = App::default();
-            app.return_path = return_path;
+            let mut app = App {
+                return_path,
+                ..Default::default()
+            };
             if let Some(file) = startup_file {
                 app.open_startup_file(file, startup_dataset);
             }

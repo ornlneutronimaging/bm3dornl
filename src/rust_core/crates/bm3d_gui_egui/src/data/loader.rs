@@ -165,8 +165,7 @@ fn load_hdf5_dataset_with_progress(
 
     let mut data = Array3::<f32>::zeros((n, h, w));
     for i in 0..n {
-        let slice: Result<ndarray::Array2<f32>, _> =
-            dataset.read_slice(ndarray::s![i, .., ..]);
+        let slice: Result<ndarray::Array2<f32>, _> = dataset.read_slice(ndarray::s![i, .., ..]);
         match slice {
             Ok(slice) => data.slice_mut(ndarray::s![i, .., ..]).assign(&slice),
             // Some dtypes cannot be read as f32 slices — fall back to the
@@ -245,12 +244,9 @@ impl LoadingJob {
         let thread_total = Arc::clone(&total);
         std::thread::spawn(move || {
             let result = match source {
-                LoadSource::Hdf5 { path, dataset } => load_hdf5_dataset_with_progress(
-                    &path,
-                    &dataset,
-                    &thread_done,
-                    &thread_total,
-                ),
+                LoadSource::Hdf5 { path, dataset } => {
+                    load_hdf5_dataset_with_progress(&path, &dataset, &thread_done, &thread_total)
+                }
                 LoadSource::TiffStack(path) => load_tiff_stack(&path),
                 LoadSource::TiffSequence(folder) => load_tiff_sequence(&folder),
             };
