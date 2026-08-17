@@ -137,6 +137,24 @@ pixi run build
 pixi run test
 ```
 
+### Optional: test-data submodule
+
+`tests/bm3dornl-data` is a Git submodule holding reference data for the notebooks in
+`notebooks/`. **It is not required to build the package or run the test suite** — the
+plain `git clone` above is all you need for `pixi run build` and `pixi run test`.
+
+Fetch it only if you want to run the notebooks:
+
+```bash
+git submodule update --init tests/bm3dornl-data
+git -C tests/bm3dornl-data lfs pull
+```
+
+The submodule is hosted on `code.ornl.gov` and clones anonymously over HTTPS — no ORNL
+account or SSH key is needed. Note that `tomostack_small.h5` is stored in Git LFS and is
+about 1.4 GB, so the `lfs pull` step takes a while; without Git LFS installed the file
+stays on disk as a small text pointer.
+
 GUI Application
 ---------------
 
