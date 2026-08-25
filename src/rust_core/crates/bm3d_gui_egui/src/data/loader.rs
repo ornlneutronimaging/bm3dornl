@@ -2,7 +2,10 @@ use hdf5_metno::File as H5File;
 use ndarray::Array3;
 use std::fs::{self, File};
 use std::io::BufReader;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::mpsc::{Receiver, channel};
 use tiff::ColorType;
 use tiff::decoder::{Decoder, DecodingResult};
 
@@ -133,6 +136,140 @@ pub fn load_hdf5_dataset(path: &Path, dataset_path: &str) -> Result<Volume3D, Da
     Err(DataLoadError::UnsupportedDataType(
         "Could not read dataset as f32, f64, u16, i16, u32, i32, or u8".to_string(),
     ))
+}
+
+/// Load a 3D HDF5 dataset slice by slice, counting the slices done into
+/// `done` (and the total into `total` once the shape is known) so the UI
+/// can show a progress bar. Falls back to the whole-array reader when the
+/// slice-wise f32 read is not possible for the dataset's type.
+fn load_hdf5_dataset_with_progress(
+    path: &Path,
+    dataset_path: &str,
+    done: &AtomicUsize,
+    total: &AtomicUsize,
+) -> Result<Volume3D, DataLoadError> {
+    let file = H5File::open(path).map_err(|e| DataLoadError::Hdf5Error(e.to_string()))?;
+    let dataset = file
+        .dataset(dataset_path)
+        .map_err(|e| DataLoadError::Hdf5Error(e.to_string()))?;
+    let shape = dataset.shape();
+    let [n, h, w] = shape.as_slice() else {
+        return Err(DataLoadError::InvalidDimensions(format!(
+            "Expected 3D dataset, got {}D with shape {:?}",
+            shape.len(),
+            shape
+        )));
+    };
+    let (n, h, w) = (*n, *h, *w);
+    total.store(n, Ordering::Relaxed);
+
+    let mut data = Array3::<f32>::zeros((n, h, w));
+    for i in 0..n {
+        let slice: Result<ndarray::Array2<f32>, _> = dataset.read_slice(ndarray::s![i, .., ..]);
+        match slice {
+            Ok(slice) => data.slice_mut(ndarray::s![i, .., ..]).assign(&slice),
+            // Some dtypes cannot be read as f32 slices — fall back to the
+            // typed whole-array reader (the bar jumps to the end).
+            Err(_) if i == 0 => {
+                let volume = load_hdf5_dataset(path, dataset_path)?;
+                done.store(n, Ordering::Relaxed);
+                return Ok(volume);
+            }
+            Err(e) => return Err(DataLoadError::Hdf5Error(e.to_string())),
+        }
+        done.fetch_add(1, Ordering::Relaxed);
+    }
+    Ok(Volume3D::new(data))
+}
+
+/// Paths of every 3-D dataset in the file, in tree order — used to auto-load
+/// a file that contains exactly one candidate.
+pub fn find_3d_datasets(entries: &[Hdf5Entry]) -> Vec<String> {
+    let mut paths = Vec::new();
+    for entry in entries {
+        match entry {
+            Hdf5Entry::Group { children, .. } => paths.extend(find_3d_datasets(children)),
+            Hdf5Entry::Dataset { path, shape, .. } => {
+                if shape.len() == 3 {
+                    paths.push(path.clone());
+                }
+            }
+        }
+    }
+    paths
+}
+
+/// What a [`LoadingJob`] is reading.
+enum LoadSource {
+    Hdf5 { path: PathBuf, dataset: String },
+    TiffStack(PathBuf),
+    TiffSequence(PathBuf),
+}
+
+/// A volume load running on a background thread, so the UI can show a
+/// progress bar instead of freezing. `progress()` is (slices done, total);
+/// total stays 0 while unknown (TIFF page counts, fallback readers).
+pub struct LoadingJob {
+    rx: Receiver<Result<Volume3D, DataLoadError>>,
+    done: Arc<AtomicUsize>,
+    total: Arc<AtomicUsize>,
+    /// The file (or folder) being loaded, shown next to the bar and kept
+    /// as the app's `file_path` once loaded.
+    pub source: PathBuf,
+}
+
+impl LoadingJob {
+    pub fn start_hdf5(path: PathBuf, dataset: String) -> Self {
+        Self::start(LoadSource::Hdf5 { path, dataset })
+    }
+
+    pub fn start_tiff_stack(path: PathBuf) -> Self {
+        Self::start(LoadSource::TiffStack(path))
+    }
+
+    pub fn start_tiff_sequence(folder: PathBuf) -> Self {
+        Self::start(LoadSource::TiffSequence(folder))
+    }
+
+    fn start(source: LoadSource) -> Self {
+        let done = Arc::new(AtomicUsize::new(0));
+        let total = Arc::new(AtomicUsize::new(0));
+        let (tx, rx) = channel();
+        let source_path = match &source {
+            LoadSource::Hdf5 { path, .. } => path.clone(),
+            LoadSource::TiffStack(path) => path.clone(),
+            LoadSource::TiffSequence(folder) => folder.clone(),
+        };
+        let thread_done = Arc::clone(&done);
+        let thread_total = Arc::clone(&total);
+        std::thread::spawn(move || {
+            let result = match source {
+                LoadSource::Hdf5 { path, dataset } => {
+                    load_hdf5_dataset_with_progress(&path, &dataset, &thread_done, &thread_total)
+                }
+                LoadSource::TiffStack(path) => load_tiff_stack(&path),
+                LoadSource::TiffSequence(folder) => load_tiff_sequence(&folder),
+            };
+            let _ = tx.send(result);
+        });
+        Self {
+            rx,
+            done,
+            total,
+            source: source_path,
+        }
+    }
+
+    pub fn progress(&self) -> (usize, usize) {
+        (
+            self.done.load(Ordering::Relaxed),
+            self.total.load(Ordering::Relaxed),
+        )
+    }
+
+    pub fn poll(&mut self) -> Option<Result<Volume3D, DataLoadError>> {
+        self.rx.try_recv().ok()
+    }
 }
 
 /// Load a multi-page TIFF as a 3D volume.

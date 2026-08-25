@@ -14,6 +14,8 @@ pub use compare_view::{CompareCursorInfo, CompareView};
 pub use hdf5_tree::{Hdf5TreeBrowser, Hdf5TreeSelection};
 pub use histogram::{CompareViewHistogram, SingleViewHistogram, colors};
 pub use parameters::Bm3dParameters;
-pub use save_dialog::{SaveDataType, SaveDialog, SaveRequest, compute_difference, save_volume};
+pub use save_dialog::{
+    SaveDataType, SaveDialog, SaveFormat, SaveRequest, compute_difference, save_volume,
+};
 pub use slice_view::{CursorInfo, ImageRoi, RoiState, SliceViewer};
 pub use window_level::WindowLevel;

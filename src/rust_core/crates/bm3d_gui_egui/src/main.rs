@@ -8,14 +8,14 @@ mod data;
 mod processing;
 mod ui;
 
-use data::{Volume3D, build_hdf5_tree, load_hdf5_dataset, load_tiff_sequence, load_tiff_stack};
+use data::{LoadingJob, Volume3D, build_hdf5_tree, find_3d_datasets};
 use eframe::egui;
 use processing::{ProcessingManager, ProcessingState};
 use std::path::PathBuf;
 use ui::{
     AxisMappingWidget, Bm3dParameters, ColormapSelector, CompareView, CompareViewHistogram,
-    Hdf5TreeBrowser, SaveDataType, SaveDialog, SingleViewHistogram, SliceViewer, WindowLevel,
-    compute_difference, save_volume,
+    Hdf5TreeBrowser, SaveDataType, SaveDialog, SaveFormat, SaveRequest, SingleViewHistogram,
+    SliceViewer, WindowLevel, compute_difference, save_volume,
 };
 
 /// Load application icon from embedded PNG (256x256 for reasonable binary size)
@@ -30,7 +30,67 @@ fn load_icon() -> Option<egui::IconData> {
     })
 }
 
+const USAGE: &str = "\
+bm3dornl-gui — BM3D ring artifact removal
+
+USAGE:
+  bm3dornl-gui [OPTIONS] [FILE]
+
+ARGS:
+  FILE  Volume to open on startup: an HDF5 file (.h5/.hdf5/.nxs) or a
+        multi-page TIFF stack (.tif/.tiff). An HDF5 file containing exactly
+        one 3D dataset is loaded directly (with a progress bar); otherwise
+        the dataset browser opens.
+
+OPTIONS:
+  -d, --dataset <PATH>       HDF5 dataset to load from FILE (e.g.
+                             /projections), skipping the dataset browser
+  --called-from-app <FILE>   Launched by another application: adds a
+                             \"Return data to main application\" button that
+                             writes the processed volume to FILE (HDF5,
+                             dataset /data) and closes the tool
+  -h, --help                 Show this help
+";
+
+/// `(file, dataset, return path)` from the command line; exits on `--help`
+/// or bad args.
+fn parse_args() -> (Option<PathBuf>, Option<String>, Option<PathBuf>) {
+    let mut file = None;
+    let mut dataset = None;
+    let mut return_path = None;
+    let mut args = std::env::args().skip(1);
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "-h" | "--help" => {
+                print!("{USAGE}");
+                std::process::exit(0);
+            }
+            "-d" | "--dataset" => match args.next() {
+                Some(path) => dataset = Some(path),
+                None => {
+                    eprintln!("--dataset requires a dataset path\n\n{USAGE}");
+                    std::process::exit(2);
+                }
+            },
+            "--called-from-app" => match args.next() {
+                Some(path) => return_path = Some(PathBuf::from(path)),
+                None => {
+                    eprintln!("--called-from-app requires an output file path\n\n{USAGE}");
+                    std::process::exit(2);
+                }
+            },
+            _ if arg.starts_with('-') => {
+                eprintln!("unknown option {arg}\n\n{USAGE}");
+                std::process::exit(2);
+            }
+            _ => file = Some(PathBuf::from(arg)),
+        }
+    }
+    (file, dataset, return_path)
+}
+
 fn main() -> eframe::Result<()> {
+    let (startup_file, startup_dataset, return_path) = parse_args();
     let mut viewport = egui::ViewportBuilder::default().with_inner_size([1400.0, 900.0]);
 
     // Set application icon if available
@@ -45,7 +105,16 @@ fn main() -> eframe::Result<()> {
     eframe::run_native(
         "bm3dornl - BM3D Ring Artifact Removal",
         options,
-        Box::new(|_cc| Ok(Box::new(App::default()))),
+        Box::new(move |_cc| {
+            let mut app = App {
+                return_path,
+                ..Default::default()
+            };
+            if let Some(file) = startup_file {
+                app.open_startup_file(file, startup_dataset);
+            }
+            Ok(Box::new(app))
+        }),
     )
 }
 
@@ -100,6 +169,13 @@ struct App {
 
     // Error handling
     error_message: Option<String>,
+
+    // A volume load in progress (background thread + progress bar).
+    loading: Option<LoadingJob>,
+
+    // Set when launched with --called-from-app: where the "Return data to
+    // main application" button writes the processed volume.
+    return_path: Option<PathBuf>,
 }
 
 impl Default for App {
@@ -124,6 +200,8 @@ impl Default for App {
             save_dialog: SaveDialog::default(),
             keep_aspect_ratio: true, // Default to maintaining aspect ratio
             error_message: None,
+            loading: None,
+            return_path: None,
         }
     }
 }
@@ -149,8 +227,8 @@ impl App {
         }
     }
 
-    fn load_tiff_sequence(&mut self, folder: PathBuf) {
-        // Reset state
+    /// Clear every piece of state tied to the previously loaded volume.
+    fn reset_for_load(&mut self) {
         self.error_message = None;
         self.volume = None;
         self.processed_volume = None;
@@ -165,33 +243,45 @@ impl App {
         self.processing_manager.reset();
         self.view_mode = ViewMode::Original;
         self.display_mode = DisplayMode::Single;
+    }
 
-        match load_tiff_sequence(&folder) {
-            Ok(vol) => {
-                self.setup_volume(vol);
-                self.file_path = Some(folder);
+    fn load_tiff_sequence(&mut self, folder: PathBuf) {
+        self.reset_for_load();
+        self.loading = Some(LoadingJob::start_tiff_sequence(folder));
+    }
+
+    /// Open the file passed on the command line: TIFF stacks load directly;
+    /// an HDF5 file loads the requested dataset — or its only 3D dataset —
+    /// directly, and falls back to the dataset browser otherwise.
+    fn open_startup_file(&mut self, path: PathBuf, dataset: Option<String>) {
+        let extension = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_lowercase();
+        match extension.as_str() {
+            "h5" | "hdf5" | "nxs" => {
+                let dataset = dataset.or_else(|| {
+                    // No dataset requested: a file with exactly one 3D
+                    // dataset is unambiguous.
+                    let entries = build_hdf5_tree(&path).ok()?;
+                    let mut candidates = find_3d_datasets(&entries);
+                    (candidates.len() == 1).then(|| candidates.remove(0))
+                });
+                match dataset {
+                    Some(dataset) => {
+                        self.reset_for_load();
+                        self.loading = Some(LoadingJob::start_hdf5(path, dataset));
+                    }
+                    None => self.load_file(path),
+                }
             }
-            Err(e) => {
-                self.error_message = Some(format!("Failed to load TIFF sequence: {}", e));
-            }
+            _ => self.load_file(path),
         }
     }
 
     fn load_file(&mut self, path: PathBuf) {
-        self.error_message = None;
-        self.volume = None;
-        self.processed_volume = None;
-        self.hdf5_tree = None;
-        self.pending_hdf5_path = None;
-        self.axis_mapping_widget = None;
-        self.slice_viewer.reset();
-        self.compare_view.reset();
-        self.single_histogram.reset();
-        self.compare_histogram.reset();
-        self.window_level = WindowLevel::new();
-        self.processing_manager.reset();
-        self.view_mode = ViewMode::Original;
-        self.display_mode = DisplayMode::Single;
+        self.reset_for_load();
 
         let extension = path
             .extension()
@@ -210,15 +300,9 @@ impl App {
                     self.error_message = Some(format!("Failed to open HDF5: {}", e));
                 }
             },
-            "tif" | "tiff" => match load_tiff_stack(&path) {
-                Ok(vol) => {
-                    self.setup_volume(vol);
-                    self.file_path = Some(path);
-                }
-                Err(e) => {
-                    self.error_message = Some(format!("Failed to load TIFF: {}", e));
-                }
-            },
+            "tif" | "tiff" => {
+                self.loading = Some(LoadingJob::start_tiff_stack(path));
+            }
             _ => {
                 self.error_message = Some(format!("Unsupported file type: {}", extension));
             }
@@ -227,15 +311,11 @@ impl App {
 
     fn load_hdf5_dataset(&mut self, dataset_path: &str) {
         if let Some(file_path) = &self.pending_hdf5_path {
-            match load_hdf5_dataset(file_path, dataset_path) {
-                Ok(vol) => {
-                    self.setup_volume(vol);
-                    self.hdf5_tree = None;
-                }
-                Err(e) => {
-                    self.error_message = Some(format!("Failed to load dataset: {}", e));
-                }
-            }
+            self.hdf5_tree = None;
+            self.loading = Some(LoadingJob::start_hdf5(
+                file_path.clone(),
+                dataset_path.to_owned(),
+            ));
         }
     }
 
@@ -539,11 +619,97 @@ impl App {
         {
             self.save_dialog.open();
         }
+
+        // Launched by another application: one click sends the processed
+        // volume back and closes the tool.
+        if let Some(return_path) = self.return_path.clone() {
+            ui.add_space(6.0);
+            let has_processed = self.processed_volume.is_some();
+            let clicked = ui
+                .add_enabled(
+                    has_processed,
+                    egui::Button::new("⏎ Return data to main application"),
+                )
+                .on_hover_text(format!(
+                    "write the processed data to {} and close this tool — the main \
+                     application picks it up from there",
+                    return_path.display()
+                ))
+                .on_disabled_hover_text("process the data first")
+                .clicked();
+            if clicked {
+                self.return_to_main_app(&return_path, ui.ctx());
+            }
+        }
+    }
+
+    /// Write the processed volume to the `--called-from-app` path and close
+    /// the tool, so the launching application can import it.
+    fn return_to_main_app(&mut self, path: &std::path::Path, ctx: &egui::Context) {
+        let Some(processed) = &self.processed_volume else {
+            return;
+        };
+        let request = SaveRequest {
+            path: path.to_path_buf(),
+            data_type: SaveDataType::Processed,
+            format: SaveFormat::Hdf5,
+            hdf5_dataset_path: "/data".to_string(),
+        };
+        match save_volume(processed.raw_data(), &request) {
+            Ok(()) => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
+            Err(e) => {
+                self.error_message = Some(format!("Failed to return the data: {}", e));
+            }
+        }
     }
 }
 
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // A volume load in progress: fold the result in when done, show a
+        // progress bar meanwhile.
+        if let Some(job) = &mut self.loading {
+            match job.poll() {
+                Some(Ok(volume)) => {
+                    let source = job.source.clone();
+                    self.loading = None;
+                    self.setup_volume(volume);
+                    self.file_path = Some(source);
+                }
+                Some(Err(e)) => {
+                    self.error_message = Some(format!("Failed to load: {}", e));
+                    self.loading = None;
+                }
+                None => {
+                    let (done, total) = job.progress();
+                    let name = job
+                        .source
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("data")
+                        .to_owned();
+                    egui::Window::new("Loading data")
+                        .collapsible(false)
+                        .resizable(false)
+                        .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                        .show(ctx, |ui| {
+                            ui.set_min_width(360.0);
+                            ui.label(format!("Loading {}…", name));
+                            if total > 0 {
+                                ui.add(
+                                    egui::ProgressBar::new(done as f32 / total as f32)
+                                        .show_percentage()
+                                        .text(format!("slice {} / {}", done, total)),
+                                );
+                            } else {
+                                ui.add(egui::ProgressBar::new(0.0).animate(true));
+                            }
+                        });
+                    ctx.request_repaint_after(std::time::Duration::from_millis(100));
+                }
+            }
+        }
+
         // Poll processing progress
         self.processing_manager.poll_progress();
 
