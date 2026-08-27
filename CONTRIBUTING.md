@@ -114,8 +114,11 @@ We use `pytest` for testing. Ensure that your changes are covered by tests.
 If you find a bug or have a feature request, please open an issue on the [GitHub issues page](https://github.com/ornlneutronimaging/bm3dornl/issues).
 Provide as much detail as possible, including steps to reproduce the issue if applicable.
 
+For usage questions rather than bug reports, please start a [GitHub Discussion](https://github.com/ornlneutronimaging/bm3dornl/discussions)
+instead, so that issues stay focused on defects and feature requests.
+
 ## Contact
 
-If you have any questions or need further assistance, please contact the [repo maintainer](zhangc@ornl.gov).
+If you have any questions or need further assistance, please contact the [repo maintainer](mailto:zhangc@ornl.gov).
 
 Thank you for contributing to BM3D-ORNL!
