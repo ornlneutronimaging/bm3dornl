@@ -23,6 +23,14 @@ The BM3D algorithm was originally proposed by K. Dabov, A. Foi, V. Katkovnik, an
 - **Stack Processing**: Efficient batched processing of 3D sinogram stacks
 - **High Performance**: Rust backend with optimized block matching (integral images, early termination) and transforms (Hadamard, FFT)
 
+Documentation
+-------------
+
+Full documentation: <https://bm3dornl.readthedocs.io>
+
+It covers the installation guide, a tutorial, the parameter reference, the GUI
+guide, and the API reference.
+
 How to install
 --------------
 
@@ -219,3 +227,16 @@ Parameter Reference
 |-----------|---------|-------------|
 | `fft_alpha` | `1.0` | FFT-guided trust factor (0.0 disables FFT guidance) |
 | `notch_width` | `2.0` | Gaussian notch filter width in frequency domain |
+
+Contributing and Support
+------------------------
+
+- **Contributing**: see [CONTRIBUTING.md](CONTRIBUTING.md) for development setup,
+  coding standards, testing, and the pull request process. Participation is
+  governed by our [Code of Conduct](CODE_OF_CONDUCT.md).
+- **Reporting issues**: open an issue at
+  <https://github.com/ornlneutronimaging/bm3dornl/issues>. Please include your
+  platform, the bm3dornl version, and a minimal reproduction.
+- **Getting support**: for usage questions, start a
+  [GitHub Discussion](https://github.com/ornlneutronimaging/bm3dornl/discussions)
+  or email the maintainer at <zhangc@ornl.gov>.
