@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Fourier-SVD: `fourier_svd_removal` (and the `FourierSvd` ring-removal mode that calls it) no longer returns flat-background sinograms unchanged. Its magnitude gate removes detail below a threshold and protects detail above it, and the threshold comes from a MAD-based scale of the rank-1 column profile. MAD is the median of the absolute deviations, so when most columns see numerically flat air — the normal case for simulated phantoms — it collapses to machine residue (about 1e-11 on the shipped test sinogram), the gate removes nothing, and the call returns its input with no influence from `fft_alpha` or `notch_width` (#133). That specific degeneracy is now detected (threshold below 1e-6 of the largest deviation, a regime the gate cannot act in), and the scale is re-estimated over the entries above the numerical floor. The rescue is guarded: it declines and keeps the no-op unless at least a quarter of the columns carry information, and unless the resulting correction stays under 10% of the input's energy — a correction larger than that would be removing the sample, not streaks.
+- Every input outside that degeneracy is byte-identical to the previous release, verified output-for-output against the previous build across the full measured CG-1D volume and the noise-bearing synthetic cases. 533 of the volume's 540 sinograms take the original path unchanged; the remaining 7 have a column profile with exactly zero median deviation (the median filter returns an element of its window, so on a smooth profile more than half the detail entries can be exactly zero), where the previous code substituted a standard deviation and measurably degraded the output against the volume's reference reconstruction. No scale is estimable from zero dispersion, so those are now returned unchanged — closer to the reference than either previous behaviour.
+
+### Changed
+
+- Fourier-SVD output changes on flat-background inputs as a consequence of the fix above. Any previously recorded Fourier-SVD quality figures for such inputs were measured on an essentially unmodified array and should be regenerated. On the benchmark phantom, SSIM against ground truth rises from 0.9510 — the unprocessed input's own score — to 0.9737.
+
+### Known limitation
+
+- When a sinogram's background is both the majority of columns and carries noise, the MAD scale reports that noise floor, and streaks larger than the background noise are still under-corrected. This regime is unchanged by the fix (outputs remain byte-identical to the previous release there); correcting it needs a reliable separation of sample columns from background columns, which is follow-up work.
+
 ## 0.10.0 - 2026-06-17
 
 ### Changed
