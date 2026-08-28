@@ -1,3 +1,13 @@
+# Sphinx toolchain
 sphinx>=7.0
 sphinx_rtd_theme
 sphinx-autodoc-typehints
+
+# bm3dornl's own runtime dependencies. autodoc imports each module to read its
+# docstrings, and Read the Docs does not install the package itself because the
+# Rust extension would need a toolchain. Without these, every bm3dornl module
+# fails to import and the API reference renders as headers with no content.
+# The compiled extension is handled by autodoc_mock_imports in conf.py.
+numpy
+scipy
+scikit-image

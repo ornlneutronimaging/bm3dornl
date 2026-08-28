@@ -34,7 +34,7 @@ Features
 
 **Visualization**
 
-- Interactive slice viewer with scroll-wheel navigation
+- Interactive slice viewer with a slice slider and scroll-wheel zoom
 - Real-time histogram display
 - Adjustable window/level (contrast) controls
 - Side-by-side comparison of original and processed images
@@ -67,7 +67,7 @@ Keyboard Shortcuts
    * - Shortcut
      - Action
    * - Scroll wheel
-     - Navigate through slices (3D data) or zoom
+     - Zoom in and out
    * - Drag
      - Pan image
    * - Shift + Drag
@@ -78,7 +78,8 @@ Workflow
 
 1. **Load Data**: Click "Open" and select an HDF5 or TIFF file. For HDF5, use the tree browser to select a dataset.
 
-2. **Adjust View**: Use window/level controls or scroll to navigate through slices.
+2. **Adjust View**: Use the window/level controls for contrast, the slice slider to
+   move through a 3D stack, and the scroll wheel to zoom.
 
 3. **Select Parameters**: Adjust denoising parameters in the control panel:
 

@@ -11,7 +11,7 @@ Stage 1: FFT-Guided Energy Detection
 Stage 2: Rank-1 SVD with Magnitude Gating
 - Extract first principal component via power iteration
 - Median filter the v-vector to separate baseline from streak detail
-- Apply soft magnitude gating: 1 / (1 + (|v| / threshold)^exponent)
+- Apply soft magnitude gating: ``1 / (1 + (|v| / threshold)^exponent)``
 - Reconstruct streak as rank-1 outer product and subtract from input
 
 Parameters:
