@@ -531,8 +531,40 @@ fn estimate_noise_sigma_robust<F: Bm3dFloat>(sinogram: ArrayView2<F>) -> F {
     // Sort to find the Minimum (The "Air" region noise floor)
     // We use the absolute minimum to be 100% sure we are in air/ultra-high-SNR.
     patch_sigmas.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-    patch_sigmas[0]
+
+    // A "noise floor" this far below the data's own scale is not a noise
+    // measurement — it is float quantization residue from numerically flat
+    // background, the normal case for simulated phantoms. Taking it as the
+    // global sigma collapses the variance lock's threshold and silently turns
+    // the whole multiscale correction into a no-op (issue #133's sibling).
+    // Measured margins, full 540-slice CG-1D volume: flat-air patches sit near
+    // 3e-10 of the data range, while the quietest patch of any measured slice
+    // sits at 3.7e-4 of the range — about 2.6 decades above this cut and 3.5
+    // decades above the residue. If every patch is silent there is nothing to
+    // denoise, and the previous behaviour (return the minimum) is kept.
+    let mut lo = f64::INFINITY;
+    let mut hi = f64::NEG_INFINITY;
+    for v in sinogram.iter() {
+        let x = v.to_f64().unwrap_or(0.0);
+        if x < lo {
+            lo = x;
+        }
+        if x > hi {
+            hi = x;
+        }
+    }
+    let silence = F::from_f64_c((hi - lo).max(0.0) * SILENCE_SIGMA_RATIO);
+    patch_sigmas
+        .iter()
+        .find(|&&s| s > silence)
+        .copied()
+        .unwrap_or(patch_sigmas[0])
 }
+
+/// Patch sigmas at or below this fraction of the input's value range are
+/// float quantization residue, not a measured noise floor. See
+/// [`estimate_noise_sigma_robust`] for the measured margins behind the value.
+const SILENCE_SIGMA_RATIO: f64 = 1.0e-6;
 
 /// Internal 2D robust estimator for a single patch
 fn estimate_patch_sigma_internal<F: Bm3dFloat>(patch: ArrayView2<F>) -> F {
@@ -1514,6 +1546,80 @@ mod tests {
         for (a, b) in multi_result.iter().zip(single_result.iter()) {
             assert!(approx_eq(*a, *b, 1e-5), "Forced K=0 differs from single");
         }
+    }
+
+    /// Sinogram-like image: near-flat air either side, sample band with
+    /// per-column gain jitter (the streaks) and row variation. The air carries
+    /// the same per-column gain, so its values are tiny but NOT exactly equal:
+    /// that is the regime of real simulated sinograms, where the per-patch
+    /// sigma is quantization residue rather than exactly zero. Exactly-zero
+    /// patches were already excluded before this fix, so exactly-flat air
+    /// would not reproduce the bug.
+    fn flat_air_streaked(rows: usize, cols: usize, air: usize) -> Array2<f32> {
+        let mut rng = SimpleLcg::new(9);
+        let jitter: Vec<f32> = (0..cols).map(|_| (rng.next_f32() - 0.5) * 0.04).collect();
+        Array2::from_shape_fn((rows, cols), |(r, c)| {
+            if c < air || c >= cols - air {
+                1.0e-8 * (1.0 + jitter[c])
+            } else {
+                let row_term = 1.0 + 0.1 * (r as f32 / rows as f32);
+                0.5 * row_term * (1.0 + jitter[c])
+            }
+        })
+    }
+
+    /// Regression for the silent multiscale no-op: on an image whose quietest
+    /// patches are numerically flat air, the auto noise estimate must not
+    /// report float quantization residue as the noise floor. The previous code
+    /// returned ~1e-10 here, collapsing the variance lock and turning the whole
+    /// correction into a no-op.
+    #[test]
+    fn auto_sigma_skips_numerically_silent_patches() {
+        let img = flat_air_streaked(128, 256, 80);
+        let sigma = estimate_noise_sigma_robust(img.view());
+        // The same value range the estimator's silence cut uses.
+        let lo = img.iter().cloned().fold(f32::INFINITY, f32::min);
+        let hi = img.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+        assert!(
+            f64::from(sigma) > 1.0e-6 * f64::from(hi - lo),
+            "estimate is quantization residue, not a noise floor: {sigma}"
+        );
+    }
+
+    /// End-to-end: multiscale with automatic sigma must measurably act on a
+    /// flat-background streaked sinogram instead of returning it unchanged.
+    #[test]
+    fn multiscale_auto_acts_on_flat_background() {
+        let img = flat_air_streaked(96, 200, 60);
+        let mut cfg = MultiscaleConfig::<f32> {
+            num_scales: Some(2),
+            ..Default::default()
+        };
+        cfg.bm3d_config.sigma_random = 0.0; // auto-estimate
+
+        let out = multiscale_bm3d_streak_removal(img.view(), &cfg).unwrap();
+
+        let max_change = img
+            .iter()
+            .zip(out.iter())
+            .map(|(a, b)| (a - b).abs())
+            .fold(0.0f32, f32::max);
+        assert!(
+            max_change > 1.0e-4,
+            "multiscale auto returned its input unchanged: max|change| = {max_change}"
+        );
+    }
+
+    /// An entirely flat input has nothing to denoise: the estimator keeps its
+    /// previous behaviour and the pipeline stays a no-op.
+    #[test]
+    fn fully_flat_input_stays_a_noop() {
+        let img = Array2::<f32>::from_elem((96, 200), 0.75);
+        let sigma = estimate_noise_sigma_robust(img.view());
+        assert!(
+            f64::from(sigma) < 1.0e-9,
+            "flat input produced a nonzero noise floor: {sigma}"
+        );
     }
 }
 
