@@ -75,11 +75,16 @@ Quality metrics are identical across platforms (deterministic algorithms, same r
 
 | Component | Specification |
 |-----------|---------------|
-| OS | Red Hat Enterprise Linux 9.7 |
-| CPU | AMD Ryzen Threadripper PRO 5975WX 32-Cores |
-| Threads | 64 (32 cores × 2 threads) |
-| RAM | 995 GB |
+| Host | cg1d-analysis3.ornl.gov (ORNL CG-1D analysis node) |
+| OS | Red Hat Enterprise Linux 9.8 (Plow) |
+| Kernel | 5.14.0-611.54.1.el9_7.x86_64 |
+| CPU | AMD Ryzen Threadripper PRO 7965WX 24-Cores |
+| Threads | 48 (24 cores × 2 threads) |
+| RAM | 502 GB |
 | Architecture | x86_64 |
+| Python | 3.12.12 |
+| Rust | 1.98.0 |
+| Measured | 2026-08-31 |
 
 ## Conclusion
 
