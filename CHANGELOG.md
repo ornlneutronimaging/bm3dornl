@@ -10,6 +10,7 @@
 
 ### Changed
 
+- The `bm3dornl.plot` module was removed and its single function, `compute_cdf`, relocated to `bm3dornl.utils` (#138). The module never contained plotting code — `compute_cdf` computes an image's cumulative distribution function, a diagnostic that fits the utils module's purpose. Anyone importing `from bm3dornl.plot import compute_cdf` must switch to `from bm3dornl.utils import compute_cdf`; the function itself is unchanged.
 - Fourier-SVD output changes on flat-background inputs as a consequence of the fix above. Any previously recorded Fourier-SVD quality figures for such inputs were measured on an essentially unmodified array and should be regenerated. On the benchmark phantom, SSIM against ground truth rises from 0.9510 — the unprocessed input's own score — to 0.9737.
 
 ### Documentation

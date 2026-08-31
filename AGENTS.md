@@ -39,7 +39,7 @@ skip tests.
 ## Project layout
 
 - `src/bm3dornl/` — Python API. `bm3d.py` is the entry (`bm3d_ring_artifact_removal`);
-  also `fourier_svd.py`, `phantom.py`, `plot.py`, `utils.py`. Thin orchestration over Rust.
+  also `fourier_svd.py`, `phantom.py`, `utils.py`. Thin orchestration over Rust.
 - `src/rust_core/crates/`
   - `bm3d_core` — the algorithm (block matching, transforms, pipeline, multiscale, streak,
     fourier_svd, noise_estimation). Generic over f32/f64 via the `Bm3dFloat` trait.
