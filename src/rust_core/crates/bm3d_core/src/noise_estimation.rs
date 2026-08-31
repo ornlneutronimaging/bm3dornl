@@ -50,11 +50,19 @@ fn sample_columns_evenly<F: Bm3dFloat>(data: ArrayView2<F>, sample_cols: usize) 
     })
 }
 
-/// Estimate noise standard deviation using MAD-based robust estimation.
+/// Estimate the standard deviation of vertical streak noise (MAD-based).
 ///
-/// This implements the sigma estimation from Mäkinen et al. (2021).
-/// The image is filtered to isolate vertical streaks (vertical Gaussian + horizontal High-pass),
-/// then the MAD (Median Absolute Deviation) is computed and scaled.
+/// This implements the sigma estimation from Mäkinen et al. (2021). The image
+/// is smoothed with a tall vertical Gaussian (sigma = rows / 12), which passes
+/// column-wise streak structure but suppresses pixel-level i.i.d. noise, then
+/// high-pass filtered horizontally (db3) to isolate column-to-column
+/// variation; the scaled MAD (1.4826) of the result is returned.
+///
+/// The result is the vertical-streak amplitude — the sinogram signature of
+/// ring artifacts — not the pixel-level standard deviation: for purely i.i.d.
+/// pixel noise it lands far below the pixel sigma (roughly 8x smaller at 256
+/// rows). The pipeline uses it to fill in `sigma_random` when the caller
+/// sets it to 0.0 (the default is 0.1, not 0.0).
 pub fn estimate_noise_sigma<F: Bm3dFloat>(sinogram: ArrayView2<F>) -> F {
     let (_rows, cols) = sinogram.dim();
     let sampled_storage = match resolve_sigma_est_max_columns() {

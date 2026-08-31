@@ -63,7 +63,7 @@ let denoised = bm3d_ring_artifact_removal(image.view(), RingRemovalMode::Streak,
 
 - `run_bm3d_kernel` - Core BM3D kernel for a single image
 - `run_bm3d_step` - Single BM3D step (hard/wiener threshold)
-- `estimate_noise_sigma` - Automatic noise level estimation
+- `estimate_noise_sigma` - Vertical-streak noise level estimation (fills in `sigma_random` when it is set to 0.0)
 
 ## Performance
 
