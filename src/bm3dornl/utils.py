@@ -84,3 +84,25 @@ def estimate_noise_sigma(sinogram: np.ndarray) -> float:
         if estimate_noise_sigma_rust is None:
             raise ImportError("bm3d_rust backend not available")
         return float(estimate_noise_sigma_rust(sino_f32))
+
+
+def compute_cdf(img: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Compute the cumulative distribution function of an image.
+
+    Useful for comparing intensity distributions before and after
+    ring-artifact removal.
+
+    Parameters
+    ----------
+    img : np.ndarray
+        The input image.
+
+    Returns
+    -------
+    tuple[np.ndarray, np.ndarray]
+        The sorted CDF values and the corresponding probabilities.
+    """
+    cdf_org_sorted = np.sort(img.flatten())
+    p_org = 1.0 * np.arange(len(cdf_org_sorted)) / (len(cdf_org_sorted) - 1)
+    return cdf_org_sorted, p_org
