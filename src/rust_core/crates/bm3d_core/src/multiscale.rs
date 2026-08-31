@@ -17,9 +17,7 @@ use crate::utils::compute_1d_median_filter;
 use ndarray::{Array1, Array2, ArrayView1, ArrayView2, s};
 
 use crate::float_trait::Bm3dFloat;
-use crate::orchestration::{
-    Bm3dConfig, RingRemovalMode, bm3d_ring_artifact_removal, bm3d_ring_artifact_removal_with_plans,
-};
+use crate::orchestration::{Bm3dConfig, RingRemovalMode, bm3d_ring_artifact_removal};
 
 // =============================================================================
 // Constants
@@ -492,142 +490,163 @@ fn compute_fft_psd<F: Bm3dFloat>(kernel: &[f64], target_size: usize) -> Array1<F
 // Helper Functions: Robust Noise Estimation (Mäkinen et al. 2021)
 // =============================================================================
 
-/// Estimate noise standard deviation using MAD-based robust estimation.
-/// Implements Section 3.3.2 of Mäkinen et al. (2021).
+/// Overlapping full-height segments used to model the horizontal
+/// nonstationarity of the streak noise (Mäkinen et al. 2021, Section 3.3.3).
+const SIGMA_SEGMENTS: usize = 16;
+
+/// Narrowest segment worth estimating on. Below this the MAD has too few
+/// samples per row to be stable.
+const MIN_SEGMENT_COLS: usize = 24;
+
+/// Segments quieter than this fraction of the loudest segment are air, and
+/// are excluded when reducing the profile to a single sigma.
+const ACTIVE_SEGMENT_RATIO: f64 = 0.1;
+
+/// Per-column streak sigma, following Mäkinen et al. (2021) Sections 3.3.2
+/// and 3.3.3.
 ///
-/// 1. Suppress signal: Convolve with vertical Gaussian (g_v) and horizontal High-Pass (g_h).
-/// 2. Compute MAD of the residual.
-/// 3. Scale by correction factor c.
+/// Section 3.3.2 estimates the streak amplitude as the scaled MAD of
+/// `Z (x) g_d`, where the analysis kernel `g_d = phi (x) psi` combines a
+/// column Gaussian of standard deviation `m_v / 12` (equation 26) with a
+/// `db3` horizontal high-pass. The Gaussian passes the vertically-constant
+/// streak while suppressing pixel noise; the high-pass removes the smooth
+/// object profile, leaving column-to-column variation.
 ///
-/// The correction factor calculates the ratio between the input noise sigma
-/// and the MAD of the filtered noise. For g_v (sigma=2.0) and g_h (db3),
-/// this factor is approx 3.96 (computed via simulation).
-fn estimate_noise_sigma_robust<F: Bm3dFloat>(sinogram: ArrayView2<F>) -> F {
+/// Section 3.3.3 then relaxes that single estimate to one per full-height
+/// segment, because streak variance changes across the detector. On
+/// tomography data that relaxation is not optional. A sinogram is largely
+/// air, where the streak amplitude is zero, so one MAD over the whole frame
+/// puts its median in the quiet region and reads several times too low.
+/// Measured on the project's benchmark sinogram (720 x 725, 43% air): the
+/// whole-frame estimate is 2.15e-3 against a true streak amplitude of
+/// 1.24e-2, i.e. 0.17x, while per-segment estimates over the object land
+/// between 0.99x and 1.20x of truth.
+///
+/// Returns one sigma per column. Segments overlap by half their width and a
+/// column takes the larger of the estimates covering it: under-estimating
+/// sigma silently disables the correction downstream, over-estimating only
+/// makes the gates more permissive.
+fn estimate_sigma_profile<F: Bm3dFloat>(sinogram: ArrayView2<F>) -> Vec<F> {
     let (rows, cols) = sinogram.dim();
-    if rows < 16 || cols < 16 {
-        return F::zero();
+    if rows < 16 || cols == 0 {
+        return vec![F::zero(); cols];
     }
 
-    // Step 1: Divide image into patches (e.g. 64x64) and estimate locally
-    let patch_size = 64;
-    let mut patch_sigmas = Vec::new();
-
-    for r in (0..rows.saturating_sub(patch_size)).step_by(patch_size / 2) {
-        for c in (0..cols.saturating_sub(patch_size)).step_by(patch_size / 2) {
-            let patch = sinogram.slice(s![r..r + patch_size, c..c + patch_size]);
-
-            // Apply Robust Estimator to Patch
-            let sigma = estimate_patch_sigma_internal(patch);
-            if sigma > F::zero() {
-                patch_sigmas.push(sigma);
-            }
-        }
-    }
-
-    if patch_sigmas.is_empty() {
-        return estimate_patch_sigma_internal(sinogram); // Fallback
-    }
-
-    // Sort to find the Minimum (The "Air" region noise floor)
-    // We use the absolute minimum to be 100% sure we are in air/ultra-high-SNR.
-    patch_sigmas.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-
-    // A "noise floor" this far below the data's own scale is not a noise
-    // measurement — it is float quantization residue from numerically flat
-    // background, the normal case for simulated phantoms. Taking it as the
-    // global sigma collapses the variance lock's threshold and silently turns
-    // the whole multiscale correction into a no-op (issue #133's sibling).
-    // Measured margins, full 540-slice CG-1D volume: flat-air patches sit near
-    // 3e-10 of the data range, while the quietest patch of any measured slice
-    // sits at 3.7e-4 of the range — about 2.6 decades above this cut and 3.5
-    // decades above the residue. If every patch is silent there is nothing to
-    // denoise, and the previous behaviour (return the minimum) is kept.
-    let mut lo = f64::INFINITY;
-    let mut hi = f64::NEG_INFINITY;
+    // An input with no variation carries no noise measurement. Said plainly
+    // rather than left to the arithmetic: the recursive filter below leaves
+    // about one ulp of rounding dust on a constant image, which would be
+    // reported as a noise floor.
+    let mut lo_v = f64::INFINITY;
+    let mut hi_v = f64::NEG_INFINITY;
     for v in sinogram.iter() {
         let x = v.to_f64().unwrap_or(0.0);
-        if x < lo {
-            lo = x;
+        if x < lo_v {
+            lo_v = x;
         }
-        if x > hi {
-            hi = x;
+        if x > hi_v {
+            hi_v = x;
         }
     }
-    let silence = F::from_f64_c((hi - lo).max(0.0) * SILENCE_SIGMA_RATIO);
-    patch_sigmas
-        .iter()
-        .find(|&&s| s > silence)
-        .copied()
-        .unwrap_or(patch_sigmas[0])
+    if hi_v <= lo_v {
+        return vec![F::zero(); cols];
+    }
+
+    // g_d = phi (x) psi. The column Gaussian is applied recursively: at
+    // sigma = rows / 12 an explicit kernel would be hundreds of taps wide.
+    let filtered = {
+        let smoothed = crate::noise_estimation::gaussian_filter_1d_vertical_recursive(
+            sinogram,
+            rows as f64 / 12.0,
+        );
+        let db3: Vec<F> = DB3_ANALYSIS_HI
+            .iter()
+            .map(|&x| F::from_f64_c(x))
+            .collect::<Vec<_>>();
+        convolve_1d_horizontal_internal(smoothed.view(), &db3)
+    };
+
+    // The horizontal convolution clamps at the image edge, so the outermost
+    // columns carry a boundary transient rather than a measurement. Reading
+    // them reports a nonzero noise floor for an input that is entirely flat.
+    // Measure on the interior; edge columns inherit the nearest estimate.
+    let margin = (DB3_ANALYSIS_HI.len() - 1).min(cols / 2);
+    let (lo, hi) = (margin, cols - margin);
+    if hi <= lo {
+        return vec![F::zero(); cols];
+    }
+
+    let usable = hi - lo;
+    let seg_width = (usable / SIGMA_SEGMENTS).max(MIN_SEGMENT_COLS).min(usable);
+    let step = (seg_width / 2).max(1);
+
+    let mut profile = vec![F::zero(); cols];
+    let mut start = lo;
+    loop {
+        let end = (start + seg_width).min(hi);
+        let sigma =
+            compute_mad_internal(filtered.slice(s![.., start..end])) * F::from_f64_c(MAD_TO_SIGMA);
+        let assign_from = if start == lo { 0 } else { start };
+        let assign_to = if end == hi { cols } else { end };
+        for p in profile.iter_mut().take(assign_to).skip(assign_from) {
+            if sigma > *p {
+                *p = sigma;
+            }
+        }
+        if end == hi {
+            break;
+        }
+        start += step;
+    }
+    profile
 }
 
-/// Patch sigmas at or below this fraction of the input's value range are
-/// float quantization residue, not a measured noise floor. See
-/// [`estimate_noise_sigma_robust`] for the measured margins behind the value.
-const SILENCE_SIGMA_RATIO: f64 = 1.0e-6;
-
-/// Internal 2D robust estimator for a single patch
-fn estimate_patch_sigma_internal<F: Bm3dFloat>(patch: ArrayView2<F>) -> F {
-    let (rows, cols) = patch.dim();
-    if rows < 5 || cols < 5 {
+/// Reduce a per-column sigma profile to the single value the global gates
+/// need: the median over segments that carry signal.
+///
+/// Air columns must not set this. The previous implementation took the
+/// *minimum* over 64x64 patches, deliberately hunting the air noise floor,
+/// which is how it came to report float quantization residue as the noise
+/// level and silently disable the whole correction (issue #133's sibling,
+/// PR #146). Air is the wrong place to measure a streak: the streak is
+/// multiplicative on the signal and is identically zero where there is no
+/// signal.
+fn estimate_noise_sigma_robust<F: Bm3dFloat>(sinogram: ArrayView2<F>) -> F {
+    let profile = estimate_sigma_profile(sinogram);
+    if profile.is_empty() {
         return F::zero();
     }
-
-    // Constants for Mäkinen estimator
-    let sigma_v = 2.0;
-    let radius = (4.0f64 * sigma_v).ceil() as usize;
-    let width = 2 * radius + 1;
-    let mut v_kernel = Vec::with_capacity(width);
-    let mut v_sum = 0.0;
-    for i in 0..width {
-        let x = i as f64 - radius as f64;
-        let val = (-0.5 * (x / sigma_v).powi(2)).exp();
-        v_kernel.push(F::from_f64_c(val));
-        v_sum += val;
+    let loudest = profile
+        .iter()
+        .copied()
+        .fold(F::zero(), |a, b| if b > a { b } else { a });
+    if loudest <= F::zero() {
+        return F::zero();
     }
-    let v_norm = F::from_f64_c(v_sum);
-    for k in &mut v_kernel {
-        *k /= v_norm;
+    let floor = loudest * F::from_f64_c(ACTIVE_SEGMENT_RATIO);
+    let mut active: Vec<F> = profile.into_iter().filter(|&s| s >= floor).collect();
+    if active.is_empty() {
+        return loudest;
     }
-
-    let db3_coeffs: [f64; 6] = [
-        0.03522629,
-        -0.08544127,
-        0.13501102,
-        0.45987750,
-        -0.80689151,
-        0.33267055,
-    ];
-    let h_kernel: Vec<F> = db3_coeffs.iter().map(|&x| F::from_f64_c(x)).collect();
-
-    let smoothed = gaussian_filter_1d_vertical_internal(patch, &v_kernel);
-    let filtered = convolve_1d_horizontal_internal(smoothed.view(), &h_kernel);
-    let mad = compute_mad_internal(filtered.view());
-    mad * F::from_f64_c(3.96)
+    let mid = active.len() / 2;
+    active.select_nth_unstable_by(mid, |a, b| {
+        a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)
+    });
+    active[mid]
 }
 
-fn gaussian_filter_1d_vertical_internal<F: Bm3dFloat>(
-    data: ArrayView2<F>,
-    kernel: &[F],
-) -> Array2<F> {
-    let (rows, cols) = data.dim();
-    let k_len = kernel.len();
-    let radius = k_len / 2;
-    let mut output = Array2::zeros((rows, cols));
+/// Scaling that turns a median absolute deviation into a standard deviation
+/// for normally distributed data (Mäkinen et al. equation 26).
+const MAD_TO_SIGMA: f64 = 1.4826;
 
-    for c in 0..cols {
-        for r in 0..rows {
-            let mut sum = F::zero();
-            for (k, &k_val) in kernel.iter().enumerate() {
-                let k_idx = k as isize - radius as isize;
-                let src_r = (r as isize + k_idx).clamp(0, (rows - 1) as isize);
-                sum += data[[src_r as usize, c]] * k_val;
-            }
-            output[[r, c]] = sum;
-        }
-    }
-    output
-}
+/// Daubechies-3 decomposition high-pass, the `psi` of the analysis kernel.
+const DB3_ANALYSIS_HI: [f64; 6] = [
+    0.03522629,
+    -0.08544127,
+    0.13501102,
+    0.45987750,
+    -0.80689151,
+    0.33267055,
+];
 
 fn convolve_1d_horizontal_internal<F: Bm3dFloat>(data: ArrayView2<F>, kernel: &[F]) -> Array2<F> {
     let (rows, cols) = data.dim();
@@ -816,10 +835,14 @@ pub fn multiscale_bm3d_streak_removal_with_plans<F: Bm3dFloat>(
     // Compute denoise sizes for PSD generation
     let denoise_sizes: Vec<usize> = pyramid_orig.iter().map(|arr| arr.ncols()).collect();
 
-    // Generate PSD shapes for each scale
-    // Note: Currently unused as we use the standard streak mode PSD construction.
-    // Future enhancement: pass per-scale PSD shapes to BM3D for full fidelity.
-    let _psd_shapes = generate_psd_shapes::<F>(&denoise_sizes);
+    // Horizontal noise power profile per scale (Mäkinen et al. equations 19
+    // and 25). The coarsest level's noise is still horizontally white, so its
+    // shape is flat; every finer level's noise has been through debinning and
+    // carries the residual kernel's spectrum instead. Passing these to BM3D is
+    // what makes the extra scales do anything -- with one shared white model,
+    // every level filters as if it were the coarsest and adding scales changes
+    // nothing.
+    let psd_shapes = generate_psd_shapes::<F>(&denoise_sizes);
 
     // === NOISE ESTIMATION STRATEGY ===
     // We stick to the robust estimator at each scale.
@@ -913,12 +936,13 @@ pub fn multiscale_bm3d_streak_removal_with_plans<F: Bm3dFloat>(
             scale_config.sigma_random = estimated_sigma;
         }
 
-        // Denoise normalized image
-        let den_normalized = bm3d_ring_artifact_removal_with_plans(
+        // Denoise normalized image with this level's own noise spectrum.
+        let den_normalized = crate::orchestration::bm3d_ring_artifact_removal_with_psd(
             img_normalized.view(),
             RingRemovalMode::Streak,
             &scale_config,
             plans,
+            psd_shapes.get(scale).map(|p| p.view()),
         )?;
 
         // === DENORMALIZE immediately after BM3D ===
@@ -1583,6 +1607,87 @@ mod tests {
         assert!(
             f64::from(sigma) > 1.0e-6 * f64::from(hi - lo),
             "estimate is quantization residue, not a noise floor: {sigma}"
+        );
+    }
+
+    /// The automatic sigma must land near the streak amplitude actually
+    /// present, not orders of magnitude below it.
+    ///
+    /// The previous estimator tiled the image into 64x64 patches and took the
+    /// MINIMUM, deliberately hunting an "air noise floor". A sinogram is
+    /// mostly air and the streak is multiplicative on the signal, so the
+    /// quietest patch measures nothing and the estimate collapsed: on the
+    /// project's benchmark sinogram it returned 3.87e-6 against a true streak
+    /// amplitude of 1.24e-2, about 3200x too low, which left every gate
+    /// downstream shut. Raising a floor under the minimum (PR #146) moved the
+    /// estimate to the next-quietest patch without making it a measurement of
+    /// the streak.
+    ///
+    /// A ratio test rather than an absolute one: the estimator measures a
+    /// vertically-constant streak, so it should recover the amplitude it was
+    /// given to within a small factor.
+    #[test]
+    fn auto_sigma_tracks_the_streak_amplitude() {
+        let (rows, cols) = (128usize, 256usize);
+        let amplitude = 0.05f32;
+        let mut img = Array2::<f32>::zeros((rows, cols));
+        for c in 0..cols {
+            // Deterministic alternating per-column offset: vertically constant,
+            // horizontally white, which is the paper's basic streak model.
+            let offset = if c % 2 == 0 { amplitude } else { -amplitude };
+            for r in 0..rows {
+                // A smooth object so the estimator has signal to reject.
+                let object = 0.5 + 0.2 * ((r as f32) / (rows as f32)).sin();
+                img[[r, c]] = object + offset;
+            }
+        }
+
+        let sigma = f64::from(estimate_noise_sigma_robust(img.view()));
+        let truth = f64::from(amplitude);
+        assert!(
+            sigma > truth / 3.0 && sigma < truth * 3.0,
+            "auto sigma {sigma:.3e} is not within 3x of the streak amplitude {truth:.3e}"
+        );
+    }
+
+    /// Air must not set the noise level: the streak is identically zero
+    /// where there is no signal, so an empty margin carries no information
+    /// about its amplitude.
+    ///
+    /// A property guard rather than a regression reproduction. The previous
+    /// estimator also passes this particular input, because PR #146's silence
+    /// floor happens to reject air this quiet; it failed on real data, where
+    /// the quietest patch sits just above that floor while still measuring
+    /// nothing. `auto_sigma_tracks_the_streak_amplitude` is the test that
+    /// fails against the previous estimator.
+    #[test]
+    fn auto_sigma_ignores_empty_margins() {
+        let (rows, cols, margin) = (128usize, 256usize, 80usize);
+        let amplitude = 0.05f32;
+        let mut with_air = Array2::<f32>::zeros((rows, cols));
+        // Tiny-but-nonzero air, as a real detector and every simulated phantom
+        // produce. Exactly-zero air does not reproduce the failure, because
+        // the previous estimator already discarded exactly-zero patches; it
+        // was the almost-silent ones that it happily reported as the noise
+        // level.
+        for c in 0..cols {
+            for r in 0..rows {
+                with_air[[r, c]] = 1.0e-8 + 1.0e-9 * ((r + c) % 3) as f32;
+            }
+        }
+        for c in margin..(cols - margin) {
+            let offset = if c % 2 == 0 { amplitude } else { -amplitude };
+            for r in 0..rows {
+                with_air[[r, c]] = 0.5 + offset;
+            }
+        }
+
+        let sigma = f64::from(estimate_noise_sigma_robust(with_air.view()));
+        let truth = f64::from(amplitude);
+        assert!(
+            sigma > truth / 3.0,
+            "empty margins dragged the estimate to {sigma:.3e}, far under the \
+             streak amplitude {truth:.3e} present in the object"
         );
     }
 
