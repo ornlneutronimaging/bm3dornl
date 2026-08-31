@@ -382,25 +382,17 @@ impl Bm3dParameters {
                     ui.label("Patch Size:").on_hover_text(
                         "Size of patches for block matching.\n\
                          Larger = smoother but slower.\n\
-                         Smaller = preserves fine details.",
+                         Smaller = preserves fine details.\n\
+                         Any size works; 7 or 8 recommended.\n\
+                         The 8x8 fast mode only applies at patch size 8.",
                     );
 
-                    egui::ComboBox::from_id_salt("patch_size")
-                        .selected_text(format!("{}", self.patch_size))
-                        .show_ui(ui, |ui| {
-                            for size in [4, 8, 16] {
-                                if ui
-                                    .selectable_value(
-                                        &mut self.patch_size,
-                                        size,
-                                        format!("{}", size),
-                                    )
-                                    .changed()
-                                {
-                                    changed = true;
-                                }
-                            }
-                        });
+                    if ui
+                        .add(egui::Slider::new(&mut self.patch_size, 4..=16))
+                        .changed()
+                    {
+                        changed = true;
+                    }
                 });
 
                 // Search window
@@ -469,5 +461,27 @@ impl Bm3dParameters {
         }
 
         changed
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Any patch size the slider offers must flow through to the core config
+    /// unaltered, with the stride derived as half the patch size.
+    #[test]
+    fn arbitrary_patch_size_maps_to_config() {
+        let mut params = Bm3dParameters::new();
+        params.patch_size = 7;
+        let config = params.to_config();
+        assert_eq!(config.patch_size, 7);
+        assert_eq!(config.step_size, 3); // patch_size / 2, integer division
+    }
+
+    #[test]
+    fn default_patch_size_matches_core_default() {
+        let params = Bm3dParameters::new();
+        assert_eq!(params.patch_size, Bm3dConfig::<f32>::default().patch_size);
     }
 }
