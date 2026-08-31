@@ -138,10 +138,17 @@ pub fn load_hdf5_dataset(path: &Path, dataset_path: &str) -> Result<Volume3D, Da
     ))
 }
 
-/// Load a 3D HDF5 dataset slice by slice, counting the slices done into
-/// `done` (and the total into `total` once the shape is known) so the UI
-/// can show a progress bar. Falls back to the whole-array reader when the
-/// slice-wise f32 read is not possible for the dataset's type.
+/// Load a 3D HDF5 dataset in chunk-aligned blocks of slices, counting the
+/// slices done into `done` (and the total into `total` once the shape is
+/// known) so the UI can show a progress bar. Falls back to the whole-array
+/// reader when the block-wise f32 read is not possible for the dataset's
+/// type.
+///
+/// Block starts are aligned to multiples of the dataset's chunk depth (the
+/// final block may be shorter when the slice count is not a multiple):
+/// compressed chunks span several slices, so a slice-by-slice read
+/// decompresses every chunk once per slice it covers, while chunk-aligned
+/// reads decompress each chunk exactly once and load at bulk-read speed.
 fn load_hdf5_dataset_with_progress(
     path: &Path,
     dataset_path: &str,
@@ -163,21 +170,33 @@ fn load_hdf5_dataset_with_progress(
     let (n, h, w) = (*n, *h, *w);
     total.store(n, Ordering::Relaxed);
 
+    // Smallest multiple of the chunk depth that is at least 32 slices, so
+    // the loop also stays short for finely chunked or contiguous datasets.
+    let chunk_depth = dataset
+        .chunk()
+        .and_then(|c| c.first().copied())
+        .unwrap_or(1)
+        .max(1);
+    let block = chunk_depth * 32usize.div_ceil(chunk_depth);
+
     let mut data = Array3::<f32>::zeros((n, h, w));
-    for i in 0..n {
-        let slice: Result<ndarray::Array2<f32>, _> = dataset.read_slice(ndarray::s![i, .., ..]);
-        match slice {
-            Ok(slice) => data.slice_mut(ndarray::s![i, .., ..]).assign(&slice),
+    let mut i0 = 0usize;
+    while i0 < n {
+        let i1 = (i0 + block).min(n);
+        let slab: Result<Array3<f32>, _> = dataset.read_slice(ndarray::s![i0..i1, .., ..]);
+        match slab {
+            Ok(slab) => data.slice_mut(ndarray::s![i0..i1, .., ..]).assign(&slab),
             // Some dtypes cannot be read as f32 slices — fall back to the
             // typed whole-array reader (the bar jumps to the end).
-            Err(_) if i == 0 => {
+            Err(_) if i0 == 0 => {
                 let volume = load_hdf5_dataset(path, dataset_path)?;
                 done.store(n, Ordering::Relaxed);
                 return Ok(volume);
             }
             Err(e) => return Err(DataLoadError::Hdf5Error(e.to_string())),
         }
-        done.fetch_add(1, Ordering::Relaxed);
+        done.fetch_add(i1 - i0, Ordering::Relaxed);
+        i0 = i1;
     }
     Ok(Volume3D::new(data))
 }
@@ -623,5 +642,47 @@ mod tests {
         let mut files = vec!["IMG_2.tif", "img_1.tif", "Img_10.tif"];
         files.sort_by(|a, b| natural_compare(a, b));
         assert_eq!(files, vec!["img_1.tif", "IMG_2.tif", "Img_10.tif"]);
+    }
+
+    /// The block-wise progress loader must return exactly what the
+    /// whole-array reader returns — including when the slice count is not a
+    /// multiple of the block — and count every slice into the progress
+    /// counter. Uses a gzip-chunked dataset whose chunks span several
+    /// slices, the layout the blocks are aligned to.
+    #[test]
+    fn progress_loader_matches_bulk_reader_on_chunked_file() {
+        // Unique per process so concurrent test runs cannot race on the file.
+        let dir =
+            std::env::temp_dir().join(format!("bm3d_loader_block_test_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("chunked.h5");
+        let _ = std::fs::remove_file(&path);
+
+        let (n, h, w) = (71usize, 6usize, 5usize); // 71 = 3*19 + 14: partial tail block
+        let data: Vec<f32> = (0..n * h * w).map(|v| v as f32 * 0.25).collect();
+        let arr = Array3::from_shape_vec((n, h, w), data).unwrap();
+        {
+            let file = H5File::create(&path).unwrap();
+            file.new_dataset::<f32>()
+                .shape((n, h, w))
+                .chunk((19, h, w))
+                .deflate(4)
+                .create("vol")
+                .unwrap()
+                .write(&arr)
+                .unwrap();
+        }
+
+        let done = AtomicUsize::new(0);
+        let total = AtomicUsize::new(0);
+        let via_blocks = load_hdf5_dataset_with_progress(&path, "vol", &done, &total).unwrap();
+        let via_bulk = load_hdf5_dataset(&path, "vol").unwrap();
+
+        assert_eq!(total.load(Ordering::Relaxed), n);
+        assert_eq!(done.load(Ordering::Relaxed), n);
+        assert_eq!(via_blocks.raw_data(), via_bulk.raw_data());
+        assert_eq!(via_blocks.raw_data(), &arr);
+
+        let _ = std::fs::remove_file(&path);
     }
 }
