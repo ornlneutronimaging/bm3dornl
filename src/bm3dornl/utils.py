@@ -18,15 +18,28 @@ logger = logging.getLogger(__name__)
 
 def estimate_noise_sigma(sinogram: np.ndarray) -> float:
     """
-    Estimate noise standard deviation using MAD-based robust estimation.
+    Estimate the standard deviation of vertical streak noise in a sinogram.
 
-    This implements sigma estimation from Makinen et al. (2021), optimized for
-    detecting vertical streak noise in sinograms. The image is filtered to isolate
-    vertical streaks (vertical Gaussian + horizontal High-pass), then MAD (Median
-    Absolute Deviation) is computed and scaled.
+    This implements the sigma estimation from Makinen et al. (2021). The image
+    is smoothed with a tall vertical Gaussian (sigma = height / 12), which
+    passes column-wise (vertical streak) structure but suppresses pixel-level
+    random noise, then high-pass filtered horizontally (Daubechies-3) to
+    isolate column-to-column variation. The scaled median absolute deviation
+    (1.4826 * MAD) of the filtered result is returned.
 
-    This is primarily a diagnostic tool for advanced users who want to understand
-    the noise characteristics of their data or tune denoising parameters.
+    The returned value is therefore the amplitude of vertical streaks — the
+    sinogram signature of ring artifacts — not the pixel-level standard
+    deviation of the image. For purely independent (i.i.d.) pixel noise the
+    vertical smoothing removes most of what the filter measures, and the
+    result lands far below the pixel-level sigma (roughly 8x smaller for a
+    256-row image; the taller the image, the stronger the suppression).
+
+    This is the same estimator the BM3D pipeline runs internally to fill in
+    ``sigma_random`` when it is set to 0.0 (in the streak-removal modes that
+    estimate is taken after the streak profile has been subtracted; in
+    generic mode, on the normalized input). As a standalone diagnostic it is
+    useful for judging streak strength or for choosing ``sigma_random``
+    manually.
 
     Parameters
     ----------
@@ -36,15 +49,18 @@ def estimate_noise_sigma(sinogram: np.ndarray) -> float:
     Returns
     -------
     float
-        Estimated noise standard deviation (sigma).
+        Estimated standard deviation of the vertical streak noise.
 
     Examples
     --------
     >>> import numpy as np
     >>> from bm3dornl.utils import estimate_noise_sigma
-    >>> sinogram = np.random.randn(256, 512).astype(np.float32) * 0.1
-    >>> sigma = estimate_noise_sigma(sinogram)
-    >>> print(f"Estimated sigma: {sigma:.4f}")  # Should be close to 0.1
+    >>> rng = np.random.default_rng(42)
+    >>> clean = np.ones((256, 512), dtype=np.float32)
+    >>> streaks = rng.normal(0.0, 0.2, size=(1, 512)).astype(np.float32)
+    >>> sigma = estimate_noise_sigma(clean + streaks)  # true streak sigma: 0.2
+    >>> 0.15 < sigma < 0.25
+    True
     """
     if sinogram.ndim != 2:
         raise ValueError(f"Input must be 2D array, got shape {sinogram.shape}")
