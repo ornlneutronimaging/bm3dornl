@@ -793,15 +793,19 @@ pub fn fourier_svd_removal_py_f64<'py>(
 // Noise Estimation
 // ============================================================================
 
-/// Estimate noise standard deviation using MAD-based robust estimation (f32).
+/// Estimate the standard deviation of vertical streak noise (f32).
 ///
-/// This implements sigma estimation from Mäkinen et al. (2021), optimized for
-/// detecting vertical streak noise in sinograms. The image is filtered to isolate
-/// vertical streaks (vertical Gaussian + horizontal High-pass), then MAD (Median
-/// Absolute Deviation) is computed and scaled.
+/// This implements the sigma estimation from Mäkinen et al. (2021). The image
+/// is smoothed with a tall vertical Gaussian (sigma = height / 12), which
+/// passes column-wise (vertical streak) structure but suppresses pixel-level
+/// random noise, then high-pass filtered horizontally (Daubechies-3); the
+/// scaled MAD (1.4826) of the result is returned.
 ///
-/// This is primarily a diagnostic tool for advanced users who want to understand
-/// the noise characteristics of their data or tune denoising parameters.
+/// The returned value is the amplitude of vertical streaks — the sinogram
+/// signature of ring artifacts — not the pixel-level standard deviation of
+/// the image. For purely i.i.d. pixel noise it lands far below the pixel
+/// sigma (roughly 8x smaller for a 256-row image). The BM3D pipeline uses
+/// this estimator to fill in `sigma_random` when it is set to 0.0.
 ///
 /// Parameters
 /// ----------
@@ -811,7 +815,7 @@ pub fn fourier_svd_removal_py_f64<'py>(
 /// Returns
 /// -------
 /// float
-///     Estimated noise standard deviation (sigma).
+///     Estimated standard deviation of the vertical streak noise.
 #[pyfunction]
 #[pyo3(name = "estimate_noise_sigma_rust")]
 pub fn estimate_noise_sigma_py(sinogram: PyReadonlyArray2<'_, f32>) -> PyResult<f32> {

@@ -12,6 +12,10 @@
 
 - Fourier-SVD output changes on flat-background inputs as a consequence of the fix above. Any previously recorded Fourier-SVD quality figures for such inputs were measured on an essentially unmodified array and should be regenerated. On the benchmark phantom, SSIM against ground truth rises from 0.9510 — the unprocessed input's own score — to 0.9737.
 
+### Documentation
+
+- `estimate_noise_sigma`: the docstring claimed the function estimates the image's noise standard deviation and demonstrated it on i.i.d. Gaussian noise, promising a result "close to 0.1" that the function does not produce (it returns ~0.013 there). The estimator measures the amplitude of vertical streaks — its vertical Gaussian pre-filter deliberately suppresses pixel-level i.i.d. noise — and is the same estimator the pipeline uses to fill in `sigma_random` when it is set to 0.0. The Python docstring, the Rust doc comments, and the crate README now state that contract, the example constructs actual streak noise, and new tests pin both behaviours (#134). No behaviour changed.
+
 ### Known limitation
 
 - When a sinogram's background is both the majority of columns and carries noise, the MAD scale reports that noise floor, and streaks larger than the background noise are still under-corrected. This regime is unchanged by the fix (outputs remain byte-identical to the previous release there); correcting it needs a reliable separation of sample columns from background columns, which is follow-up work.
