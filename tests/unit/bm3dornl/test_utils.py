@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Unit tests for the plotting utilities."""
+"""Unit tests for diagnostic utilities."""
 
 import numpy as np
 import pytest
-from bm3dornl.plot import compute_cdf
+from bm3dornl.utils import compute_cdf
 
 
 def test_compute_cdf():

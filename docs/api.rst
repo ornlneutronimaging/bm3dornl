@@ -38,11 +38,3 @@ Utilities for generating synthetic test data with realistic ring artifacts.
    :members:
    :undoc-members:
    :show-inheritance:
-
-Plotting Utilities
-------------------
-
-.. automodule:: bm3dornl.plot
-   :members:
-   :undoc-members:
-   :show-inheritance:
