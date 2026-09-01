@@ -1012,16 +1012,41 @@ pub fn multiscale_bm3d_streak_removal_with_plans<F: Bm3dFloat>(
     // in the logarithm. Floor at the input's own smallest positive value so
     // the transform is exact wherever the data is positive; zeros and
     // negatives (which a log-domain model cannot represent) clamp to that
-    // floor. If nothing is positive there is no valid log domain — process
-    // the data as given.
+    // floor.
+    //
+    // Input with no positive values at all is not the linear transmission
+    // data this entry documents. Two cases, split deliberately: a CONSTANT
+    // non-positive input (an all-zero padded or blank slice, routine in batch
+    // stacks) has nothing to denoise and passes through unchanged; a VARYING
+    // one is almost certainly data that was already log-transformed by a
+    // caller who forgot `log_domain_input = true`, and silently processing it
+    // in a guessed domain — what this branch previously did — returns output
+    // in the wrong domain with no warning. Fail loudly instead and name the
+    // flag.
     let mut floor = F::infinity();
+    let mut lo = F::infinity();
+    let mut hi = F::neg_infinity();
     for &v in sinogram.iter() {
         if v > F::zero() && v < floor {
             floor = v;
         }
+        if v < lo {
+            lo = v;
+        }
+        if v > hi {
+            hi = v;
+        }
     }
     if !floor.is_finite() {
-        return multiscale_denoise_log_domain(sinogram, config, plans);
+        if hi <= lo {
+            return Ok(sinogram.to_owned());
+        }
+        return Err(
+            "multiscale streak removal expects linear transmission data with at least one \
+             positive value; if the input is already log-transformed, set \
+             MultiscaleConfig::log_domain_input = true"
+                .to_string(),
+        );
     }
 
     let log_floor = floor.ln();
@@ -1748,6 +1773,40 @@ mod tests {
         let output = result.unwrap();
         assert_eq!(output.dim(), image.dim());
         assert!(output.iter().all(|&x| x.is_finite()));
+    }
+
+    /// Non-positive input contract (Copilot review on #152): a constant
+    /// non-positive input — an all-zero padded or blank slice, routine in
+    /// batch stacks — passes through unchanged, while a VARYING input with no
+    /// positive values (pre-logged data whose caller forgot
+    /// `log_domain_input = true`) must fail loudly instead of being silently
+    /// processed in a guessed domain and returned without the exp round-trip.
+    #[test]
+    fn non_positive_input_blank_passes_varying_errors() {
+        let cfg = MultiscaleConfig::<f32>::default();
+
+        let blank = Array2::<f32>::zeros((64, 128));
+        let out = multiscale_bm3d_streak_removal(blank.view(), &cfg).unwrap();
+        assert_eq!(out, blank, "a blank slice must pass through unchanged");
+
+        // Varying but nowhere positive: the shape of accidentally pre-logged
+        // transmission data (ln of (0,1) data is negative everywhere).
+        let logged_by_mistake = random_matrix(64, 128, 777).mapv(|v| (v * 0.5 + 0.25).ln());
+        assert!(logged_by_mistake.iter().all(|&v| v <= 0.0));
+        let err = multiscale_bm3d_streak_removal(logged_by_mistake.view(), &cfg)
+            .expect_err("varying non-positive input must be rejected");
+        assert!(
+            err.contains("log_domain_input"),
+            "the error must name the opt-in flag, got: {err}"
+        );
+
+        // And the same data processes fine when the caller declares its domain.
+        let flagged = MultiscaleConfig::<f32> {
+            log_domain_input: true,
+            ..MultiscaleConfig::default()
+        };
+        multiscale_bm3d_streak_removal(logged_by_mistake.view(), &flagged)
+            .expect("declared log-domain input must be accepted");
     }
 
     /// The log/exp shell is exactly a change of domain: feeding the entry
