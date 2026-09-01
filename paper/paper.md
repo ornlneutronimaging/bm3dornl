@@ -61,22 +61,22 @@ The multiscale variant implements the pyramid approach from M√§kinen et al. [@m√
 ![Benchmark input data. (a) Input sinogram with simulated ring artifacts. (b) Ground truth (clean sinogram). The dashed rectangle indicates the crop region shown in \autoref{fig:results}.\label{fig:input}](figure1_input.png){ width=100% }
 
 **Speed comparison:** \autoref{fig:metrics}(a) shows processing times (n=100 runs on Linux x86_64).
-Fourier-SVD is the fastest method at 0.017 seconds, achieving 2300$\times$ speedup over bm3d-streak-removal (39.9 seconds).
-The BM3D-based methods span a performance range: standard BM3DORNL processes sinograms in 0.078 seconds (511$\times$ faster than bm3d-streak-removal), while multiscale BM3DORNL takes 0.475 seconds (84$\times$ faster) due to pyramid processing.
-TomoPy methods achieve processing times of 0.28--0.35 seconds.
+Fourier-SVD is the fastest method at 0.017 seconds, achieving 1900$\times$ speedup over bm3d-streak-removal (31.8 seconds).
+The BM3D-based methods span a performance range: standard BM3DORNL processes sinograms in 0.094 seconds (340$\times$ faster than bm3d-streak-removal), while multiscale BM3DORNL takes 0.389 seconds (82$\times$ faster) due to pyramid processing.
+TomoPy methods achieve processing times of 0.22--0.29 seconds.
 Cross-platform performance differs substantially: TomoPy runs 2.5--3$\times$ slower on Apple Silicon than Linux x86_64 (likely due to unoptimized C extensions), whereas BM3DORNL runs at comparable speeds (within 10%) across platforms due to its Rust backend.
 
 **Quality analysis:** \autoref{fig:results} shows cropped results from all eight methods with their difference images (result minus ground truth).
 The benchmark reveals that quality metrics alone do not tell the full story.
 TomoPy SF achieves the highest SSIM (0.987, see \autoref{fig:metrics}(b)), but difference image analysis shows residual vertical stripes in its output.
 This occurs because SSIM uses local windows ($7\times7$ or $11\times11$ pixels), and narrow vertical stripes affect few pixels per window.
-Notably, all BM3DORNL variants achieve excellent SSIM scores (0.943--0.951), with both multiscale BM3DORNL and Fourier-SVD reaching 0.951.
+Notably, all BM3DORNL variants achieve SSIM scores of 0.943--0.976, with multiscale BM3DORNL reaching 0.976 -- above the reference bm3d-streak-removal implementation (0.967).
 Fourier-SVD accomplishes this at 0.017 seconds, demonstrating that aggressive artifact removal and high-quality reconstruction are achievable without computationally expensive multi-scale processing.
 The difference images reveal that all BM3DORNL variants produce clean vertical patterns, indicating successful artifact removal, while TomoPy methods leave faint residual artifacts.
 
 ![Method comparison. Top row: Cropped results from each method with processing times. Bottom row: Difference images (result minus ground truth) using a zero-centered RdBu colormap---blue indicates artifact removal, red indicates added artifacts. Data from Linux x86_64.\label{fig:results}](figure2_results.png){ width=100% }
 
-![Performance metrics (Linux x86_64, n=100 runs). (a) Processing time comparison on linear scale, showing Fourier-SVD's 2300$\times$ speedup and standard BM3DORNL's 511$\times$ speedup over bm3d-streak-removal. (b) Quality metrics (PSNR vs SSIM) showing trade-offs between methods. BM3DORNL variants (blue/cyan), TomoPy (orange), bm3d-streak-removal (green).\label{fig:metrics}](figure3_metrics.png){ width=100% }
+![Performance metrics (Linux x86_64, n=100 runs). (a) Processing time comparison on linear scale, showing Fourier-SVD's 1900$\times$ speedup and standard BM3DORNL's 340$\times$ speedup over bm3d-streak-removal. (b) Quality metrics (PSNR vs SSIM) showing trade-offs between methods. BM3DORNL variants (blue/cyan), TomoPy (orange), bm3d-streak-removal (green).\label{fig:metrics}](figure3_metrics.png){ width=100% }
 
 **Platform support:** bm3d-streak-removal is unavailable on Apple Silicon (x86_64 binaries only), incompatible with Python 3.11+, and restricted to non-commercial use.
 BM3DORNL provides native performance on all platforms, supports Python 3.12+, and uses the MIT license for unrestricted commercial use.
@@ -112,8 +112,8 @@ At 0.08 seconds per sinogram, scientists can explore parameter space interactive
 # Research Impact
 
 BM3DORNL is being integrated into processing pipelines at the VENUS and MARS beamlines at Oak Ridge National Laboratory.
-The library provides multiple performance tiers: Fourier-SVD enables real-time parameter exploration at 0.017 seconds per sinogram (2300$\times$ faster than bm3d-streak-removal), standard BM3DORNL offers robust denoising at 0.078 seconds (511$\times$ speedup), and multiscale BM3DORNL provides maximum quality at 0.475 seconds (84$\times$ speedup).
-For batch processing, a 1000-sinogram dataset that would take 11 hours with bm3d-streak-removal completes in 17 seconds (Fourier-SVD), 78 seconds (standard BM3DORNL), or 8 minutes (multiscale BM3DORNL).
+The library provides multiple performance tiers: Fourier-SVD enables real-time parameter exploration at 0.017 seconds per sinogram (1900$\times$ faster than bm3d-streak-removal), standard BM3DORNL offers robust denoising at 0.094 seconds (340$\times$ speedup), and multiscale BM3DORNL provides the highest structural fidelity at 0.389 seconds (82$\times$ speedup).
+For batch processing, a 1000-sinogram dataset that would take 9 hours with bm3d-streak-removal completes in 17 seconds (Fourier-SVD), 94 seconds (standard BM3DORNL), or 6.5 minutes (multiscale BM3DORNL).
 
 The hybrid Rust-Python architecture demonstrates a modern approach to scientific software development: Rust provides memory safety and performance portability (single codebase compiles natively to arm64 and x86_64), while Python ensures integration with the NumPy/SciPy ecosystem.
 This pattern is increasingly valuable as the scientific computing community diversifies hardware platforms.

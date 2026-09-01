@@ -8,6 +8,8 @@ Produces three separate figures:
 - Figure 3: Metrics (Processing time + PSNR vs SSIM)
 """
 
+import csv
+
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.gridspec import GridSpec
@@ -45,17 +47,57 @@ METHODS = [
     {"key": "bm3d_streak", "name": "bm3d-streak\n-removal", "color": "#2ca02c", "file": "result_bm3d-streak-removal.npy"},
 ]
 
-# Timing and metrics data (from consolidated_results.csv, v0.8.1 benchmark)
-METRICS = {
-    "bm3dornl_streak": {"time": 0.078, "std": 0.006, "psnr": 39.40, "ssim": 0.9431},
-    "bm3dornl_generic": {"time": 0.074, "std": 0.007, "psnr": 35.10, "ssim": 0.9476},
-    "bm3dornl_multiscale": {"time": 0.475, "std": 0.018, "psnr": 34.72, "ssim": 0.9510},
-    "Fourier_SVD": {"time": 0.017, "std": 0.001, "psnr": 34.72, "ssim": 0.9510},
-    "TomoPy_FW": {"time": 0.317, "std": 0.011, "psnr": 20.63, "ssim": 0.5840},
-    "TomoPy_SF": {"time": 0.276, "std": 0.008, "psnr": 42.01, "ssim": 0.9868},
-    "TomoPy_BSD": {"time": 0.346, "std": 0.011, "psnr": 42.86, "ssim": 0.9829},
-    "bm3d_streak": {"time": 39.878, "std": 0.106, "psnr": 43.79, "ssim": 0.9670},
+# Timing and metrics data, read from the benchmark CSVs so the figures cannot
+# drift from the measurements. Regenerate those CSVs with:
+#   cd study && pixi run benchmark
+#   cd study/bm3d_streak_test && pixi run run
+#   cd study && pixi run visualize
+# Maps the method name as written in the CSVs to the METHODS key above.
+CSV_NAME_TO_KEY = {
+    "bm3dornl (streak)": "bm3dornl_streak",
+    "bm3dornl (generic)": "bm3dornl_generic",
+    "bm3dornl (multiscale)": "bm3dornl_multiscale",
+    "Fourier-SVD": "Fourier_SVD",
+    "TomoPy FW (Münch)": "TomoPy_FW",
+    "TomoPy SF (Vo)": "TomoPy_SF",
+    "TomoPy BSD (sort)": "TomoPy_BSD",
+    "bm3d-streak-removal": "bm3d_streak",
 }
+
+
+def load_metrics():
+    """Read benchmark metrics from the study CSVs at full precision.
+
+    Reads data/metrics.csv (main suite) and data/bm3d_streak_metrics.csv (the
+    closed-source comparator, measured in its own environment). Raises if any
+    method in METHODS has no row, so a stale or partial benchmark fails loudly
+    instead of silently publishing outdated numbers.
+    """
+    metrics = {}
+    for csv_name in ("metrics.csv", "bm3d_streak_metrics.csv"):
+        path = DATA_DIR / csv_name
+        if not path.exists():
+            raise FileNotFoundError(
+                f"{path} not found - run the benchmark first (see comment above)."
+            )
+        with open(path, encoding="utf-8") as handle:
+            for row in csv.DictReader(handle):
+                key = CSV_NAME_TO_KEY.get(row["method"])
+                if key is None:
+                    continue
+                metrics[key] = {
+                    "time": float(row["time_mean"]),
+                    "std": float(row["time_std"]),
+                    "psnr": float(row["psnr"]),
+                    "ssim": float(row["ssim"]),
+                }
+    missing = [m["key"] for m in METHODS if m["key"] not in metrics]
+    if missing:
+        raise KeyError(f"No benchmark row for: {', '.join(missing)}")
+    return metrics
+
+
+METRICS = load_metrics()
 
 # Marker styles for scatter plot
 MARKERS = {

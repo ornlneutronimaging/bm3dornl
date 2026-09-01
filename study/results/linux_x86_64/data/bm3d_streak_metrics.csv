@@ -1,2 +1,2 @@
 method,time_mean,time_std,psnr,ssim
-bm3d-streak-removal,31.831,0.074,43.79,0.9670
+bm3d-streak-removal,31.813,0.058,43.79,0.9670
