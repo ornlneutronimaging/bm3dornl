@@ -288,29 +288,29 @@ fn construct_psd<F: Bm3dFloat>(
             if n == 0 {
                 vec![F::one(); patch_size]
             } else {
-                let mut gains = Vec::with_capacity(patch_size);
+                // The profile is a power spectrum (|FFT|^2, see
+                // generate_psd_shapes) and sigma_psd holds amplitudes that
+                // are squared back into a variance downstream. Normalize in
+                // the POWER domain — unit mean power, then square root —
+                // so the profile shapes the variance without rescaling its
+                // average level: normalizing the amplitudes instead would
+                // inflate mean variance by mean(P)/mean(sqrt(P))^2 for any
+                // non-flat profile (Jensen), moving every threshold.
+                let mut powers = Vec::with_capacity(patch_size);
                 for x in 0..patch_size {
                     // Circular frequency in cycles/pixel, mapped onto the
                     // profile's own circular grid.
                     let freq = x.min(patch_size - x) as f64 / patch_size as f64;
                     let idx = ((freq * n as f64).round() as usize).min(n / 2);
-                    // The profile is a power spectrum (|FFT|^2, see
-                    // generate_psd_shapes); sigma_psd holds amplitudes and is
-                    // squared again into a variance downstream, so take the
-                    // square root here or the spectral shape enters the
-                    // variance with twice the intended exponent.
-                    gains.push(profile[idx].max(F::zero()).sqrt());
+                    powers.push(profile[idx].max(F::zero()));
                 }
                 let mut sum = F::zero();
-                for g in &gains {
-                    sum += *g;
+                for p in &powers {
+                    sum += *p;
                 }
                 if sum > F::zero() {
-                    let mean = sum / F::usize_as(patch_size);
-                    for g in &mut gains {
-                        *g /= mean;
-                    }
-                    gains
+                    let mean_power = sum / F::usize_as(patch_size);
+                    powers.iter().map(|&p| (p / mean_power).sqrt()).collect()
                 } else {
                     vec![F::one(); patch_size]
                 }
