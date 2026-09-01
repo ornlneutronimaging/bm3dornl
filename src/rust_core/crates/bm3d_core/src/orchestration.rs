@@ -294,7 +294,12 @@ fn construct_psd<F: Bm3dFloat>(
                     // profile's own circular grid.
                     let freq = x.min(patch_size - x) as f64 / patch_size as f64;
                     let idx = ((freq * n as f64).round() as usize).min(n / 2);
-                    gains.push(profile[idx]);
+                    // The profile is a power spectrum (|FFT|^2, see
+                    // generate_psd_shapes); sigma_psd holds amplitudes and is
+                    // squared again into a variance downstream, so take the
+                    // square root here or the spectral shape enters the
+                    // variance with twice the intended exponent.
+                    gains.push(profile[idx].max(F::zero()).sqrt());
                 }
                 let mut sum = F::zero();
                 for g in &gains {

@@ -908,6 +908,7 @@ pub fn multiscale_bm3d_streak_removal_2d<'py>(
         filter_strength: filter_strength.unwrap_or(default.filter_strength),
         threshold: threshold.unwrap_or(default.threshold),
         debin_iterations: debin_iterations.unwrap_or(default.debin_iterations),
+        log_domain_input: default.log_domain_input,
         bm3d_config: default.bm3d_config,
     };
 
@@ -1001,6 +1002,7 @@ pub fn multiscale_bm3d_streak_removal_2d_f64<'py>(
         filter_strength: filter_strength.unwrap_or(default.filter_strength),
         threshold: threshold.unwrap_or(default.threshold),
         debin_iterations: debin_iterations.unwrap_or(default.debin_iterations),
+        log_domain_input: default.log_domain_input,
         bm3d_config: default.bm3d_config,
     };
 
