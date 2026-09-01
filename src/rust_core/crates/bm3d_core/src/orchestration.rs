@@ -12,7 +12,7 @@
 //! - **Generic**: Standard BM3D assuming white noise
 //! - **Streak**: Streak pre-subtraction + anisotropic PSD for ring artifact removal
 
-use ndarray::{Array1, Array2, ArrayView2};
+use ndarray::{Array1, Array2, ArrayView1, ArrayView2};
 use std::time::Instant;
 
 use crate::float_trait::Bm3dFloat;
@@ -260,11 +260,63 @@ fn compute_sigma_map<F: Bm3dFloat>(
 /// Construct anisotropic PSD for streak mode.
 ///
 /// Creates a 2D array with FFT-symmetric Gaussian profile along Y-axis (rows),
-/// replicated across X-axis (columns). Uses circular frequency distance
-/// `min(y, N-y)` so that conjugate FFT bins share the same PSD value,
+/// modulated across X-axis (columns) by `psd_x`. Uses circular frequency
+/// distance `min(y, N-y)` so that conjugate FFT bins share the same PSD value,
 /// preserving Hermitian symmetry. This models vertical streak noise.
-fn construct_psd<F: Bm3dFloat>(patch_size: usize, psd_width: F) -> Array2<F> {
+///
+/// `psd_x` is the horizontal noise power profile, sampled on the source
+/// image's frequency grid and resampled here onto the patch grid. `None`
+/// means horizontally white, which is Mäkinen et al.'s basic streak model
+/// (equation 2, Figure 1) and the right choice at the coarsest multiscale
+/// level. At finer levels the noise has been shaped by debinning and is no
+/// longer white in X, so equation 25 uses the residual kernel's spectrum
+/// instead; that profile is what [`crate::multiscale::generate_psd_shapes`]
+/// computes.
+fn construct_psd<F: Bm3dFloat>(
+    patch_size: usize,
+    psd_width: F,
+    psd_x: Option<ArrayView1<F>>,
+) -> Array2<F> {
     let mut sigma_psd = Array2::zeros((patch_size, patch_size));
+
+    // Resample the horizontal profile onto the patch's frequency grid,
+    // normalised to unit mean so it shapes the PSD without rescaling it.
+    let x_gain: Vec<F> = match psd_x {
+        None => vec![F::one(); patch_size],
+        Some(profile) => {
+            let n = profile.len();
+            if n == 0 {
+                vec![F::one(); patch_size]
+            } else {
+                // The profile is a power spectrum (|FFT|^2, see
+                // generate_psd_shapes) and sigma_psd holds amplitudes that
+                // are squared back into a variance downstream. Normalize in
+                // the POWER domain — unit mean power, then square root —
+                // so the profile shapes the variance without rescaling its
+                // average level: normalizing the amplitudes instead would
+                // inflate mean variance by mean(P)/mean(sqrt(P))^2 for any
+                // non-flat profile (Jensen), moving every threshold.
+                let mut powers = Vec::with_capacity(patch_size);
+                for x in 0..patch_size {
+                    // Circular frequency in cycles/pixel, mapped onto the
+                    // profile's own circular grid.
+                    let freq = x.min(patch_size - x) as f64 / patch_size as f64;
+                    let idx = ((freq * n as f64).round() as usize).min(n / 2);
+                    powers.push(profile[idx].max(F::zero()));
+                }
+                let mut sum = F::zero();
+                for p in &powers {
+                    sum += *p;
+                }
+                if sum > F::zero() {
+                    let mean_power = sum / F::usize_as(patch_size);
+                    powers.iter().map(|&p| (p / mean_power).sqrt()).collect()
+                } else {
+                    vec![F::one(); patch_size]
+                }
+            }
+        }
+    };
 
     // Gaussian profile along Y-axis
     let neg_half = F::from_f64_c(-0.5);
@@ -274,9 +326,8 @@ fn construct_psd<F: Bm3dFloat>(patch_size: usize, psd_width: F) -> Array2<F> {
         let normalized = freq_dist_f / psd_width;
         let value = (neg_half * normalized * normalized).exp();
 
-        // Replicate across X-axis
         for x in 0..patch_size {
-            sigma_psd[[y, x]] = value;
+            sigma_psd[[y, x]] = value * x_gain[x];
         }
     }
 
@@ -317,6 +368,22 @@ pub fn bm3d_ring_artifact_removal_with_plans<F: Bm3dFloat>(
     mode: RingRemovalMode,
     config: &Bm3dConfig<F>,
     plans: &crate::pipeline::Bm3dPlans<F>,
+) -> Result<Array2<F>, String> {
+    bm3d_ring_artifact_removal_with_psd(sinogram, mode, config, plans, None)
+}
+
+/// As [`bm3d_ring_artifact_removal_with_plans`], but with an explicit
+/// horizontal noise power profile for streak mode.
+///
+/// The multiscale pipeline uses this to give each pyramid level the PSD its
+/// own noise actually has (Mäkinen et al. 2021, equations 19 and 25) rather
+/// than reusing the horizontally-white model at every level.
+pub(crate) fn bm3d_ring_artifact_removal_with_psd<F: Bm3dFloat>(
+    sinogram: ArrayView2<F>,
+    mode: RingRemovalMode,
+    config: &Bm3dConfig<F>,
+    plans: &crate::pipeline::Bm3dPlans<F>,
+    psd_x: Option<ArrayView1<F>>,
 ) -> Result<Array2<F>, String> {
     // Validate configuration
     config.validate()?;
@@ -396,7 +463,7 @@ pub fn bm3d_ring_artifact_removal_with_plans<F: Bm3dFloat>(
             }
             RingRemovalMode::Streak | RingRemovalMode::MultiscaleStreak => {
                 // Anisotropic PSD for streak modes
-                construct_psd(config.patch_size, config.psd_width)
+                construct_psd(config.patch_size, config.psd_width, psd_x)
             }
             RingRemovalMode::FourierSvd => {
                 // Fourier-SVD: No PSD needed (uses separate algorithm)
@@ -695,14 +762,14 @@ mod tests {
 
     #[test]
     fn test_psd_shape() {
-        let psd = construct_psd::<f32>(8, 0.6);
+        let psd = construct_psd::<f32>(8, 0.6, None);
         assert_eq!(psd.dim(), (8, 8));
     }
 
     #[test]
     fn test_psd_columns_identical() {
         // PSD should have identical columns (replicated Gaussian profile)
-        let psd = construct_psd::<f32>(8, 0.6);
+        let psd = construct_psd::<f32>(8, 0.6, None);
 
         let first_col: Vec<f32> = (0..8).map(|r| psd[[r, 0]]).collect();
         for c in 1..8 {
@@ -720,7 +787,7 @@ mod tests {
     #[test]
     fn test_psd_gaussian_profile() {
         // First element (y=0) should be 1.0 (exp(0))
-        let psd = construct_psd::<f32>(8, 0.6);
+        let psd = construct_psd::<f32>(8, 0.6, None);
         assert!(approx_eq(psd[[0, 0]], 1.0, 1e-6));
 
         // Values should decrease from DC (y=0) to Nyquist (y=4),
@@ -744,7 +811,7 @@ mod tests {
 
     #[test]
     fn test_psd_all_positive() {
-        let psd = construct_psd::<f32>(8, 0.6);
+        let psd = construct_psd::<f32>(8, 0.6, None);
         for &val in psd.iter() {
             assert!(val > 0.0, "PSD values should be positive");
         }
@@ -754,7 +821,7 @@ mod tests {
     fn test_psd_fft_symmetry() {
         // In FFT layout, psd[y] must equal psd[N-y] for all y
         for &patch_size in &[4usize, 8, 16] {
-            let psd = construct_psd::<f32>(patch_size, 0.6);
+            let psd = construct_psd::<f32>(patch_size, 0.6, None);
             for y in 1..patch_size {
                 let mirror = patch_size - y;
                 assert!(
@@ -774,7 +841,7 @@ mod tests {
     fn test_psd_symmetry_known_values() {
         // For patch_size=8, psd_width=0.6:
         // freq_dist for y=1 is min(1,7)=1, for y=7 is min(7,1)=1 → same value
-        let psd = construct_psd::<f32>(8, 0.6);
+        let psd = construct_psd::<f32>(8, 0.6, None);
         let expected_bin1 = (-0.5_f32 * (1.0_f32 / 0.6).powi(2)).exp();
         assert!(
             approx_eq(psd[[1, 0]], expected_bin1, 1e-6),
@@ -793,7 +860,7 @@ mod tests {
     #[test]
     fn test_psd_odd_patch_size_symmetry() {
         for &patch_size in &[5usize, 7, 9] {
-            let psd = construct_psd::<f32>(patch_size, 0.6);
+            let psd = construct_psd::<f32>(patch_size, 0.6, None);
             for y in 1..patch_size {
                 let mirror = patch_size - y;
                 assert!(
