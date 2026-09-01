@@ -50,3 +50,33 @@ def test_multiscale_auto_sigma_acts_on_flat_background():
     assert abs(level_in - level_out) < 0.05 * abs(level_in), (
         f"sample level moved: {level_in} -> {level_out}"
     )
+
+
+def test_log_domain_input_flag_is_a_pure_change_of_domain():
+    """Feeding pre-logged data with log_domain_input=True must equal feeding
+    linear data with the default, up to the exp round-trip: the flag exists so
+    upstream pipelines that already log-transform are not logged twice.
+
+    Tolerance: numpy's and Rust's f32 ln differ by an ulp, and BM3D's hard
+    threshold is discontinuous, so single-ulp input differences flip a few
+    coefficients (measured max 0.002). Bit-exact domain equivalence is pinned
+    on the Rust side (log_domain_flag_is_a_pure_change_of_domain), where both
+    paths share one ln. This test guards the Python wiring: a dropped kwarg
+    or a double log diverges by orders of magnitude more than 0.01."""
+    rng = np.random.default_rng(7)
+    sinogram = (0.3 + 0.5 * rng.random((96, 200))).astype(np.float32)
+
+    via_default = bm3d_ring_artifact_removal(
+        sinogram, mode="streak", sigma_random=0.0, multiscale=True, num_scales=2
+    )
+    via_flag = np.exp(
+        bm3d_ring_artifact_removal(
+            np.log(sinogram),
+            mode="streak",
+            sigma_random=0.0,
+            multiscale=True,
+            num_scales=2,
+            log_domain_input=True,
+        )
+    )
+    np.testing.assert_allclose(via_flag, via_default, rtol=0, atol=1e-2)

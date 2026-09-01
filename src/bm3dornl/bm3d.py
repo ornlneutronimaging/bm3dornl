@@ -54,6 +54,7 @@ def bm3d_ring_artifact_removal(
     num_scales: int | None = None,
     filter_strength: float = 1.0,
     debin_iterations: int = 30,
+    log_domain_input: bool = False,
     progress=False,
 ) -> np.ndarray:
     """Remove ring artifacts (streaks) from a sinogram or a stack of sinograms.
@@ -106,6 +107,9 @@ def bm3d_ring_artifact_removal(
         Number of scales for multi-scale pyramid. If None, automatic.
     filter_strength : float, optional
         Filtering strength multiplier for multi-scale mode (default 1.0).
+    log_domain_input : bool, optional
+        The input is already log-transformed; skip the pipeline's internal
+        log/exp so pre-logged data is not logged twice. Multiscale only.
     debin_iterations : int, optional
         Number of debinning iterations (default 30).
     progress : bool or callable, optional
@@ -153,6 +157,7 @@ def bm3d_ring_artifact_removal(
                 search_window=search_window,
                 max_matches=max_matches,
                 sigma_random=float(sigma_random),
+                log_domain_input=log_domain_input,
             )
         else:
             # Single-scale BM3D
@@ -222,6 +227,7 @@ def bm3d_ring_artifact_removal(
                     search_window=search_window,
                     max_matches=max_matches,
                     sigma_random=float(sigma_random),
+                    log_domain_input=log_domain_input,
                 )
                 if _progress_bar is not None:
                     _progress_bar.update(1)

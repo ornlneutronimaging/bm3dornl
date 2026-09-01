@@ -867,7 +867,13 @@ fn bm3d_denoise_segmented<F: Bm3dFloat>(
 /// for normally distributed data (Mäkinen et al. equation 26).
 const MAD_TO_SIGMA: f64 = 1.4826;
 
-/// Daubechies-3 decomposition high-pass, the `psi` of the analysis kernel.
+/// Horizontal high-pass, the `psi` of the analysis kernel. Carried over
+/// verbatim from the previous estimator: the first coefficient's sign differs
+/// from the canonical Daubechies-3 decomposition high-pass (+0.0352 here,
+/// -0.0352 in db3), leaving a DC gain of 0.07 instead of 0, so a few percent
+/// of the smooth object profile leaks into the estimate. The l2 norm is 1
+/// either way, so the streak calibration is unaffected; correcting the sign
+/// changes measured behavior and is follow-up work, not a comment fix.
 const DB3_ANALYSIS_HI: [f64; 6] = [
     0.03522629,
     -0.08544127,
@@ -1056,17 +1062,29 @@ fn multiscale_denoise_log_domain<F: Bm3dFloat>(
     let binned = bin_vertical_mean(sinogram, factor);
     let denoised_binned = multiscale_denoise_pyramid(binned.view(), config, plans)?;
 
-    // The pyramid's correction in binned space. It is a per-column streak
-    // profile by construction (the pyramid's final protection stage projects
-    // its change onto a vertical profile), so replicating each bin's row back
-    // to that bin's fine rows is exact.
+    // The pyramid's correction in binned space, projected onto a per-column
+    // profile (median over binned rows) before replication. For K >= 1 the
+    // pyramid's final protection stage already makes the correction a
+    // per-column constant, so the projection is a no-op within float dust —
+    // but the K = 0 path returns plain single-scale BM3D, whose correction is
+    // fully two-dimensional, and replicating that per vertical bin would
+    // inject blocky vertical structure (measured 0.031 in log units on a
+    // 600x39 input). Projecting first makes the per-column invariant hold by
+    // construction on every path.
     let correction = &denoised_binned - &binned;
-    let binned_rows = binned.nrows();
+    let mut profile = Vec::with_capacity(cols);
+    for c in 0..cols {
+        let mut col: Vec<F> = correction.column(c).to_vec();
+        let mid = col.len() / 2;
+        col.select_nth_unstable_by(mid, |a, b| {
+            a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)
+        });
+        profile.push(col[mid]);
+    }
     let mut output = sinogram.to_owned();
     for r in 0..rows {
-        let br = (r / factor).min(binned_rows - 1);
         for c in 0..cols {
-            output[[r, c]] += correction[[br, c]];
+            output[[r, c]] += profile[c];
         }
     }
     Ok(output)

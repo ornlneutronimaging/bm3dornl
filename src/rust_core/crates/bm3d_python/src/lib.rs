@@ -881,7 +881,8 @@ pub fn estimate_noise_sigma_py_f64(sinogram: PyReadonlyArray2<'_, f64>) -> PyRes
     streak_iterations = None,
     sigma_map_smoothing = None,
     streak_sigma_scale = None,
-    psd_width = None
+    psd_width = None,
+    log_domain_input = None
 ))]
 pub fn multiscale_bm3d_streak_removal_2d<'py>(
     py: Python<'py>,
@@ -900,6 +901,7 @@ pub fn multiscale_bm3d_streak_removal_2d<'py>(
     sigma_map_smoothing: Option<f32>,
     streak_sigma_scale: Option<f32>,
     psd_width: Option<f32>,
+    log_domain_input: Option<bool>,
 ) -> PyResult<Bound<'py, PyArray2<f32>>> {
     // Build config with defaults, using struct init syntax
     let default = MultiscaleConfig::<f32>::default();
@@ -908,7 +910,7 @@ pub fn multiscale_bm3d_streak_removal_2d<'py>(
         filter_strength: filter_strength.unwrap_or(default.filter_strength),
         threshold: threshold.unwrap_or(default.threshold),
         debin_iterations: debin_iterations.unwrap_or(default.debin_iterations),
-        log_domain_input: default.log_domain_input,
+        log_domain_input: log_domain_input.unwrap_or(default.log_domain_input),
         bm3d_config: default.bm3d_config,
     };
 
@@ -975,7 +977,8 @@ pub fn multiscale_bm3d_streak_removal_2d<'py>(
     streak_iterations = None,
     sigma_map_smoothing = None,
     streak_sigma_scale = None,
-    psd_width = None
+    psd_width = None,
+    log_domain_input = None
 ))]
 pub fn multiscale_bm3d_streak_removal_2d_f64<'py>(
     py: Python<'py>,
@@ -994,6 +997,7 @@ pub fn multiscale_bm3d_streak_removal_2d_f64<'py>(
     sigma_map_smoothing: Option<f64>,
     streak_sigma_scale: Option<f64>,
     psd_width: Option<f64>,
+    log_domain_input: Option<bool>,
 ) -> PyResult<Bound<'py, PyArray2<f64>>> {
     // Build config with defaults, using struct init syntax
     let default = MultiscaleConfig::<f64>::default();
@@ -1002,7 +1006,7 @@ pub fn multiscale_bm3d_streak_removal_2d_f64<'py>(
         filter_strength: filter_strength.unwrap_or(default.filter_strength),
         threshold: threshold.unwrap_or(default.threshold),
         debin_iterations: debin_iterations.unwrap_or(default.debin_iterations),
-        log_domain_input: default.log_domain_input,
+        log_domain_input: log_domain_input.unwrap_or(default.log_domain_input),
         bm3d_config: default.bm3d_config,
     };
 
