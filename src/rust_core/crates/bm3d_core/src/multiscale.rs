@@ -38,6 +38,22 @@ const DEFAULT_MULTISCALE_FILTER_STRENGTH: f64 = 1.0;
 /// Default threshold for multi-scale (reference uses 3.5, different from single-scale 2.7)
 const DEFAULT_MULTISCALE_THRESHOLD: f64 = 3.5;
 
+/// Target height of the vertically binned sinogram (Mäkinen et al. 2021,
+/// Section 3.2 and Figure 5). Streaks are vertically constant, so they
+/// survive vertical averaging unchanged while per-pixel noise attenuates by
+/// sqrt(factor): the pyramid then filters at a much higher streak-to-noise
+/// ratio. The binning factor is `max(1, rows / VERTICAL_BIN_TARGET_ROWS)`;
+/// inputs at or below the target height are processed unbinned.
+///
+/// The reference implementation bins ~720 rows to ~60 (factor ~12), but this
+/// port's protection heuristics distinguish object walls from streaks by
+/// their vertical variation, which aggressive vertical binning averages away.
+/// Measured on the benchmark sinogram (720 rows), ring-artifact energy
+/// removed peaks at a target of 240 rows (factor 3, 86.28% vs 85.63%
+/// unbinned); a target of 60 rows lets BM3D erase vertically flattened
+/// object edges and turns the correction destructive (-34%).
+const VERTICAL_BIN_TARGET_ROWS: usize = 240;
+
 // [DEPRECATED] Hardcoded kernel replaced by dynamic computation in compute_residual_kernel()
 // Kept for historical reference.
 // const RESIDUAL_KERNEL_HALF: [f64; 19] = [
@@ -221,6 +237,32 @@ pub fn bin_horizontal<F: Bm3dFloat>(arr: ArrayView2<F>, factor: usize) -> Array2
         }
     }
 
+    result
+}
+
+/// Bin a 2D array vertically by an integer factor, averaging over each group
+/// of `factor` consecutive rows (the paper's `B_v`, normalized to a mean so
+/// signal amplitude is preserved). Rows that do not divide evenly form a
+/// ragged last bin averaged over the rows it actually has.
+fn bin_vertical_mean<F: Bm3dFloat>(arr: ArrayView2<F>, factor: usize) -> Array2<F> {
+    if factor <= 1 {
+        return arr.to_owned();
+    }
+    let (rows, cols) = arr.dim();
+    let binned_rows = rows.div_ceil(factor);
+    let mut result = Array2::zeros((binned_rows, cols));
+    for br in 0..binned_rows {
+        let r_start = br * factor;
+        let r_end = (r_start + factor).min(rows);
+        let inv_count = F::one() / F::from_f64_c((r_end - r_start) as f64);
+        for c in 0..cols {
+            let mut sum = F::zero();
+            for r in r_start..r_end {
+                sum += arr[[r, c]];
+            }
+            result[[br, c]] = sum * inv_count;
+        }
+    }
     result
 }
 
@@ -810,10 +852,59 @@ pub fn multiscale_bm3d_streak_removal_with_plans<F: Bm3dFloat>(
     Ok(denoised.mapv(|v| v.exp()))
 }
 
-/// The multiscale pipeline proper, operating on data already in the domain
-/// the model assumes (log-transformed, or whatever the caller vouched for
-/// via [`MultiscaleConfig::log_domain_input`]).
+/// The log-domain core: vertical binning around the horizontal pyramid
+/// (Mäkinen et al. 2021, Section 3.2, closing equation
+/// `Y_hat = Z - B_v^{-1}[B_v(Z_0) - Y_hat_0]`).
+///
+/// The sinogram is vertically binned by `max(1, rows / VERTICAL_BIN_TARGET_ROWS)`
+/// before the horizontal pyramid runs. The pyramid's correction — its output
+/// minus its binned input — is computed in binned space and replicated back to
+/// full height (the correction is per-column anyway), then added to the
+/// original. Only the coarse vertical components are replaced by the denoised
+/// estimate; the fine vertical detail of `Z` is untouched, which is exactly
+/// the paper's `B_v^{-1}` restoration step.
+///
+/// The noise estimator needs no adjustment: `estimate_sigma_profile` builds
+/// its column Gaussian with sigma = rows/12 of the image it is handed, so on
+/// the binned image it uses binned_rows/12 — the paper's `m_v / 12` with the
+/// new `m_v`, which is what equation 26 prescribes.
 fn multiscale_denoise_log_domain<F: Bm3dFloat>(
+    sinogram: ArrayView2<F>,
+    config: &MultiscaleConfig<F>,
+    plans: &crate::pipeline::Bm3dPlans<F>,
+) -> Result<Array2<F>, String> {
+    let (rows, cols) = sinogram.dim();
+    let factor = (rows / VERTICAL_BIN_TARGET_ROWS).max(1);
+    if factor <= 1 {
+        return multiscale_denoise_pyramid(sinogram, config, plans);
+    }
+
+    // B_v: vertical mean-binning. Streaks are vertically constant and pass
+    // through unchanged; per-pixel noise attenuates by sqrt(factor).
+    let binned = bin_vertical_mean(sinogram, factor);
+    let denoised_binned = multiscale_denoise_pyramid(binned.view(), config, plans)?;
+
+    // The pyramid's correction in binned space. It is a per-column streak
+    // profile by construction (the pyramid's final protection stage projects
+    // its change onto a vertical profile), so replicating each bin's row back
+    // to that bin's fine rows is exact.
+    let correction = &denoised_binned - &binned;
+    let binned_rows = binned.nrows();
+    let mut output = sinogram.to_owned();
+    for r in 0..rows {
+        let br = (r / factor).min(binned_rows - 1);
+        for c in 0..cols {
+            output[[r, c]] += correction[[br, c]];
+        }
+    }
+    Ok(output)
+}
+
+/// The horizontal multiscale pyramid, operating on data already in the domain
+/// the model assumes (log-transformed, or whatever the caller vouched for
+/// via [`MultiscaleConfig::log_domain_input`]) and already vertically binned
+/// by [`multiscale_denoise_log_domain`].
+fn multiscale_denoise_pyramid<F: Bm3dFloat>(
     sinogram: ArrayView2<F>,
     config: &MultiscaleConfig<F>,
     plans: &crate::pipeline::Bm3dPlans<F>,
@@ -980,10 +1071,20 @@ fn multiscale_denoise_log_domain<F: Bm3dFloat>(
         // Revert to per-scale robust estimation.
         let estimated_sigma = estimate_noise_sigma_robust(img_normalized.view());
 
-        // Use estimated sigma for BM3D, with a minimum to avoid numerical issues
-        // The estimation captures the actual noise level after all the residual propagation
-        let min_sigma = F::from_f64_c(0.001);
-        if estimated_sigma > min_sigma {
+        // Use the per-scale estimate whenever it is a measurement at all. The
+        // previous guard discarded any estimate below an absolute 0.001 in the
+        // normalized domain — but the normalization divides by the image's
+        // value range, and in the log domain that range grows with the air
+        // floor (ln of it), so a fixed cutoff turns legitimate sigmas into
+        // zeros on data whose floor is merely deeper. Dropping the estimate
+        // left sigma_random at 0.0, handed the inner call to a different
+        // estimator measuring a different quantity, and BM3D degraded to the
+        // identity: the benchmark sinogram sat 15% above the cutoff and
+        // worked, a 400-row synthetic sat 40% below and silently no-opped.
+        // Only float dust is rejected; a genuinely flat scale estimates 0 and
+        // an identity pass is then the correct outcome.
+        let dust = F::from_f64_c(1.0e-9);
+        if estimated_sigma > dust {
             scale_config.sigma_random = estimated_sigma;
         }
 
@@ -1682,6 +1783,101 @@ mod tests {
                 0.5 * row_term * (1.0 + jitter[c])
             }
         })
+    }
+
+    /// `bin_vertical_mean` must average exactly, including the ragged last
+    /// bin when the row count does not divide by the factor.
+    #[test]
+    fn vertical_binning_averages_exactly() {
+        // 7 rows, factor 3: bins of 3, 3, and a ragged 1.
+        let img = Array2::from_shape_fn((7, 4), |(r, c)| (r * 10 + c) as f32);
+        let binned = bin_vertical_mean(img.view(), 3);
+        assert_eq!(binned.dim(), (3, 4));
+        for c in 0..4 {
+            let c_f = c as f32;
+            assert!(approx_eq(binned[[0, c]], 10.0 + c_f, 1e-6)); // rows 0,1,2
+            assert!(approx_eq(binned[[1, c]], 40.0 + c_f, 1e-6)); // rows 3,4,5
+            assert!(approx_eq(binned[[2, c]], 60.0 + c_f, 1e-6)); // row 6 alone
+        }
+        // Factor 1 is the identity.
+        let same = bin_vertical_mean(img.view(), 1);
+        assert_eq!(same, img);
+    }
+
+    /// The vertically binned path (inputs taller than VERTICAL_BIN_TARGET_ROWS)
+    /// must still act on the streak, and its whole correction must be a
+    /// per-column offset: the fine vertical detail of the input is preserved
+    /// exactly, which is the paper's B_v^-1 restoration property.
+    /// Streaked phantom with a smooth air-to-object transition, the shape of
+    /// real sinograms (and of the benchmark phantom). A hard air cliff is a
+    /// separate, pre-existing robustness hole: the streak-profile
+    /// pre-subtraction bleeds across it, the inner BM3D distorts the whole
+    /// frame, and only the final hump guard contains the damage as a no-op —
+    /// at every height, unbinned included. Tracked as follow-up work; this
+    /// test pins the behavior the pipeline actually delivers on data shaped
+    /// like its domain.
+    fn tapered_streaked(rows: usize, cols: usize, air: usize, taper: usize) -> Array2<f32> {
+        let mut rng = SimpleLcg::new(9);
+        let jitter: Vec<f32> = (0..cols).map(|_| (rng.next_f32() - 0.5) * 0.04).collect();
+        Array2::from_shape_fn((rows, cols), |(r, c)| {
+            let envelope = if c + taper < air || c >= cols - air + taper {
+                0.0
+            } else if c < air {
+                let x = (c + taper - air) as f32 / taper as f32;
+                0.5 * (1.0 - (std::f32::consts::PI * x).cos())
+            } else if c + air + taper >= cols + taper && c + air >= cols {
+                0.0
+            } else if c + air + taper >= cols {
+                let x = (c + air + taper - cols) as f32 / taper as f32;
+                0.5 * (1.0 + (std::f32::consts::PI * x).cos())
+            } else {
+                1.0
+            };
+            let row_term = 1.0 + 0.1 * (r as f32 / rows as f32);
+            (1.0e-8 + envelope * 0.5 * row_term) * (1.0 + jitter[c])
+        })
+    }
+
+    #[test]
+    fn tall_input_binned_path_corrects_streaks_and_preserves_rows() {
+        let rows = VERTICAL_BIN_TARGET_ROWS * 2; // guarantees factor >= 2
+        let img = tapered_streaked(rows, 200, 60, 30);
+        let cfg = MultiscaleConfig::<f32> {
+            num_scales: Some(2),
+            ..Default::default()
+        };
+        let out = multiscale_bm3d_streak_removal(img.view(), &cfg).unwrap();
+
+        // Acts on the streak at all.
+        let max_change = img
+            .iter()
+            .zip(out.iter())
+            .map(|(a, b)| (a - b).abs())
+            .fold(0.0f32, f32::max);
+        assert!(
+            max_change > 1.0e-4,
+            "binned path returned its input unchanged: max|change| = {max_change}"
+        );
+
+        // The correction in log space is a per-column, per-bin constant; with
+        // the pyramid's final per-column projection it collapses to one offset
+        // per column, so log(out) - log(img) must be constant down each column
+        // wherever the input is positive.
+        for c in [70usize, 100, 130] {
+            let mut deviation = 0.0f32;
+            let mut mean = 0.0f32;
+            for r in 0..rows {
+                mean += (out[[r, c]] / img[[r, c]]).ln();
+            }
+            mean /= rows as f32;
+            for r in 0..rows {
+                deviation = deviation.max(((out[[r, c]] / img[[r, c]]).ln() - mean).abs());
+            }
+            assert!(
+                deviation < 1.0e-3,
+                "column {c}: correction is not a per-column offset (max dev {deviation})"
+            );
+        }
     }
 
     /// Regression for the silent multiscale no-op: on an image whose quietest
