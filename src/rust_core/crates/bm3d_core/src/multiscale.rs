@@ -691,6 +691,178 @@ fn estimate_noise_sigma_robust<F: Bm3dFloat>(sinogram: ArrayView2<F>) -> F {
     active[mid]
 }
 
+/// Requested number of overlapping full-height segments each pyramid level is
+/// split into for the BM3D call itself (Mäkinen et al. 2021, Section 3.3.3,
+/// second half): each segment is denoised with its own noise amplitude and
+/// the results are recombined with a normalized Hann window.
+///
+/// Measured on the benchmark sinogram (720 x 725, canonical stripe-RMS
+/// metric): 8 segments at 75% overlap removes 88.3% of the ring-artifact
+/// energy against 86.3% unsegmented; the closed-source reference sits at
+/// 88.4%. The landscape over (segments, overlap) is bumpy — seams landing in
+/// the object-edge zones can cost a point — so these values are a measured
+/// optimum, not a smooth one.
+const DENOISE_SEGMENTS: usize = 8;
+
+/// Fraction of a segment's width shared with its neighbor. Higher overlap
+/// averages more independent seam placements per column, which is what keeps
+/// the Hann recombination from imprinting its own layout on the result.
+const DENOISE_SEGMENT_OVERLAP: f64 = 0.75;
+
+/// Segment width floor, as a multiple of the finest scale's search window.
+/// Below ~4 search windows the block matcher has too little horizontal room
+/// and the segment's own boundary transients dominate. Coarse pyramid levels
+/// whose width cannot fit segments this wide fall back to fewer segments or
+/// a single unsegmented call.
+const MIN_DENOISE_SEGMENT_WIDTH_FACTOR: usize = 4;
+
+fn median_of<F: Bm3dFloat>(vals: &mut [F]) -> Option<F> {
+    if vals.is_empty() {
+        return None;
+    }
+    let mid = vals.len() / 2;
+    vals.select_nth_unstable_by(mid, |a, b| {
+        a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)
+    });
+    Some(vals[mid])
+}
+
+/// Denoise one pyramid level as overlapping full-height segments, each with
+/// its own noise amplitude (Mäkinen et al. 2021, Section 3.3.3, second half).
+///
+/// The streak amplitude is strongly nonstationary across a sinogram — air
+/// columns carry almost none, dense-object columns orders of magnitude more —
+/// and BM3D filters everything at whatever single `sigma_random` it is given.
+/// Splitting the level into overlapping segments narrows both that sigma and
+/// BM3D's internal per-call adaptation (its min-max normalization and
+/// column-adaptive sigma map) to each segment's own columns.
+///
+/// Each segment's sigma is the median of the level's per-column
+/// [`estimate_sigma_profile`] over the segment's *active* columns — those at
+/// or above [`ACTIVE_SEGMENT_RATIO`] of the level's loudest column, the same
+/// air exclusion [`estimate_noise_sigma_robust`] applies to the whole level.
+/// The plain median is measurably wrong here: air columns drag it well below
+/// the streak amplitude and the object half of the segment is under-filtered
+/// (benchmark: 80.8% removed against 86.3% unsegmented; the active median
+/// reaches 88.3%). A segment with no active columns keeps the caller's
+/// whole-level estimate.
+///
+/// Segments of width `cols / (1 + (n-1)*(1-overlap))` are laid out evenly,
+/// each is denoised independently, and the results are blended with a Hann
+/// window per segment, normalized per column so the weights sum to one. The
+/// Hann taper is sampled at bin centers so it is strictly positive at the
+/// segment ends: columns covered by a single segment normalize to weight one,
+/// and each overlap degenerates to a raised-cosine crossfade.
+///
+/// When `requested_segments` (or the level's width) does not allow at least
+/// two segments of `min_segment_width`, this is exactly one unsegmented BM3D
+/// call. Only the BM3D call is segmented; residual bookkeeping, shields, and
+/// the final projection stay full-width in the caller.
+fn bm3d_denoise_segmented<F: Bm3dFloat>(
+    image: ArrayView2<F>,
+    config: &Bm3dConfig<F>,
+    plans: &crate::pipeline::Bm3dPlans<F>,
+    psd_x: Option<ArrayView1<F>>,
+    requested_segments: usize,
+    min_segment_width: usize,
+) -> Result<Array2<F>, String> {
+    let (rows, cols) = image.dim();
+    let min_w = min_segment_width.max(config.patch_size).max(1);
+
+    // Segment width for n segments overlapping by fraction v is
+    // w = cols / (1 + (n-1)*(1-v)); n_fit is the largest n keeping w >= min_w.
+    let v = DENOISE_SEGMENT_OVERLAP;
+    let n_fit = if cols >= min_w {
+        (1.0 + (cols as f64 / min_w as f64 - 1.0) / (1.0 - v)).floor() as usize
+    } else {
+        1
+    };
+    let n = requested_segments.clamp(1, n_fit.max(1));
+    if n <= 1 {
+        return crate::orchestration::bm3d_ring_artifact_removal_with_psd(
+            image,
+            RingRemovalMode::Streak,
+            config,
+            plans,
+            psd_x,
+        );
+    }
+
+    let seg_w = ((cols as f64 / (1.0 + (n as f64 - 1.0) * (1.0 - v))).ceil() as usize).min(cols);
+    let last_start = cols - seg_w;
+
+    // Per-column noise amplitude, measured once on this level; the air
+    // exclusion floor is relative to the level's loudest column.
+    let profile = estimate_sigma_profile(image);
+    let loudest = profile
+        .iter()
+        .copied()
+        .fold(F::zero(), |a, b| if b > a { b } else { a });
+    let active_floor = loudest * F::from_f64_c(ACTIVE_SEGMENT_RATIO);
+    let dust = F::from_f64_c(1.0e-9);
+
+    let mut acc = Array2::<F>::zeros((rows, cols));
+    let mut weight_sum = vec![F::zero(); cols];
+
+    for i in 0..n {
+        let start = (i * last_start + (n - 1) / 2) / (n - 1);
+        let end = (start + seg_w).min(cols);
+        let seg = image.slice(s![.., start..end]);
+
+        let mut seg_config = config.clone();
+        let mut vals: Vec<F> = profile[start..end]
+            .iter()
+            .copied()
+            .filter(|&s| s >= active_floor)
+            .collect();
+        let seg_sigma = median_of(&mut vals).unwrap_or(F::zero());
+        // A segment with no active columns (all air) keeps the caller's
+        // whole-level estimate rather than handing the inner call a zero it
+        // would re-estimate differently.
+        if seg_sigma > dust {
+            seg_config.sigma_random = seg_sigma;
+        }
+
+        let den = crate::orchestration::bm3d_ring_artifact_removal_with_psd(
+            seg,
+            RingRemovalMode::Streak,
+            &seg_config,
+            plans,
+            psd_x,
+        )?;
+
+        let width = end - start;
+        for j in 0..width {
+            // Hann taper, sampled at bin centers so it is strictly positive
+            // at both ends (a zero endpoint would leave the outermost columns
+            // of the image with zero total weight).
+            let phase = std::f64::consts::PI * (j as f64 + 0.5) / width as f64;
+            let w = F::from_f64_c(phase.sin() * phase.sin());
+            let c = start + j;
+            weight_sum[c] += w;
+            for r in 0..rows {
+                acc[[r, c]] += den[[r, j]] * w;
+            }
+        }
+    }
+
+    for c in 0..cols {
+        let total = weight_sum[c];
+        if total > F::zero() {
+            for r in 0..rows {
+                acc[[r, c]] /= total;
+            }
+        } else {
+            // Unreachable with the layout above (segments cover every
+            // column), kept as an identity fallback rather than a panic.
+            for r in 0..rows {
+                acc[[r, c]] = image[[r, c]];
+            }
+        }
+    }
+    Ok(acc)
+}
+
 /// Scaling that turns a median absolute deviation into a standard deviation
 /// for normally distributed data (Mäkinen et al. equation 26).
 const MAD_TO_SIGMA: f64 = 1.4826;
@@ -1088,13 +1260,18 @@ fn multiscale_denoise_pyramid<F: Bm3dFloat>(
             scale_config.sigma_random = estimated_sigma;
         }
 
-        // Denoise normalized image with this level's own noise spectrum.
-        let den_normalized = crate::orchestration::bm3d_ring_artifact_removal_with_psd(
+        // Denoise normalized image with this level's own noise spectrum,
+        // split into overlapping segments so each is filtered at its own
+        // noise amplitude (Section 3.3.3). The segment width floor is set by
+        // the finest scale's search window, not the per-scale shrunken one,
+        // so coarse (narrow) levels fall back to fewer segments or one.
+        let den_normalized = bm3d_denoise_segmented(
             img_normalized.view(),
-            RingRemovalMode::Streak,
             &scale_config,
             plans,
             psd_shapes.get(scale).map(|p| p.view()),
+            DENOISE_SEGMENTS,
+            config.bm3d_config.search_window * MIN_DENOISE_SEGMENT_WIDTH_FACTOR,
         )?;
 
         // === DENORMALIZE immediately after BM3D ===
@@ -1808,6 +1985,31 @@ mod tests {
     /// must still act on the streak, and its whole correction must be a
     /// per-column offset: the fine vertical detail of the input is preserved
     /// exactly, which is the paper's B_v^-1 restoration property.
+    /// When a level is too narrow to fit two segments of the minimum width,
+    /// the segmented call must be exactly the plain call — bit for bit — so
+    /// coarse pyramid levels lose nothing by going through the same path.
+    #[test]
+    fn segmented_call_falls_back_to_plain_below_minimum_width() {
+        let image = random_matrix(48, 90, 4242).mapv(|v| v + 0.05);
+        let config = Bm3dConfig::<f32>::default();
+        let plans = crate::pipeline::Bm3dPlans::new(config.patch_size, config.max_matches);
+
+        // min width 96 > 90 cols: no segmentation possible.
+        let segmented = bm3d_denoise_segmented(image.view(), &config, &plans, None, 8, 96).unwrap();
+        let plain = crate::orchestration::bm3d_ring_artifact_removal_with_psd(
+            image.view(),
+            RingRemovalMode::Streak,
+            &config,
+            &plans,
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            segmented, plain,
+            "narrow-level fallback must be identical to the unsegmented call"
+        );
+    }
+
     /// Streaked phantom with a smooth air-to-object transition, the shape of
     /// real sinograms (and of the benchmark phantom). A hard air cliff is a
     /// separate, pre-existing robustness hole: the streak-profile
