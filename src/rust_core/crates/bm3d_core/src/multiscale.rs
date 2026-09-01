@@ -17,9 +17,7 @@ use crate::utils::compute_1d_median_filter;
 use ndarray::{Array1, Array2, ArrayView1, ArrayView2, s};
 
 use crate::float_trait::Bm3dFloat;
-use crate::orchestration::{
-    Bm3dConfig, RingRemovalMode, bm3d_ring_artifact_removal, bm3d_ring_artifact_removal_with_plans,
-};
+use crate::orchestration::{Bm3dConfig, RingRemovalMode, bm3d_ring_artifact_removal};
 
 // =============================================================================
 // Constants
@@ -39,6 +37,22 @@ const DEFAULT_MULTISCALE_FILTER_STRENGTH: f64 = 1.0;
 
 /// Default threshold for multi-scale (reference uses 3.5, different from single-scale 2.7)
 const DEFAULT_MULTISCALE_THRESHOLD: f64 = 3.5;
+
+/// Target height of the vertically binned sinogram (Mäkinen et al. 2021,
+/// Section 3.2 and Figure 5). Streaks are vertically constant, so they
+/// survive vertical averaging unchanged while per-pixel noise attenuates by
+/// sqrt(factor): the pyramid then filters at a much higher streak-to-noise
+/// ratio. The binning factor is `max(1, rows / VERTICAL_BIN_TARGET_ROWS)`;
+/// inputs at or below the target height are processed unbinned.
+///
+/// The reference implementation bins ~720 rows to ~60 (factor ~12), but this
+/// port's protection heuristics distinguish object walls from streaks by
+/// their vertical variation, which aggressive vertical binning averages away.
+/// Measured on the benchmark sinogram (720 rows), ring-artifact energy
+/// removed peaks at a target of 240 rows (factor 3, 86.28% vs 85.63%
+/// unbinned); a target of 60 rows lets BM3D erase vertically flattened
+/// object edges and turns the correction destructive (-34%).
+const VERTICAL_BIN_TARGET_ROWS: usize = 240;
 
 // [DEPRECATED] Hardcoded kernel replaced by dynamic computation in compute_residual_kernel()
 // Kept for historical reference.
@@ -79,6 +93,20 @@ pub struct MultiscaleConfig<F: Bm3dFloat> {
     pub threshold: F,
     /// Iterations for cubic spline debinning. Default: 30
     pub debin_iterations: usize,
+    /// The input is already log-transformed. Default: false.
+    ///
+    /// The algorithm is defined on log-transformed data (Mäkinen et al. 2021,
+    /// Section 3.1): sinogram streaks are multiplicative detector-gain error,
+    /// and only the logarithm turns them into the additive stationary noise
+    /// the collaborative filter models. With this flag false the pipeline
+    /// takes the logarithm itself — flooring at the input's own smallest
+    /// positive value — and exponentiates the result back, so callers keep
+    /// passing linear transmission data. Set it true when the data has
+    /// already been log-transformed upstream, to avoid a double log.
+    ///
+    /// Measured on the benchmark sinogram: processing in the log domain
+    /// raises ring-artifact removal from 75% to 86% of the artifact energy.
+    pub log_domain_input: bool,
     /// Inner BM3D config (patch_size, search_window, etc.)
     pub bm3d_config: Bm3dConfig<F>,
 }
@@ -96,6 +124,7 @@ impl<F: Bm3dFloat> Default for MultiscaleConfig<F> {
             filter_strength: F::from_f64_c(DEFAULT_MULTISCALE_FILTER_STRENGTH),
             threshold: F::from_f64_c(DEFAULT_MULTISCALE_THRESHOLD),
             debin_iterations: DEFAULT_DEBIN_ITERATIONS,
+            log_domain_input: false,
             bm3d_config,
         }
     }
@@ -208,6 +237,32 @@ pub fn bin_horizontal<F: Bm3dFloat>(arr: ArrayView2<F>, factor: usize) -> Array2
         }
     }
 
+    result
+}
+
+/// Bin a 2D array vertically by an integer factor, averaging over each group
+/// of `factor` consecutive rows (the paper's `B_v`, normalized to a mean so
+/// signal amplitude is preserved). Rows that do not divide evenly form a
+/// ragged last bin averaged over the rows it actually has.
+fn bin_vertical_mean<F: Bm3dFloat>(arr: ArrayView2<F>, factor: usize) -> Array2<F> {
+    if factor <= 1 {
+        return arr.to_owned();
+    }
+    let (rows, cols) = arr.dim();
+    let binned_rows = rows.div_ceil(factor);
+    let mut result = Array2::zeros((binned_rows, cols));
+    for br in 0..binned_rows {
+        let r_start = br * factor;
+        let r_end = (r_start + factor).min(rows);
+        let inv_count = F::one() / F::from_f64_c((r_end - r_start) as f64);
+        for c in 0..cols {
+            let mut sum = F::zero();
+            for r in r_start..r_end {
+                sum += arr[[r, c]];
+            }
+            result[[br, c]] = sum * inv_count;
+        }
+    }
     result
 }
 
@@ -492,142 +547,341 @@ fn compute_fft_psd<F: Bm3dFloat>(kernel: &[f64], target_size: usize) -> Array1<F
 // Helper Functions: Robust Noise Estimation (Mäkinen et al. 2021)
 // =============================================================================
 
-/// Estimate noise standard deviation using MAD-based robust estimation.
-/// Implements Section 3.3.2 of Mäkinen et al. (2021).
+/// Overlapping full-height segments used to model the horizontal
+/// nonstationarity of the streak noise (Mäkinen et al. 2021, Section 3.3.3).
+const SIGMA_SEGMENTS: usize = 16;
+
+/// Narrowest segment worth estimating on. Below this the MAD has too few
+/// samples per row to be stable.
+const MIN_SEGMENT_COLS: usize = 24;
+
+/// Segments quieter than this fraction of the loudest segment are air, and
+/// are excluded when reducing the profile to a single sigma.
+const ACTIVE_SEGMENT_RATIO: f64 = 0.1;
+
+/// Per-column streak sigma, following Mäkinen et al. (2021) Sections 3.3.2
+/// and 3.3.3.
 ///
-/// 1. Suppress signal: Convolve with vertical Gaussian (g_v) and horizontal High-Pass (g_h).
-/// 2. Compute MAD of the residual.
-/// 3. Scale by correction factor c.
+/// Section 3.3.2 estimates the streak amplitude as the scaled MAD of
+/// `Z (x) g_d`, where the analysis kernel `g_d = phi (x) psi` combines a
+/// column Gaussian of standard deviation `m_v / 12` (equation 26) with a
+/// `db3` horizontal high-pass. The Gaussian passes the vertically-constant
+/// streak while suppressing pixel noise; the high-pass removes the smooth
+/// object profile, leaving column-to-column variation.
 ///
-/// The correction factor calculates the ratio between the input noise sigma
-/// and the MAD of the filtered noise. For g_v (sigma=2.0) and g_h (db3),
-/// this factor is approx 3.96 (computed via simulation).
-fn estimate_noise_sigma_robust<F: Bm3dFloat>(sinogram: ArrayView2<F>) -> F {
+/// Section 3.3.3 then relaxes that single estimate to one per full-height
+/// segment, because streak variance changes across the detector. On
+/// tomography data that relaxation is not optional. A sinogram is largely
+/// air, where the streak amplitude is zero, so one MAD over the whole frame
+/// puts its median in the quiet region and reads several times too low.
+/// Measured on the project's benchmark sinogram (720 x 725, 43% air): the
+/// whole-frame estimate is 2.15e-3 against a true streak amplitude of
+/// 1.24e-2, i.e. 0.17x, while per-segment estimates over the object land
+/// between 0.99x and 1.20x of truth.
+///
+/// Returns one sigma per column. Segments overlap by half their width and a
+/// column takes the larger of the estimates covering it: under-estimating
+/// sigma silently disables the correction downstream, over-estimating only
+/// makes the gates more permissive.
+fn estimate_sigma_profile<F: Bm3dFloat>(sinogram: ArrayView2<F>) -> Vec<F> {
     let (rows, cols) = sinogram.dim();
-    if rows < 16 || cols < 16 {
-        return F::zero();
+    if rows < 16 || cols == 0 {
+        return vec![F::zero(); cols];
     }
 
-    // Step 1: Divide image into patches (e.g. 64x64) and estimate locally
-    let patch_size = 64;
-    let mut patch_sigmas = Vec::new();
-
-    for r in (0..rows.saturating_sub(patch_size)).step_by(patch_size / 2) {
-        for c in (0..cols.saturating_sub(patch_size)).step_by(patch_size / 2) {
-            let patch = sinogram.slice(s![r..r + patch_size, c..c + patch_size]);
-
-            // Apply Robust Estimator to Patch
-            let sigma = estimate_patch_sigma_internal(patch);
-            if sigma > F::zero() {
-                patch_sigmas.push(sigma);
-            }
-        }
-    }
-
-    if patch_sigmas.is_empty() {
-        return estimate_patch_sigma_internal(sinogram); // Fallback
-    }
-
-    // Sort to find the Minimum (The "Air" region noise floor)
-    // We use the absolute minimum to be 100% sure we are in air/ultra-high-SNR.
-    patch_sigmas.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-
-    // A "noise floor" this far below the data's own scale is not a noise
-    // measurement — it is float quantization residue from numerically flat
-    // background, the normal case for simulated phantoms. Taking it as the
-    // global sigma collapses the variance lock's threshold and silently turns
-    // the whole multiscale correction into a no-op (issue #133's sibling).
-    // Measured margins, full 540-slice CG-1D volume: flat-air patches sit near
-    // 3e-10 of the data range, while the quietest patch of any measured slice
-    // sits at 3.7e-4 of the range — about 2.6 decades above this cut and 3.5
-    // decades above the residue. If every patch is silent there is nothing to
-    // denoise, and the previous behaviour (return the minimum) is kept.
-    let mut lo = f64::INFINITY;
-    let mut hi = f64::NEG_INFINITY;
+    // An input with no variation carries no noise measurement. Said plainly
+    // rather than left to the arithmetic: the recursive filter below leaves
+    // about one ulp of rounding dust on a constant image, which would be
+    // reported as a noise floor.
+    let mut lo_v = f64::INFINITY;
+    let mut hi_v = f64::NEG_INFINITY;
     for v in sinogram.iter() {
         let x = v.to_f64().unwrap_or(0.0);
-        if x < lo {
-            lo = x;
+        if x < lo_v {
+            lo_v = x;
         }
-        if x > hi {
-            hi = x;
+        if x > hi_v {
+            hi_v = x;
         }
     }
-    let silence = F::from_f64_c((hi - lo).max(0.0) * SILENCE_SIGMA_RATIO);
-    patch_sigmas
-        .iter()
-        .find(|&&s| s > silence)
-        .copied()
-        .unwrap_or(patch_sigmas[0])
+    if hi_v <= lo_v {
+        return vec![F::zero(); cols];
+    }
+
+    // g_d = phi (x) psi. The column Gaussian is applied recursively: at
+    // sigma = rows / 12 an explicit kernel would be hundreds of taps wide.
+    let filtered = {
+        let smoothed = crate::noise_estimation::gaussian_filter_1d_vertical_recursive(
+            sinogram,
+            rows as f64 / 12.0,
+        );
+        let db3: Vec<F> = DB3_ANALYSIS_HI
+            .iter()
+            .map(|&x| F::from_f64_c(x))
+            .collect::<Vec<_>>();
+        convolve_1d_horizontal_internal(smoothed.view(), &db3)
+    };
+
+    // The horizontal convolution clamps at the image edge, so the outermost
+    // columns carry a boundary transient rather than a measurement. Reading
+    // them reports a nonzero noise floor for an input that is entirely flat.
+    // Measure on the interior; edge columns inherit the nearest estimate.
+    let margin = (DB3_ANALYSIS_HI.len() - 1).min(cols / 2);
+    let (lo, hi) = (margin, cols - margin);
+    if hi <= lo {
+        return vec![F::zero(); cols];
+    }
+
+    let usable = hi - lo;
+    let seg_width = (usable / SIGMA_SEGMENTS).max(MIN_SEGMENT_COLS).min(usable);
+    let step = (seg_width / 2).max(1);
+
+    let mut profile = vec![F::zero(); cols];
+    let mut start = lo;
+    loop {
+        let end = (start + seg_width).min(hi);
+        let sigma =
+            compute_mad_internal(filtered.slice(s![.., start..end])) * F::from_f64_c(MAD_TO_SIGMA);
+        let assign_from = if start == lo { 0 } else { start };
+        let assign_to = if end == hi { cols } else { end };
+        for p in profile.iter_mut().take(assign_to).skip(assign_from) {
+            if sigma > *p {
+                *p = sigma;
+            }
+        }
+        if end == hi {
+            break;
+        }
+        start += step;
+    }
+    profile
 }
 
-/// Patch sigmas at or below this fraction of the input's value range are
-/// float quantization residue, not a measured noise floor. See
-/// [`estimate_noise_sigma_robust`] for the measured margins behind the value.
-const SILENCE_SIGMA_RATIO: f64 = 1.0e-6;
-
-/// Internal 2D robust estimator for a single patch
-fn estimate_patch_sigma_internal<F: Bm3dFloat>(patch: ArrayView2<F>) -> F {
-    let (rows, cols) = patch.dim();
-    if rows < 5 || cols < 5 {
+/// Reduce a per-column sigma profile to the single value the global gates
+/// need: the median over segments that carry signal.
+///
+/// Air columns must not set this. The previous implementation took the
+/// *minimum* over 64x64 patches, deliberately hunting the air noise floor,
+/// which is how it came to report float quantization residue as the noise
+/// level and silently disable the whole correction (issue #133's sibling,
+/// PR #146). Air is the wrong place to measure a streak: the streak is
+/// multiplicative on the signal and is identically zero where there is no
+/// signal.
+fn estimate_noise_sigma_robust<F: Bm3dFloat>(sinogram: ArrayView2<F>) -> F {
+    let profile = estimate_sigma_profile(sinogram);
+    if profile.is_empty() {
         return F::zero();
     }
-
-    // Constants for Mäkinen estimator
-    let sigma_v = 2.0;
-    let radius = (4.0f64 * sigma_v).ceil() as usize;
-    let width = 2 * radius + 1;
-    let mut v_kernel = Vec::with_capacity(width);
-    let mut v_sum = 0.0;
-    for i in 0..width {
-        let x = i as f64 - radius as f64;
-        let val = (-0.5 * (x / sigma_v).powi(2)).exp();
-        v_kernel.push(F::from_f64_c(val));
-        v_sum += val;
+    let loudest = profile
+        .iter()
+        .copied()
+        .fold(F::zero(), |a, b| if b > a { b } else { a });
+    if loudest <= F::zero() {
+        return F::zero();
     }
-    let v_norm = F::from_f64_c(v_sum);
-    for k in &mut v_kernel {
-        *k /= v_norm;
+    let floor = loudest * F::from_f64_c(ACTIVE_SEGMENT_RATIO);
+    let mut active: Vec<F> = profile.into_iter().filter(|&s| s >= floor).collect();
+    if active.is_empty() {
+        return loudest;
     }
-
-    let db3_coeffs: [f64; 6] = [
-        0.03522629,
-        -0.08544127,
-        0.13501102,
-        0.45987750,
-        -0.80689151,
-        0.33267055,
-    ];
-    let h_kernel: Vec<F> = db3_coeffs.iter().map(|&x| F::from_f64_c(x)).collect();
-
-    let smoothed = gaussian_filter_1d_vertical_internal(patch, &v_kernel);
-    let filtered = convolve_1d_horizontal_internal(smoothed.view(), &h_kernel);
-    let mad = compute_mad_internal(filtered.view());
-    mad * F::from_f64_c(3.96)
+    let mid = active.len() / 2;
+    active.select_nth_unstable_by(mid, |a, b| {
+        a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)
+    });
+    active[mid]
 }
 
-fn gaussian_filter_1d_vertical_internal<F: Bm3dFloat>(
-    data: ArrayView2<F>,
-    kernel: &[F],
-) -> Array2<F> {
-    let (rows, cols) = data.dim();
-    let k_len = kernel.len();
-    let radius = k_len / 2;
-    let mut output = Array2::zeros((rows, cols));
+/// Requested number of overlapping full-height segments each pyramid level is
+/// split into for the BM3D call itself (Mäkinen et al. 2021, Section 3.3.3,
+/// second half): each segment is denoised with its own noise amplitude and
+/// the results are recombined with a normalized Hann window.
+///
+/// Measured on the benchmark sinogram (720 x 725, canonical stripe-RMS
+/// metric): 8 segments at 75% overlap removes 88.3% of the ring-artifact
+/// energy against 86.3% unsegmented; the closed-source reference sits at
+/// 88.4%. The landscape over (segments, overlap) is bumpy — seams landing in
+/// the object-edge zones can cost a point — so these values are a measured
+/// optimum, not a smooth one.
+const DENOISE_SEGMENTS: usize = 8;
 
-    for c in 0..cols {
-        for r in 0..rows {
-            let mut sum = F::zero();
-            for (k, &k_val) in kernel.iter().enumerate() {
-                let k_idx = k as isize - radius as isize;
-                let src_r = (r as isize + k_idx).clamp(0, (rows - 1) as isize);
-                sum += data[[src_r as usize, c]] * k_val;
+/// Fraction of a segment's width shared with its neighbor. Higher overlap
+/// averages more independent seam placements per column, which is what keeps
+/// the Hann recombination from imprinting its own layout on the result.
+const DENOISE_SEGMENT_OVERLAP: f64 = 0.75;
+
+/// Segment width floor, as a multiple of the finest scale's search window.
+/// Below ~4 search windows the block matcher has too little horizontal room
+/// and the segment's own boundary transients dominate. Coarse pyramid levels
+/// whose width cannot fit segments this wide fall back to fewer segments or
+/// a single unsegmented call.
+const MIN_DENOISE_SEGMENT_WIDTH_FACTOR: usize = 4;
+
+fn median_of<F: Bm3dFloat>(vals: &mut [F]) -> Option<F> {
+    if vals.is_empty() {
+        return None;
+    }
+    let mid = vals.len() / 2;
+    vals.select_nth_unstable_by(mid, |a, b| {
+        a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)
+    });
+    Some(vals[mid])
+}
+
+/// Denoise one pyramid level as overlapping full-height segments, each with
+/// its own noise amplitude (Mäkinen et al. 2021, Section 3.3.3, second half).
+///
+/// The streak amplitude is strongly nonstationary across a sinogram — air
+/// columns carry almost none, dense-object columns orders of magnitude more —
+/// and BM3D filters everything at whatever single `sigma_random` it is given.
+/// Splitting the level into overlapping segments narrows both that sigma and
+/// BM3D's internal per-call adaptation (its min-max normalization and
+/// column-adaptive sigma map) to each segment's own columns.
+///
+/// Each segment's sigma is the median of the level's per-column
+/// [`estimate_sigma_profile`] over the segment's *active* columns — those at
+/// or above [`ACTIVE_SEGMENT_RATIO`] of the level's loudest column, the same
+/// air exclusion [`estimate_noise_sigma_robust`] applies to the whole level.
+/// The plain median is measurably wrong here: air columns drag it well below
+/// the streak amplitude and the object half of the segment is under-filtered
+/// (benchmark: 80.8% removed against 86.3% unsegmented; the active median
+/// reaches 88.3%). A segment with no active columns keeps the caller's
+/// whole-level estimate.
+///
+/// Segments of width `cols / (1 + (n-1)*(1-overlap))` are laid out evenly,
+/// each is denoised independently, and the results are blended with a Hann
+/// window per segment, normalized per column so the weights sum to one. The
+/// Hann taper is sampled at bin centers so it is strictly positive at the
+/// segment ends: columns covered by a single segment normalize to weight one,
+/// and each overlap degenerates to a raised-cosine crossfade.
+///
+/// When `requested_segments` (or the level's width) does not allow at least
+/// two segments of `min_segment_width`, this is exactly one unsegmented BM3D
+/// call. Only the BM3D call is segmented; residual bookkeeping, shields, and
+/// the final projection stay full-width in the caller.
+fn bm3d_denoise_segmented<F: Bm3dFloat>(
+    image: ArrayView2<F>,
+    config: &Bm3dConfig<F>,
+    plans: &crate::pipeline::Bm3dPlans<F>,
+    psd_x: Option<ArrayView1<F>>,
+    requested_segments: usize,
+    min_segment_width: usize,
+) -> Result<Array2<F>, String> {
+    let (rows, cols) = image.dim();
+    let min_w = min_segment_width.max(config.patch_size).max(1);
+
+    // Segment width for n segments overlapping by fraction v is
+    // w = cols / (1 + (n-1)*(1-v)); n_fit is the largest n keeping w >= min_w.
+    let v = DENOISE_SEGMENT_OVERLAP;
+    let n_fit = if cols >= min_w {
+        (1.0 + (cols as f64 / min_w as f64 - 1.0) / (1.0 - v)).floor() as usize
+    } else {
+        1
+    };
+    let n = requested_segments.clamp(1, n_fit.max(1));
+    if n <= 1 {
+        return crate::orchestration::bm3d_ring_artifact_removal_with_psd(
+            image,
+            RingRemovalMode::Streak,
+            config,
+            plans,
+            psd_x,
+        );
+    }
+
+    let seg_w = ((cols as f64 / (1.0 + (n as f64 - 1.0) * (1.0 - v))).ceil() as usize).min(cols);
+    let last_start = cols - seg_w;
+
+    // Per-column noise amplitude, measured once on this level; the air
+    // exclusion floor is relative to the level's loudest column.
+    let profile = estimate_sigma_profile(image);
+    let loudest = profile
+        .iter()
+        .copied()
+        .fold(F::zero(), |a, b| if b > a { b } else { a });
+    let active_floor = loudest * F::from_f64_c(ACTIVE_SEGMENT_RATIO);
+    let dust = F::from_f64_c(1.0e-9);
+
+    let mut acc = Array2::<F>::zeros((rows, cols));
+    let mut weight_sum = vec![F::zero(); cols];
+
+    for i in 0..n {
+        let start = (i * last_start + (n - 1) / 2) / (n - 1);
+        let end = (start + seg_w).min(cols);
+        let seg = image.slice(s![.., start..end]);
+
+        let mut seg_config = config.clone();
+        let mut vals: Vec<F> = profile[start..end]
+            .iter()
+            .copied()
+            .filter(|&s| s >= active_floor)
+            .collect();
+        let seg_sigma = median_of(&mut vals).unwrap_or(F::zero());
+        // A segment with no active columns (all air) keeps the caller's
+        // whole-level estimate rather than handing the inner call a zero it
+        // would re-estimate differently.
+        if seg_sigma > dust {
+            seg_config.sigma_random = seg_sigma;
+        }
+
+        let den = crate::orchestration::bm3d_ring_artifact_removal_with_psd(
+            seg,
+            RingRemovalMode::Streak,
+            &seg_config,
+            plans,
+            psd_x,
+        )?;
+
+        let width = end - start;
+        for j in 0..width {
+            // Hann taper, sampled at bin centers so it is strictly positive
+            // at both ends (a zero endpoint would leave the outermost columns
+            // of the image with zero total weight).
+            let phase = std::f64::consts::PI * (j as f64 + 0.5) / width as f64;
+            let w = F::from_f64_c(phase.sin() * phase.sin());
+            let c = start + j;
+            weight_sum[c] += w;
+            for r in 0..rows {
+                acc[[r, c]] += den[[r, j]] * w;
             }
-            output[[r, c]] = sum;
         }
     }
-    output
+
+    for c in 0..cols {
+        let total = weight_sum[c];
+        if total > F::zero() {
+            for r in 0..rows {
+                acc[[r, c]] /= total;
+            }
+        } else {
+            // Unreachable with the layout above (segments cover every
+            // column), kept as an identity fallback rather than a panic.
+            for r in 0..rows {
+                acc[[r, c]] = image[[r, c]];
+            }
+        }
+    }
+    Ok(acc)
 }
+
+/// Scaling that turns a median absolute deviation into a standard deviation
+/// for normally distributed data (Mäkinen et al. equation 26).
+const MAD_TO_SIGMA: f64 = 1.4826;
+
+/// Horizontal high-pass, the `psi` of the analysis kernel. Carried over
+/// verbatim from the previous estimator: the first coefficient's sign differs
+/// from the canonical Daubechies-3 decomposition high-pass (+0.0352 here,
+/// -0.0352 in db3), leaving a DC gain of 0.07 instead of 0, so a few percent
+/// of the smooth object profile leaks into the estimate. The l2 norm is 1
+/// either way, so the streak calibration is unaffected; correcting the sign
+/// changes measured behavior and is follow-up work, not a comment fix.
+const DB3_ANALYSIS_HI: [f64; 6] = [
+    0.03522629,
+    -0.08544127,
+    0.13501102,
+    0.45987750,
+    -0.80689151,
+    0.33267055,
+];
 
 fn convolve_1d_horizontal_internal<F: Bm3dFloat>(data: ArrayView2<F>, kernel: &[F]) -> Array2<F> {
     let (rows, cols) = data.dim();
@@ -707,7 +961,9 @@ fn compute_mad_internal<F: Bm3dFloat>(data: ArrayView2<F>) -> F {
 ///
 /// # Arguments
 ///
-/// * `sinogram` - Input 2D sinogram (H × W), assumes log-transformed data
+/// * `sinogram` - Input 2D sinogram (H × W), linear transmission data. The
+///   pipeline log-transforms internally (see
+///   [`MultiscaleConfig::log_domain_input`] to pass pre-logged data instead).
 /// * `config` - Multi-scale configuration parameters
 ///
 /// # Returns
@@ -745,9 +1001,129 @@ pub fn multiscale_bm3d_streak_removal_with_plans<F: Bm3dFloat>(
     config: &MultiscaleConfig<F>,
     plans: &crate::pipeline::Bm3dPlans<F>,
 ) -> Result<Array2<F>, String> {
-    // Validate configuration
     config.validate()?;
 
+    if config.log_domain_input {
+        return multiscale_denoise_log_domain(sinogram, config, plans);
+    }
+
+    // The algorithm is defined on log-transformed data (Mäkinen et al. 2021,
+    // Section 3.1): the streak is multiplicative detector gain, additive only
+    // in the logarithm. Floor at the input's own smallest positive value so
+    // the transform is exact wherever the data is positive; zeros and
+    // negatives (which a log-domain model cannot represent) clamp to that
+    // floor.
+    //
+    // Input with no positive values at all is not the linear transmission
+    // data this entry documents. Two cases, split deliberately: a CONSTANT
+    // non-positive input (an all-zero padded or blank slice, routine in batch
+    // stacks) has nothing to denoise and passes through unchanged; a VARYING
+    // one is almost certainly data that was already log-transformed by a
+    // caller who forgot `log_domain_input = true`, and silently processing it
+    // in a guessed domain — what this branch previously did — returns output
+    // in the wrong domain with no warning. Fail loudly instead and name the
+    // flag.
+    let mut floor = F::infinity();
+    let mut lo = F::infinity();
+    let mut hi = F::neg_infinity();
+    for &v in sinogram.iter() {
+        if v > F::zero() && v < floor {
+            floor = v;
+        }
+        if v < lo {
+            lo = v;
+        }
+        if v > hi {
+            hi = v;
+        }
+    }
+    if !floor.is_finite() {
+        if hi <= lo {
+            return Ok(sinogram.to_owned());
+        }
+        return Err(
+            "multiscale streak removal expects linear transmission data with at least one \
+             positive value; if the input is already log-transformed, set \
+             MultiscaleConfig::log_domain_input = true"
+                .to_string(),
+        );
+    }
+
+    let log_floor = floor.ln();
+    let logged = sinogram.mapv(|v| if v > F::zero() { v.ln() } else { log_floor });
+    let denoised = multiscale_denoise_log_domain(logged.view(), config, plans)?;
+    Ok(denoised.mapv(|v| v.exp()))
+}
+
+/// The log-domain core: vertical binning around the horizontal pyramid
+/// (Mäkinen et al. 2021, Section 3.2, closing equation
+/// `Y_hat = Z - B_v^{-1}[B_v(Z_0) - Y_hat_0]`).
+///
+/// The sinogram is vertically binned by `max(1, rows / VERTICAL_BIN_TARGET_ROWS)`
+/// before the horizontal pyramid runs. The pyramid's correction — its output
+/// minus its binned input — is computed in binned space and replicated back to
+/// full height (the correction is per-column anyway), then added to the
+/// original. Only the coarse vertical components are replaced by the denoised
+/// estimate; the fine vertical detail of `Z` is untouched, which is exactly
+/// the paper's `B_v^{-1}` restoration step.
+///
+/// The noise estimator needs no adjustment: `estimate_sigma_profile` builds
+/// its column Gaussian with sigma = rows/12 of the image it is handed, so on
+/// the binned image it uses binned_rows/12 — the paper's `m_v / 12` with the
+/// new `m_v`, which is what equation 26 prescribes.
+fn multiscale_denoise_log_domain<F: Bm3dFloat>(
+    sinogram: ArrayView2<F>,
+    config: &MultiscaleConfig<F>,
+    plans: &crate::pipeline::Bm3dPlans<F>,
+) -> Result<Array2<F>, String> {
+    let (rows, cols) = sinogram.dim();
+    let factor = (rows / VERTICAL_BIN_TARGET_ROWS).max(1);
+    if factor <= 1 {
+        return multiscale_denoise_pyramid(sinogram, config, plans);
+    }
+
+    // B_v: vertical mean-binning. Streaks are vertically constant and pass
+    // through unchanged; per-pixel noise attenuates by sqrt(factor).
+    let binned = bin_vertical_mean(sinogram, factor);
+    let denoised_binned = multiscale_denoise_pyramid(binned.view(), config, plans)?;
+
+    // The pyramid's correction in binned space, projected onto a per-column
+    // profile (median over binned rows) before replication. For K >= 1 the
+    // pyramid's final protection stage already makes the correction a
+    // per-column constant, so the projection is a no-op within float dust —
+    // but the K = 0 path returns plain single-scale BM3D, whose correction is
+    // fully two-dimensional, and replicating that per vertical bin would
+    // inject blocky vertical structure (measured 0.031 in log units on a
+    // 600x39 input). Projecting first makes the per-column invariant hold by
+    // construction on every path.
+    let correction = &denoised_binned - &binned;
+    let mut profile = Vec::with_capacity(cols);
+    for c in 0..cols {
+        let mut col: Vec<F> = correction.column(c).to_vec();
+        let mid = col.len() / 2;
+        col.select_nth_unstable_by(mid, |a, b| {
+            a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)
+        });
+        profile.push(col[mid]);
+    }
+    let mut output = sinogram.to_owned();
+    for r in 0..rows {
+        for c in 0..cols {
+            output[[r, c]] += profile[c];
+        }
+    }
+    Ok(output)
+}
+
+/// The horizontal multiscale pyramid, operating on data already in the domain
+/// the model assumes (log-transformed, or whatever the caller vouched for
+/// via [`MultiscaleConfig::log_domain_input`]) and already vertically binned
+/// by [`multiscale_denoise_log_domain`].
+fn multiscale_denoise_pyramid<F: Bm3dFloat>(
+    sinogram: ArrayView2<F>,
+    config: &MultiscaleConfig<F>,
+    plans: &crate::pipeline::Bm3dPlans<F>,
+) -> Result<Array2<F>, String> {
     let (rows, cols) = sinogram.dim();
 
     // === GLOBAL VARIANCE MAP & NOISE ESTIMATION (SCALE 0 TRUTH) ===
@@ -816,10 +1192,14 @@ pub fn multiscale_bm3d_streak_removal_with_plans<F: Bm3dFloat>(
     // Compute denoise sizes for PSD generation
     let denoise_sizes: Vec<usize> = pyramid_orig.iter().map(|arr| arr.ncols()).collect();
 
-    // Generate PSD shapes for each scale
-    // Note: Currently unused as we use the standard streak mode PSD construction.
-    // Future enhancement: pass per-scale PSD shapes to BM3D for full fidelity.
-    let _psd_shapes = generate_psd_shapes::<F>(&denoise_sizes);
+    // Horizontal noise power profile per scale (Mäkinen et al. equations 19
+    // and 25). The coarsest level's noise is still horizontally white, so its
+    // shape is flat; every finer level's noise has been through debinning and
+    // carries the residual kernel's spectrum instead. Passing these to BM3D is
+    // what makes the extra scales do anything -- with one shared white model,
+    // every level filters as if it were the coarsest and adding scales changes
+    // nothing.
+    let psd_shapes = generate_psd_shapes::<F>(&denoise_sizes);
 
     // === NOISE ESTIMATION STRATEGY ===
     // We stick to the robust estimator at each scale.
@@ -906,19 +1286,35 @@ pub fn multiscale_bm3d_streak_removal_with_plans<F: Bm3dFloat>(
         // Revert to per-scale robust estimation.
         let estimated_sigma = estimate_noise_sigma_robust(img_normalized.view());
 
-        // Use estimated sigma for BM3D, with a minimum to avoid numerical issues
-        // The estimation captures the actual noise level after all the residual propagation
-        let min_sigma = F::from_f64_c(0.001);
-        if estimated_sigma > min_sigma {
+        // Use the per-scale estimate whenever it is a measurement at all. The
+        // previous guard discarded any estimate below an absolute 0.001 in the
+        // normalized domain — but the normalization divides by the image's
+        // value range, and in the log domain that range grows with the air
+        // floor (ln of it), so a fixed cutoff turns legitimate sigmas into
+        // zeros on data whose floor is merely deeper. Dropping the estimate
+        // left sigma_random at 0.0, handed the inner call to a different
+        // estimator measuring a different quantity, and BM3D degraded to the
+        // identity: the benchmark sinogram sat 15% above the cutoff and
+        // worked, a 400-row synthetic sat 40% below and silently no-opped.
+        // Only float dust is rejected; a genuinely flat scale estimates 0 and
+        // an identity pass is then the correct outcome.
+        let dust = F::from_f64_c(1.0e-9);
+        if estimated_sigma > dust {
             scale_config.sigma_random = estimated_sigma;
         }
 
-        // Denoise normalized image
-        let den_normalized = bm3d_ring_artifact_removal_with_plans(
+        // Denoise normalized image with this level's own noise spectrum,
+        // split into overlapping segments so each is filtered at its own
+        // noise amplitude (Section 3.3.3). The segment width floor is set by
+        // the finest scale's search window, not the per-scale shrunken one,
+        // so coarse (narrow) levels fall back to fewer segments or one.
+        let den_normalized = bm3d_denoise_segmented(
             img_normalized.view(),
-            RingRemovalMode::Streak,
             &scale_config,
             plans,
+            psd_shapes.get(scale).map(|p| p.view()),
+            DENOISE_SEGMENTS,
+            config.bm3d_config.search_window * MIN_DENOISE_SEGMENT_WIDTH_FACTOR,
         )?;
 
         // === DENORMALIZE immediately after BM3D ===
@@ -1379,19 +1775,97 @@ mod tests {
         assert!(output.iter().all(|&x| x.is_finite()));
     }
 
+    /// Non-positive input contract (Copilot review on #152): a constant
+    /// non-positive input — an all-zero padded or blank slice, routine in
+    /// batch stacks — passes through unchanged, while a VARYING input with no
+    /// positive values (pre-logged data whose caller forgot
+    /// `log_domain_input = true`) must fail loudly instead of being silently
+    /// processed in a guessed domain and returned without the exp round-trip.
+    #[test]
+    fn non_positive_input_blank_passes_varying_errors() {
+        let cfg = MultiscaleConfig::<f32>::default();
+
+        let blank = Array2::<f32>::zeros((64, 128));
+        let out = multiscale_bm3d_streak_removal(blank.view(), &cfg).unwrap();
+        assert_eq!(out, blank, "a blank slice must pass through unchanged");
+
+        // Varying but nowhere positive: the shape of accidentally pre-logged
+        // transmission data (ln of (0,1) data is negative everywhere).
+        let logged_by_mistake = random_matrix(64, 128, 777).mapv(|v| (v * 0.5 + 0.25).ln());
+        assert!(logged_by_mistake.iter().all(|&v| v <= 0.0));
+        let err = multiscale_bm3d_streak_removal(logged_by_mistake.view(), &cfg)
+            .expect_err("varying non-positive input must be rejected");
+        assert!(
+            err.contains("log_domain_input"),
+            "the error must name the opt-in flag, got: {err}"
+        );
+
+        // And the same data processes fine when the caller declares its domain.
+        let flagged = MultiscaleConfig::<f32> {
+            log_domain_input: true,
+            ..MultiscaleConfig::default()
+        };
+        multiscale_bm3d_streak_removal(logged_by_mistake.view(), &flagged)
+            .expect("declared log-domain input must be accepted");
+    }
+
+    /// The log/exp shell is exactly a change of domain: feeding the entry
+    /// linear data must equal feeding it pre-logged data with
+    /// `log_domain_input = true` and exponentiating the result. This is the
+    /// contract that lets upstream pipelines which already log-transform
+    /// (paper Section 3.1) opt out of the internal transform safely.
+    #[test]
+    fn log_domain_flag_is_a_pure_change_of_domain() {
+        let image = random_matrix(48, 200, 31415).mapv(|v| v + 0.05); // strictly positive
+        let default_cfg = MultiscaleConfig::<f32>::default();
+        let flagged_cfg = MultiscaleConfig::<f32> {
+            log_domain_input: true,
+            ..MultiscaleConfig::default()
+        };
+
+        let via_default = multiscale_bm3d_streak_removal(image.view(), &default_cfg).unwrap();
+
+        let logged = image.mapv(f32::ln);
+        let via_flag = multiscale_bm3d_streak_removal(logged.view(), &flagged_cfg)
+            .unwrap()
+            .mapv(f32::exp);
+
+        for (a, b) in via_default.iter().zip(via_flag.iter()) {
+            assert!(
+                approx_eq(*a, *b, 1e-4),
+                "log wrapper is not a pure change of domain: {} vs {}",
+                a,
+                b
+            );
+        }
+    }
+
+    /// Apply the same log/exp shell the multiscale entry uses, so the K=0
+    /// equivalence tests compare like with like: multiscale at K=0 is
+    /// single-scale streak removal *in the log domain*.
+    fn single_scale_in_log_domain(image: &Array2<f32>, config: &Bm3dConfig<f32>) -> Array2<f32> {
+        let floor = image
+            .iter()
+            .copied()
+            .filter(|&v| v > 0.0)
+            .fold(f32::INFINITY, f32::min);
+        let logged = image.mapv(|v| if v > 0.0 { v.ln() } else { floor.ln() });
+        let denoised =
+            bm3d_ring_artifact_removal(logged.view(), RingRemovalMode::Streak, config).unwrap();
+        denoised.mapv(f32::exp)
+    }
+
     #[test]
     fn test_k0_equals_single_scale() {
-        // For small images (K=0), multiscale should equal single-scale
+        // For small images (K=0), multiscale reduces to single-scale streak
+        // removal applied in the log domain (the multiscale entry logs its
+        // input; see MultiscaleConfig::log_domain_input).
         let image = random_matrix(32, 32, 88888);
         let config = MultiscaleConfig::default();
 
         let multiscale_result = multiscale_bm3d_streak_removal(image.view(), &config).unwrap();
+        let single_result = single_scale_in_log_domain(&image, &config.bm3d_config);
 
-        let single_result =
-            bm3d_ring_artifact_removal(image.view(), RingRemovalMode::Streak, &config.bm3d_config)
-                .unwrap();
-
-        // Results should be identical for K=0
         for (a, b) in multiscale_result.iter().zip(single_result.iter()) {
             assert!(
                 approx_eq(*a, *b, 1e-5),
@@ -1537,12 +2011,9 @@ mod tests {
         };
 
         let multi_result = multiscale_bm3d_streak_removal(image.view(), &config).unwrap();
+        let single_result = single_scale_in_log_domain(&image, &config.bm3d_config);
 
-        let single_result =
-            bm3d_ring_artifact_removal(image.view(), RingRemovalMode::Streak, &config.bm3d_config)
-                .unwrap();
-
-        // Should be identical when forcing K=0
+        // Should be identical when forcing K=0 (both in the log domain)
         for (a, b) in multi_result.iter().zip(single_result.iter()) {
             assert!(approx_eq(*a, *b, 1e-5), "Forced K=0 differs from single");
         }
@@ -1568,6 +2039,126 @@ mod tests {
         })
     }
 
+    /// `bin_vertical_mean` must average exactly, including the ragged last
+    /// bin when the row count does not divide by the factor.
+    #[test]
+    fn vertical_binning_averages_exactly() {
+        // 7 rows, factor 3: bins of 3, 3, and a ragged 1.
+        let img = Array2::from_shape_fn((7, 4), |(r, c)| (r * 10 + c) as f32);
+        let binned = bin_vertical_mean(img.view(), 3);
+        assert_eq!(binned.dim(), (3, 4));
+        for c in 0..4 {
+            let c_f = c as f32;
+            assert!(approx_eq(binned[[0, c]], 10.0 + c_f, 1e-6)); // rows 0,1,2
+            assert!(approx_eq(binned[[1, c]], 40.0 + c_f, 1e-6)); // rows 3,4,5
+            assert!(approx_eq(binned[[2, c]], 60.0 + c_f, 1e-6)); // row 6 alone
+        }
+        // Factor 1 is the identity.
+        let same = bin_vertical_mean(img.view(), 1);
+        assert_eq!(same, img);
+    }
+
+    /// The vertically binned path (inputs taller than VERTICAL_BIN_TARGET_ROWS)
+    /// must still act on the streak, and its whole correction must be a
+    /// per-column offset: the fine vertical detail of the input is preserved
+    /// exactly, which is the paper's B_v^-1 restoration property.
+    /// When a level is too narrow to fit two segments of the minimum width,
+    /// the segmented call must be exactly the plain call — bit for bit — so
+    /// coarse pyramid levels lose nothing by going through the same path.
+    #[test]
+    fn segmented_call_falls_back_to_plain_below_minimum_width() {
+        let image = random_matrix(48, 90, 4242).mapv(|v| v + 0.05);
+        let config = Bm3dConfig::<f32>::default();
+        let plans = crate::pipeline::Bm3dPlans::new(config.patch_size, config.max_matches);
+
+        // min width 96 > 90 cols: no segmentation possible.
+        let segmented = bm3d_denoise_segmented(image.view(), &config, &plans, None, 8, 96).unwrap();
+        let plain = crate::orchestration::bm3d_ring_artifact_removal_with_psd(
+            image.view(),
+            RingRemovalMode::Streak,
+            &config,
+            &plans,
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            segmented, plain,
+            "narrow-level fallback must be identical to the unsegmented call"
+        );
+    }
+
+    /// Streaked phantom with a smooth air-to-object transition, the shape of
+    /// real sinograms (and of the benchmark phantom). A hard air cliff is a
+    /// separate, pre-existing robustness hole: the streak-profile
+    /// pre-subtraction bleeds across it, the inner BM3D distorts the whole
+    /// frame, and only the final hump guard contains the damage as a no-op —
+    /// at every height, unbinned included. Tracked as follow-up work; this
+    /// test pins the behavior the pipeline actually delivers on data shaped
+    /// like its domain.
+    fn tapered_streaked(rows: usize, cols: usize, air: usize, taper: usize) -> Array2<f32> {
+        let mut rng = SimpleLcg::new(9);
+        let jitter: Vec<f32> = (0..cols).map(|_| (rng.next_f32() - 0.5) * 0.04).collect();
+        Array2::from_shape_fn((rows, cols), |(r, c)| {
+            let envelope = if c + taper < air || c >= cols - air + taper {
+                0.0
+            } else if c < air {
+                let x = (c + taper - air) as f32 / taper as f32;
+                0.5 * (1.0 - (std::f32::consts::PI * x).cos())
+            } else if c + air + taper >= cols + taper && c + air >= cols {
+                0.0
+            } else if c + air + taper >= cols {
+                let x = (c + air + taper - cols) as f32 / taper as f32;
+                0.5 * (1.0 + (std::f32::consts::PI * x).cos())
+            } else {
+                1.0
+            };
+            let row_term = 1.0 + 0.1 * (r as f32 / rows as f32);
+            (1.0e-8 + envelope * 0.5 * row_term) * (1.0 + jitter[c])
+        })
+    }
+
+    #[test]
+    fn tall_input_binned_path_corrects_streaks_and_preserves_rows() {
+        let rows = VERTICAL_BIN_TARGET_ROWS * 2; // guarantees factor >= 2
+        let img = tapered_streaked(rows, 200, 60, 30);
+        let cfg = MultiscaleConfig::<f32> {
+            num_scales: Some(2),
+            ..Default::default()
+        };
+        let out = multiscale_bm3d_streak_removal(img.view(), &cfg).unwrap();
+
+        // Acts on the streak at all.
+        let max_change = img
+            .iter()
+            .zip(out.iter())
+            .map(|(a, b)| (a - b).abs())
+            .fold(0.0f32, f32::max);
+        assert!(
+            max_change > 1.0e-4,
+            "binned path returned its input unchanged: max|change| = {max_change}"
+        );
+
+        // The correction in log space is a per-column, per-bin constant; with
+        // the pyramid's final per-column projection it collapses to one offset
+        // per column, so log(out) - log(img) must be constant down each column
+        // wherever the input is positive.
+        for c in [70usize, 100, 130] {
+            let mut deviation = 0.0f32;
+            let mut mean = 0.0f32;
+            for r in 0..rows {
+                mean += (out[[r, c]] / img[[r, c]]).ln();
+            }
+            mean /= rows as f32;
+            for r in 0..rows {
+                deviation = deviation.max(((out[[r, c]] / img[[r, c]]).ln() - mean).abs());
+            }
+            assert!(
+                deviation < 1.0e-3,
+                "column {c}: correction is not a per-column offset (max dev {deviation})"
+            );
+        }
+    }
+
     /// Regression for the silent multiscale no-op: on an image whose quietest
     /// patches are numerically flat air, the auto noise estimate must not
     /// report float quantization residue as the noise floor. The previous code
@@ -1583,6 +2174,87 @@ mod tests {
         assert!(
             f64::from(sigma) > 1.0e-6 * f64::from(hi - lo),
             "estimate is quantization residue, not a noise floor: {sigma}"
+        );
+    }
+
+    /// The automatic sigma must land near the streak amplitude actually
+    /// present, not orders of magnitude below it.
+    ///
+    /// The previous estimator tiled the image into 64x64 patches and took the
+    /// MINIMUM, deliberately hunting an "air noise floor". A sinogram is
+    /// mostly air and the streak is multiplicative on the signal, so the
+    /// quietest patch measures nothing and the estimate collapsed: on the
+    /// project's benchmark sinogram it returned 3.87e-6 against a true streak
+    /// amplitude of 1.24e-2, about 3200x too low, which left every gate
+    /// downstream shut. Raising a floor under the minimum (PR #146) moved the
+    /// estimate to the next-quietest patch without making it a measurement of
+    /// the streak.
+    ///
+    /// A ratio test rather than an absolute one: the estimator measures a
+    /// vertically-constant streak, so it should recover the amplitude it was
+    /// given to within a small factor.
+    #[test]
+    fn auto_sigma_tracks_the_streak_amplitude() {
+        let (rows, cols) = (128usize, 256usize);
+        let amplitude = 0.05f32;
+        let mut img = Array2::<f32>::zeros((rows, cols));
+        for c in 0..cols {
+            // Deterministic alternating per-column offset: vertically constant,
+            // horizontally white, which is the paper's basic streak model.
+            let offset = if c % 2 == 0 { amplitude } else { -amplitude };
+            for r in 0..rows {
+                // A smooth object so the estimator has signal to reject.
+                let object = 0.5 + 0.2 * ((r as f32) / (rows as f32)).sin();
+                img[[r, c]] = object + offset;
+            }
+        }
+
+        let sigma = f64::from(estimate_noise_sigma_robust(img.view()));
+        let truth = f64::from(amplitude);
+        assert!(
+            sigma > truth / 3.0 && sigma < truth * 3.0,
+            "auto sigma {sigma:.3e} is not within 3x of the streak amplitude {truth:.3e}"
+        );
+    }
+
+    /// Air must not set the noise level: the streak is identically zero
+    /// where there is no signal, so an empty margin carries no information
+    /// about its amplitude.
+    ///
+    /// A property guard rather than a regression reproduction. The previous
+    /// estimator also passes this particular input, because PR #146's silence
+    /// floor happens to reject air this quiet; it failed on real data, where
+    /// the quietest patch sits just above that floor while still measuring
+    /// nothing. `auto_sigma_tracks_the_streak_amplitude` is the test that
+    /// fails against the previous estimator.
+    #[test]
+    fn auto_sigma_ignores_empty_margins() {
+        let (rows, cols, margin) = (128usize, 256usize, 80usize);
+        let amplitude = 0.05f32;
+        let mut with_air = Array2::<f32>::zeros((rows, cols));
+        // Tiny-but-nonzero air, as a real detector and every simulated phantom
+        // produce. Exactly-zero air does not reproduce the failure, because
+        // the previous estimator already discarded exactly-zero patches; it
+        // was the almost-silent ones that it happily reported as the noise
+        // level.
+        for c in 0..cols {
+            for r in 0..rows {
+                with_air[[r, c]] = 1.0e-8 + 1.0e-9 * ((r + c) % 3) as f32;
+            }
+        }
+        for c in margin..(cols - margin) {
+            let offset = if c % 2 == 0 { amplitude } else { -amplitude };
+            for r in 0..rows {
+                with_air[[r, c]] = 0.5 + offset;
+            }
+        }
+
+        let sigma = f64::from(estimate_noise_sigma_robust(with_air.view()));
+        let truth = f64::from(amplitude);
+        assert!(
+            sigma > truth / 3.0,
+            "empty margins dragged the estimate to {sigma:.3e}, far under the \
+             streak amplitude {truth:.3e} present in the object"
         );
     }
 

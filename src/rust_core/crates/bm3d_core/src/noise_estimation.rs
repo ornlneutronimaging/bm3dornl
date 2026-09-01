@@ -124,7 +124,7 @@ fn recursive_gaussian_coefficients(sigma: f64) -> (f64, f64, f64, f64, f64) {
     (b0, b1, b2, b3, gain)
 }
 
-fn gaussian_filter_1d_vertical_recursive<F: Bm3dFloat>(
+pub(crate) fn gaussian_filter_1d_vertical_recursive<F: Bm3dFloat>(
     data: ArrayView2<F>,
     sigma_v: f64,
 ) -> Array2<F> {
