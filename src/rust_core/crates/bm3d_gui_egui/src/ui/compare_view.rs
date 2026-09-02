@@ -244,19 +244,26 @@ impl CompareView {
         let image_height =
             available_size.y - colorbar_height - label_height - status_bar_height - 3.0 * spacing;
 
-        // Row 1: Labels
+        // Row 1: Labels, one cell per panel so each title sits centered over
+        // its image. allocate_ui only advances the cursor by the content's
+        // used size, which collapsed all three labels to the left. add_sized
+        // allocates the full cell and lays the label out in a centered-and-
+        // justified child layout, so the text lands at the cell's center.
         ui.horizontal(|ui| {
-            ui.allocate_ui(egui::vec2(panel_width, label_height), |ui| {
-                ui.label(egui::RichText::new("Original").strong());
-            });
+            ui.add_sized(
+                egui::vec2(panel_width, label_height),
+                egui::Label::new(egui::RichText::new("Original").strong()),
+            );
             ui.add_space(spacing);
-            ui.allocate_ui(egui::vec2(panel_width, label_height), |ui| {
-                ui.label(egui::RichText::new("Processed").strong());
-            });
+            ui.add_sized(
+                egui::vec2(panel_width, label_height),
+                egui::Label::new(egui::RichText::new("Processed").strong()),
+            );
             ui.add_space(spacing);
-            ui.allocate_ui(egui::vec2(panel_width, label_height), |ui| {
-                ui.label(egui::RichText::new("Difference").strong());
-            });
+            ui.add_sized(
+                egui::vec2(panel_width, label_height),
+                egui::Label::new(egui::RichText::new("Difference").strong()),
+            );
         });
 
         // Row 2: Images with cursor tracking and ROI interaction
