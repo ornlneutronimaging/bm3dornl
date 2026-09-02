@@ -445,7 +445,7 @@ The BM3D GUI (`src/rust_core/crates/bm3d_gui_egui/`) enables:
 
 1. **Different Algorithm**: TomoPy implements wavelet-Fourier and sorting methods, not BM3D
 2. **Quality Gap**: BM3D-based methods show superior artifact removal
-3. **Platform Issues**: 6-7× slower on Apple Silicon
+3. **Platform Issues**: 12-16× slower on Apple Silicon (M2 Max) than on the Linux x86_64 host, against 1.1-2.2× for bm3dornl on the same pair of machines
 
 ### 10.3 Why Native Rust Implementation?
 
@@ -464,11 +464,13 @@ The BM3D GUI (`src/rust_core/crates/bm3d_gui_egui/`) enables:
 | Component | Specification |
 |-----------|---------------|
 | Model | MacBook Pro |
-| Chip | Apple M4 Max |
-| CPU Cores | 14 (10 performance + 4 efficiency) |
-| GPU Cores | 40 |
-| RAM | 128 GB unified memory |
+| Chip | Apple M2 Max |
+| CPU Cores | 12 (8 performance + 4 efficiency) |
+| RAM | 32 GB unified memory |
 | Architecture | arm64 |
+| OS | macOS 26.6.2 |
+| Python | 3.12 |
+| Measured | 2026-09-02 |
 
 ### 11.2 Linux x86_64 Test System
 

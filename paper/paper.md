@@ -64,7 +64,8 @@ The multiscale variant implements the pyramid approach from M√§kinen et al. [@m√
 Fourier-SVD is the fastest method at 0.017 seconds, achieving 1900$\times$ speedup over bm3d-streak-removal (31.8 seconds).
 The BM3D-based methods span a performance range: standard BM3DORNL processes sinograms in 0.094 seconds (340$\times$ faster than bm3d-streak-removal), while multiscale BM3DORNL takes 0.389 seconds (82$\times$ faster) due to pyramid processing.
 TomoPy methods achieve processing times of 0.22--0.29 seconds.
-Cross-platform performance differs substantially: TomoPy runs 2.5--3$\times$ slower on Apple Silicon than Linux x86_64 (likely due to unoptimized C extensions), whereas BM3DORNL runs at comparable speeds (within 10%) across platforms due to its Rust backend.
+Cross-platform behaviour differs substantially: on an Apple M2 Max laptop (12 cores) the TomoPy methods take 3.5--3.6 seconds per sinogram, 12--16$\times$ their times on the 24-core Linux x86_64 host, whereas BM3DORNL's streak mode takes 0.20 seconds and Fourier-SVD 0.022 seconds, about 2$\times$ and 1.3$\times$ their Linux times.
+Because the two hosts differ in core count, only same-machine ratios are comparable: BM3DORNL's speed advantage over the fastest TomoPy method grows from 2.4$\times$ on Linux x86_64 to 17$\times$ on Apple Silicon, and the quality metrics agree on both platforms to within 0.001 in SSIM.
 
 **Quality analysis:** We quantify agreement with the ground truth by the peak signal-to-noise ratio (PSNR, in dB) and the structural similarity index measure (SSIM) [@wang2004], both computed after rescaling result and ground truth to $[0, 1]$.
 \autoref{fig:results} shows the crop marked in \autoref{fig:input} for the unprocessed input and for all eight methods, each with its difference from the ground truth (image minus ground truth: red above, blue below).
