@@ -28,6 +28,9 @@ pub struct Bm3dParameters {
 
     // Multi-scale parameters (MultiscaleStreak mode)
     pub num_scales: usize, // 0 = auto
+    /// The loaded data is already log-transformed (attenuation), so the
+    /// multiscale pipeline must not apply its own logarithm.
+    pub log_domain_input: bool,
 
     // UI state
     show_advanced: bool,
@@ -50,6 +53,7 @@ impl Default for Bm3dParameters {
             fft_alpha: bm3d_default.fft_alpha,
             notch_width: bm3d_default.notch_width,
             num_scales: multiscale_default.num_scales.unwrap_or(0),
+            log_domain_input: multiscale_default.log_domain_input,
             show_advanced: false,
         }
     }
@@ -96,6 +100,7 @@ impl Bm3dParameters {
             } else {
                 None
             },
+            log_domain_input: self.log_domain_input,
             ..default
         }
     }
@@ -260,6 +265,26 @@ impl Bm3dParameters {
                 ui.label("(Auto)");
             }
         });
+
+        // Input domain. The multiscale model works on log-transformed data and
+        // applies the logarithm itself, which is right for linear transmission
+        // and wrong for data that is already attenuation (-ln T): logging it a
+        // second time turns air noise into huge outliers.
+        if ui
+            .checkbox(
+                &mut self.log_domain_input,
+                "Input is already log-transformed (attenuation)",
+            )
+            .on_hover_text(
+                "Check this for attenuation sinograms (-ln of transmission), the usual\n\
+                 normalized product. Leave unchecked for linear transmission data in\n\
+                 [0, 1], which the pipeline log-transforms itself.\n\
+                 Wrong setting = a second logarithm and unusable output.",
+            )
+            .changed()
+        {
+            changed = true;
+        }
 
         ui.add_space(4.0);
 
@@ -483,5 +508,20 @@ mod tests {
     fn default_patch_size_matches_core_default() {
         let params = Bm3dParameters::new();
         assert_eq!(params.patch_size, Bm3dConfig::<f32>::default().patch_size);
+    }
+
+    /// The input-domain toggle must reach the multiscale config, and its
+    /// default must track the core default.
+    #[test]
+    fn log_domain_toggle_maps_to_multiscale_config() {
+        let mut params = Bm3dParameters::new();
+        assert_eq!(
+            params.log_domain_input,
+            MultiscaleConfig::<f32>::default().log_domain_input
+        );
+        params.log_domain_input = true;
+        assert!(params.to_multiscale_config().log_domain_input);
+        params.log_domain_input = false;
+        assert!(!params.to_multiscale_config().log_domain_input);
     }
 }

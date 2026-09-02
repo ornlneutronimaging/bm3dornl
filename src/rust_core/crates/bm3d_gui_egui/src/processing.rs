@@ -153,15 +153,73 @@ impl ProcessingManager {
     }
 
     /// Request cancellation of current processing.
+    ///
+    /// Joins the worker, then drains its remaining progress messages so the
+    /// terminal outcome reaches the state machine: dropping the channel
+    /// unread left the state stuck at `Processing` forever, with the UI
+    /// showing a frozen progress bar and no way to process again. Draining
+    /// (rather than overwriting) also preserves a result from a worker that
+    /// finished just before the flag was seen.
     pub fn cancel(&mut self) {
         self.cancel_flag.store(true, Ordering::SeqCst);
 
         // Wait for worker to finish
-        if let Some(handle) = self.worker_handle.take() {
-            let _ = handle.join();
+        let join_result = self.worker_handle.take().map(|handle| handle.join());
+
+        if let Some(rx) = self.progress_rx.take() {
+            while let Ok(progress) = rx.try_recv() {
+                self.apply_progress(progress);
+            }
         }
 
-        self.progress_rx = None;
+        // A worker that ended without a terminal message must not leave the
+        // UI stuck in Processing: a panic is surfaced as an error rather than
+        // disguised as a cancellation; anything else counts as cancelled.
+        if join_result.is_some() && matches!(self.state, ProcessingState::Processing { .. }) {
+            self.state = match join_result {
+                Some(Err(_)) => ProcessingState::Error(
+                    "processing thread panicked before reporting a result".to_string(),
+                ),
+                _ => ProcessingState::Cancelled,
+            };
+        }
+    }
+
+    /// Apply one progress message to the state machine. Returns true when the
+    /// message is terminal (worker finished, cancelled, or errored).
+    fn apply_progress(&mut self, progress: ProcessingProgress) -> bool {
+        match progress {
+            ProcessingProgress::Started { total_slices } => {
+                self.state = ProcessingState::Processing {
+                    current_slice: 0,
+                    total_slices,
+                };
+                false
+            }
+            ProcessingProgress::SliceComplete {
+                slice_index,
+                total_slices,
+            } => {
+                self.state = ProcessingState::Processing {
+                    current_slice: slice_index + 1,
+                    total_slices,
+                };
+                false
+            }
+            ProcessingProgress::Finished { result } => {
+                self.processed_result = Some(result);
+                self.state = ProcessingState::Completed;
+                true
+            }
+            ProcessingProgress::Cancelled => {
+                self.state = ProcessingState::Cancelled;
+                true
+            }
+            ProcessingProgress::Error(msg) => {
+                self.state = ProcessingState::Error(msg);
+                true
+            }
+        }
     }
 
     /// Poll for progress updates. Call this each frame.
@@ -179,36 +237,7 @@ impl ProcessingManager {
 
         // Process collected messages
         for progress in messages {
-            match progress {
-                ProcessingProgress::Started { total_slices } => {
-                    self.state = ProcessingState::Processing {
-                        current_slice: 0,
-                        total_slices,
-                    };
-                }
-                ProcessingProgress::SliceComplete {
-                    slice_index,
-                    total_slices,
-                } => {
-                    self.state = ProcessingState::Processing {
-                        current_slice: slice_index + 1,
-                        total_slices,
-                    };
-                }
-                ProcessingProgress::Finished { result } => {
-                    self.processed_result = Some(result);
-                    self.state = ProcessingState::Completed;
-                    should_cleanup = true;
-                }
-                ProcessingProgress::Cancelled => {
-                    self.state = ProcessingState::Cancelled;
-                    should_cleanup = true;
-                }
-                ProcessingProgress::Error(msg) => {
-                    self.state = ProcessingState::Error(msg);
-                    should_cleanup = true;
-                }
-            }
+            should_cleanup |= self.apply_progress(progress);
         }
 
         // Clean up after processing all messages
@@ -373,4 +402,74 @@ fn process_volume_worker(
 
     // Send completion
     let _ = tx.send(ProcessingProgress::Finished { result: output });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_config() -> MultiscaleConfig<f32> {
+        let mut config = MultiscaleConfig::<f32>::default();
+        // Explicit sigma: keep the worker off the auto-estimation path.
+        config.bm3d_config.sigma_random = 0.1;
+        config
+    }
+
+    /// Cancelling mid-run must leave a state the UI can act on — never a
+    /// stuck `Processing`, which froze the progress bar and hid the Process
+    /// button until a new file was loaded.
+    #[test]
+    fn cancel_leaves_an_actionable_state() {
+        let volume = Array3::<f32>::from_elem((64, 64, 65), 0.5);
+        let mut manager = ProcessingManager::new();
+        manager.start_processing(volume, RingRemovalMode::Streak, test_config(), false, 0);
+        manager.cancel();
+        assert!(
+            !manager.is_processing(),
+            "cancel left the manager stuck in Processing: {:?}",
+            manager.state()
+        );
+        assert!(matches!(
+            manager.state(),
+            ProcessingState::Cancelled | ProcessingState::Completed
+        ));
+    }
+
+    /// A worker that finished before the cancel request must keep its result:
+    /// the drain applies the Finished message instead of discarding it.
+    #[test]
+    fn cancel_after_completion_keeps_the_result() {
+        let volume = Array3::<f32>::from_elem((2, 32, 33), 0.5);
+        let mut manager = ProcessingManager::new();
+        manager.start_processing(volume, RingRemovalMode::Streak, test_config(), false, 0);
+        // Wait deterministically for the worker to finish before cancelling,
+        // so the drain (not the cancel flag) decides the outcome.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        while manager
+            .worker_handle
+            .as_ref()
+            .is_some_and(|handle| !handle.is_finished())
+            && std::time::Instant::now() < deadline
+        {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        manager.cancel();
+        assert!(matches!(manager.state(), ProcessingState::Completed));
+        assert!(manager.processed_result().is_some());
+    }
+
+    /// The normal completion path through poll_progress still works.
+    #[test]
+    fn poll_reaches_completed_and_delivers_result() {
+        let volume = Array3::<f32>::from_elem((2, 32, 33), 0.5);
+        let mut manager = ProcessingManager::new();
+        manager.start_processing(volume, RingRemovalMode::Streak, test_config(), false, 0);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        while manager.is_processing() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            manager.poll_progress();
+        }
+        assert!(matches!(manager.state(), ProcessingState::Completed));
+        assert!(manager.take_processed_result().is_some());
+    }
 }
