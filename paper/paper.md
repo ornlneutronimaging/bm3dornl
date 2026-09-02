@@ -54,7 +54,7 @@ BM3DORNL provides the neutron imaging community with an open-source, MIT-license
 Several software packages implement pre-processing streak removal for tomography: TomoPy [@gürsoy2014] provides wavelet-Fourier filtering [@münch2009] and Vo's sorting/fitting methods [@vo2018]; ASTRA Toolbox [@van2016] offers GPU-accelerated preprocessing; and bm3d-streak-removal [@mäkinen2021] implements multiscale BM3D but remains closed-source and platform-limited.
 
 \autoref{fig:input} shows the benchmark input data: a synthetic sinogram ($720\times725$ pixels) with simulated ring artifacts and the corresponding clean ground truth.
-All benchmark results are from Linux x86_64 to enable comparison with bm3d-streak-removal, which provides only x86_64 binaries.
+The figures and the quality comparison use Linux x86_64 results so that bm3d-streak-removal, which provides only x86_64 binaries, can be included; the Apple Silicon timings quoted below come from a separate run of the same code.
 We compared eight methods: four BM3DORNL variants (streak, generic, multiscale, and Fourier-SVD), three TomoPy algorithms (wavelet-Fourier, sorting-fitting, and sorting-based), and the original bm3d-streak-removal.
 The multiscale variant implements the pyramid approach from Mäkinen et al. [@mäkinen2021], while Fourier-SVD is a lightweight FFT-guided method that reaches a similar PSNR at 23$\times$ the speed of the multiscale variant.
 
@@ -69,7 +69,7 @@ Because the two hosts differ in core count, only same-machine ratios are compara
 
 **Quality analysis:** We quantify agreement with the ground truth by the peak signal-to-noise ratio (PSNR, in dB) and the structural similarity index measure (SSIM) [@wang2004], both computed after rescaling result and ground truth to $[0, 1]$.
 \autoref{fig:results} shows the crop marked in \autoref{fig:input} for the unprocessed input and for all eight methods, each with its difference from the ground truth (image minus ground truth: red above, blue below).
-Every column, the input included, carries the same faint blue tint: the benchmark rescales the artifact-laden input to $[0, 1]$, which pins its brightest pixel to the ground truth's maximum and leaves the bulk of the image 3--4% low, and stripe removal preserves that level rather than restoring it.
+Every column, the input included, carries the same faint blue tint: the benchmark rescales the artifact-laden input to $[0, 1]$, which pins its brightest pixel to the ground truth's maximum and leaves the bulk of the image about 3% low, and stripe removal preserves that level rather than restoring it.
 The tint is therefore not a sign of artifact removal; the artifacts are the vertical stripes, shown in full in the input column, and a method's quality is read from how much of that stripe pattern remains in its own difference image.
 Generic BM3DORNL, a standard denoiser rather than a streak remover, leaves the stripes essentially untouched; streak and multiscale BM3DORNL, Fourier-SVD, and bm3d-streak-removal reduce them to a near-uniform residual.
 TomoPy SF and BSD leave somewhat stronger stripe residue than those four but also smooth the pixel noise, which the BM3D-based methods largely preserve; SSIM, computed over local $7\times7$ windows in which narrow vertical stripes affect few pixels, rewards that smoothing more than it penalises the remaining stripes, which is why TomoPy SF reaches the highest SSIM (0.987, see \autoref{fig:metrics}(b)).
@@ -111,7 +111,7 @@ cleaned = bm3d_ring_artifact_removal(sinogram, sigma_random=0.0)
 
 **GUI application:** BM3DORNL includes a native GUI built with the egui framework for Rust, installable via `pip install bm3dornl[gui]` or Homebrew on macOS.
 The GUI enables interactive parameter tuning, side-by-side comparison with difference visualization, HDF5/TIFF file loading with dataset browsing, and real-time processing feedback with a fast-mode toggle.
-At 0.094 seconds per sinogram in the default streak mode (Linux x86_64 benchmark), scientists can explore parameter space interactively at about 10 frames per second---something impractical with bm3d-streak-removal's 32-second processing time.
+At 0.094 seconds per sinogram in the default streak mode (Linux x86_64 benchmark), scientists can explore parameter space interactively at about 11 frames per second---something impractical with bm3d-streak-removal's 32-second processing time.
 
 # Research Impact
 
