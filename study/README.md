@@ -115,38 +115,46 @@ All 6 methods compared on identical test data (512x512 phantom, 720x725 sinogram
 | Component | Specification |
 |-----------|---------------|
 | Model | MacBook Pro |
-| Chip | Apple M4 Max |
-| RAM | 128 GB |
+| Chip | Apple M2 Max |
+| CPU Cores | 12 (8 performance + 4 efficiency) |
+| RAM | 32 GB unified memory |
 | Architecture | arm64 |
+| OS | macOS 26.6.2 |
+| Python | 3.12 |
+| Measured | 2026-09-02 |
 
-### Benchmark Results (5 methods, n=30 runs each)
+### Benchmark Results (7 methods, n=100 runs each)
 
 | Method | Time (s) | PSNR (dB) | SSIM |
 |--------|----------|-----------|------|
-| bm3dornl (streak) | 0.191 ± 0.006 | 32.63 | 0.6160 |
-| bm3dornl (generic) | 0.184 ± 0.007 | 32.93 | 0.5760 |
-| TomoPy FW (Münch) | 2.104 ± 0.048 | 20.61 | 0.5831 |
-| TomoPy SF (Vo) | 2.062 ± 0.038 | 34.50 | 0.9591 |
-| TomoPy BSD (sort) | 2.133 ± 0.040 | 34.69 | 0.9333 |
+| bm3dornl (streak) | 0.202 ± 0.014 | 39.57 | 0.9423 |
+| bm3dornl (generic) | 0.183 ± 0.007 | 35.10 | 0.9476 |
+| bm3dornl (multiscale) | 0.419 ± 0.017 | 39.73 | 0.9759 |
+| Fourier-SVD | 0.022 ± 0.003 | 39.64 | 0.9513 |
+| TomoPy FW (Münch) | 3.562 ± 0.195 | 20.63 | 0.5840 |
+| TomoPy SF (Vo) | 3.573 ± 0.256 | 42.01 | 0.9868 |
+| TomoPy BSD (sort) | 3.471 ± 0.250 | 42.86 | 0.9829 |
 
 Note: bm3d-streak-removal is not available on Apple Silicon (no arm64 binary).
 
 ### Cross-Platform Comparison
 
-| Method | Linux x86_64 (s) | Apple Silicon (s) | Speedup |
-|--------|------------------|-------------------|---------|
-| bm3dornl (streak) | 0.256 | 0.191 | 1.34x faster |
-| bm3dornl (generic) | 0.219 | 0.184 | 1.19x faster |
-| TomoPy FW (Münch) | 0.318 | 2.104 | 6.62x slower |
-| TomoPy SF (Vo) | 0.278 | 2.062 | 7.42x slower |
-| TomoPy BSD (sort) | 0.349 | 2.133 | 6.11x slower |
+| Method | Linux x86_64 (s) | Apple Silicon (s) | Apple Silicon / Linux |
+|--------|------------------|-------------------|-----------------------|
+| bm3dornl (streak) | 0.094 | 0.202 | 2.1x slower |
+| bm3dornl (generic) | 0.083 | 0.183 | 2.2x slower |
+| bm3dornl (multiscale) | 0.389 | 0.419 | 1.1x slower |
+| Fourier-SVD | 0.017 | 0.022 | 1.3x slower |
+| TomoPy FW (Münch) | 0.261 | 3.562 | 13.6x slower |
+| TomoPy SF (Vo) | 0.222 | 3.573 | 16.1x slower |
+| TomoPy BSD (sort) | 0.293 | 3.471 | 11.8x slower |
 
 **Key observations:**
 
-- **bm3dornl performs ~20-35% faster on Apple Silicon** compared to Linux x86_64
-- **TomoPy methods are 6-7x slower on Apple Silicon** - likely due to lack of native arm64 optimization
-- **Quality metrics (PSNR, SSIM) are identical** across platforms (same algorithm, same random seed)
-- bm3dornl's Rust-based implementation benefits from Apple Silicon's architecture
+- The two hosts differ in core count (24-core Threadripper workstation vs 12-core laptop chip), so the absolute cross-platform ratios mix hardware with software; only same-machine ratios are comparable.
+- **bm3dornl is 1.1-2.2x slower on the M2 Max than on the Linux host; TomoPy is 12-16x slower.**
+- **Same-machine advantage of bm3dornl (streak) over the fastest TomoPy method: 2.4x on Linux x86_64 (0.222 s / 0.094 s), 17x on Apple Silicon (3.471 s / 0.202 s).**
+- **Quality metrics agree across platforms**: PSNR identical to two decimals for every method; SSIM identical to four decimals except bm3dornl (streak), 0.9423 vs 0.9426 (thread-count dependent aggregation order).
 
 ## Results Structure
 

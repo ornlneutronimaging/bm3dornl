@@ -4,7 +4,7 @@ Generate publication-quality figures for JOSS paper.
 
 Produces three separate figures:
 - Figure 1: Input (with ring artifacts) + Ground Truth (clean)
-- Figure 2: Method results (cropped) + Difference images
+- Figure 2: Unprocessed input + method results (cropped) + Difference images
 - Figure 3: Metrics (Processing time + PSNR vs SSIM)
 """
 
@@ -187,20 +187,27 @@ def figure2_results_diff(data):
     """
     Figure 2: Method results (cropped regions) + Difference images
 
-    Layout: 6 columns × 2 rows + colorbar column
-    Row 1: Cropped results for each method
-    Row 2: Difference from ground truth
+    Layout: 9 image columns × 2 rows + colorbar column
+    Column 1: the unprocessed input, so the reader sees what the artifacts
+              look like before any method runs
+    Columns 2-9: one per method
+    Row 1: Cropped image
+    Row 2: Difference from ground truth (image minus ground truth)
     Colorbar: spans row 2 only (applies to diff images)
     """
     # Extract cropped ground truth for diff calculation
     gt_crop = data["ground_truth"][CROP_Y, CROP_X]
 
+    # Column definitions: the input first, then every method. The input has
+    # no processing time, so its title carries no timing line.
+    columns = [{"key": "input", "name": "Input\n(no processing)", "color": "#444444", "timed": False}]
+    columns += [dict(method, timed=True) for method in METHODS]
+
     # Prepare cropped data
     crops = []
     diffs = []
-    for method in METHODS:
-        result = data[method["key"]]
-        crop = result[CROP_Y, CROP_X]
+    for column in columns:
+        crop = data[column["key"]][CROP_Y, CROP_X]
         crops.append(crop)
         diffs.append(crop - gt_crop)
 
@@ -212,49 +219,54 @@ def figure2_results_diff(data):
     diff_vmin, diff_vmax = -diff_absmax, diff_absmax
 
     # Create figure with GridSpec
-    # 8 image columns + 1 narrow colorbar column
+    # 9 image columns (input + 8 methods) + 1 narrow colorbar column
     # Crop is 250x250 pixels, so aspect is 1:1
-    # Figure width: 8 images + colorbar, height: 2 rows
-    fig = plt.figure(figsize=(17, 4.5), dpi=DPI)
+    n_images = len(columns)
+    fig = plt.figure(figsize=(2.125 * n_images, 4.5), dpi=DPI)
     gs = GridSpec(
-        2, 9,  # 2 rows, 9 columns (8 images + 1 colorbar)
+        2, n_images + 1,
         figure=fig,
-        width_ratios=[1, 1, 1, 1, 1, 1, 1, 1, 0.05],  # colorbar is narrow
+        width_ratios=[1] * n_images + [0.05],  # colorbar is narrow
         height_ratios=[1, 1],
         wspace=0.03,
         hspace=0.08
     )
 
-    # Row 1: Cropped results
-    for i, (method, crop) in enumerate(zip(METHODS, crops)):
+    # Row 1: Cropped images
+    for i, (column, crop) in enumerate(zip(columns, crops)):
         ax = fig.add_subplot(gs[0, i])
         ax.imshow(crop, cmap="gray", aspect=1, vmin=crop_vmin, vmax=crop_vmax)
 
-        # Title with method name and time
-        time_str = f"{METRICS[method['key']]['time']:.2f}s"
-        title = f"{method['name']}\n{time_str}"
-        ax.set_title(title, fontsize=ANNOTATION_SIZE, color=method["color"], fontweight="bold")
+        # Title with name and, for methods, processing time
+        title = column["name"]
+        if column["timed"]:
+            title += f"\n{METRICS[column['key']]['time']:.2f}s"
+        ax.set_title(title, fontsize=ANNOTATION_SIZE, color=column["color"], fontweight="bold")
 
         ax.set_xticks([])
         ax.set_yticks([])
 
-    # Row 2: Difference images
+        if i == 0:
+            ax.set_ylabel("Image", fontsize=ANNOTATION_SIZE)
+
+    # Row 2: Difference images, all on one zero-centered scale so the columns
+    # can be compared directly. Red: above the ground truth; blue: below.
     diff_im = None
-    for i, (method, diff) in enumerate(zip(METHODS, diffs)):
+    for i, diff in enumerate(diffs):
         ax = fig.add_subplot(gs[1, i])
         diff_im = ax.imshow(diff, cmap="RdBu_r", aspect=1, vmin=diff_vmin, vmax=diff_vmax)
 
         ax.set_xticks([])
         ax.set_yticks([])
 
-        # Set ylabel only for the first diff image
         if i == 0:
-            ax.set_ylabel("Diff", fontsize=ANNOTATION_SIZE)
+            ax.set_ylabel("Image $-$ ground truth", fontsize=ANNOTATION_SIZE)
 
     # Colorbar spanning row 2 only
-    cbar_ax = fig.add_subplot(gs[1, 8])
+    cbar_ax = fig.add_subplot(gs[1, n_images])
     cbar = fig.colorbar(diff_im, cax=cbar_ax)
     cbar.ax.tick_params(labelsize=TICK_SIZE)
+    cbar.set_label("image $-$ ground truth", fontsize=ANNOTATION_SIZE)
 
     output_path = OUTPUT_DIR / "figure2_results.png"
     fig.savefig(output_path, dpi=DPI, bbox_inches="tight", facecolor="white")
