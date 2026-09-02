@@ -260,7 +260,7 @@ def figure2_results_diff(data):
         ax.set_yticks([])
 
         if i == 0:
-            ax.set_ylabel("Image $-$ truth", fontsize=ANNOTATION_SIZE)
+            ax.set_ylabel("Image $-$ ground truth", fontsize=ANNOTATION_SIZE)
 
     # Colorbar spanning row 2 only
     cbar_ax = fig.add_subplot(gs[1, n_images])
