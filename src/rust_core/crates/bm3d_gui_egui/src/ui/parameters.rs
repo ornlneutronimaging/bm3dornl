@@ -1,4 +1,6 @@
 use bm3d_core::{Bm3dConfig, MultiscaleConfig, RingRemovalMode};
+
+use super::method_info::show_method_info;
 use eframe::egui;
 
 /// BM3D processing parameters with method-specific UI panels.
@@ -118,6 +120,9 @@ impl Bm3dParameters {
 
         // Mode selection (always visible)
         changed |= self.show_mode_selection(ui);
+
+        // Collapsible description of the selected method with source + literature links
+        show_method_info(ui, self.mode);
 
         ui.add_space(4.0);
         ui.separator();

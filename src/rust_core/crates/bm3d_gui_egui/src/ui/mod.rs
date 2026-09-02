@@ -3,6 +3,7 @@ pub mod colormap;
 mod compare_view;
 mod hdf5_tree;
 mod histogram;
+mod method_info;
 mod parameters;
 pub mod save_dialog;
 mod slice_view;
