@@ -25,6 +25,10 @@
 
 - When a sinogram's background is both the majority of columns and carries noise, the MAD scale reports that noise floor, and streaks larger than the background noise are still under-corrected. This regime is unchanged by the fix (outputs remain byte-identical to the previous release there); correcting it needs a reliable separation of sample columns from background columns, which is follow-up work.
 
+### Internal
+
+- `pixi.lock` was regenerated in lock-file format 7, the format the other Neutron Data Project repositories now use. The locked package set is unchanged (verified URL for URL against the previous lock); only the file layout differs. Format 7 needs pixi 0.68 or newer, so anyone on an older pixi must upgrade before running `pixi` in this repo, and the CI pin moved from v0.62.2 to v0.78.0, the version that produced the lock.
+
 ## 0.10.0 - 2026-06-17
 
 ### Changed
