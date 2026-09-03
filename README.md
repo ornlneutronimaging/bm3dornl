@@ -117,13 +117,17 @@ denoised = fourier_svd_removal(
 Performance
 -----------
 
-The Rust backend processes tomography stacks in parallel:
+Processing time for one 720×725 sinogram, mean of 100 runs (measured
+2026-08-31 and 2026-09-02):
 
-| Metric | Value |
-|--------|-------|
-| **Speed** | ~0.63s per frame (512×512) on Apple Silicon |
-| **Memory** | >50% reduction via chunked processing |
-| **Parallelism** | Parallel processing with Rayon |
+| Method | Linux x86_64, 24-core Threadripper | Apple M2 Max laptop |
+|--------|------------------------------------|---------------------|
+| bm3dornl, streak mode | 0.094 s | 0.20 s |
+| bm3dornl, Fourier-SVD | 0.017 s | 0.022 s |
+| bm3d-streak-removal (reference, x86_64 only) | 31.8 s | not available |
+
+The Rust backend runs in parallel across cores with Rayon. The full method
+comparison, including TomoPy, is in `study/README.md`.
 
 Key optimizations:
 - Integral image pre-screening for fast block matching
