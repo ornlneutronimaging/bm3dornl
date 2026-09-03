@@ -10,19 +10,19 @@ Requirements
 Installing from PyPI
 --------------------
 
-**Core Library**
+Install the core library:
 
 .. code-block:: bash
 
     pip install bm3dornl
 
-**With GUI Application**
+Install the library and the released GUI:
 
 .. code-block:: bash
 
     pip install bm3dornl[gui]
 
-Or install the GUI separately:
+To install only the released GUI, run:
 
 .. code-block:: bash
 
@@ -39,21 +39,29 @@ Supported Platforms
 | macOS    | ARM64 (Apple Silicon) | Yes     | Yes |
 +----------+-----------------------+---------+-----+
 
-Development Installation
-------------------------
+Working in a Clone
+------------------
 
-For development, we use `pixi <https://prefix.dev>`_ for environment management:
+Use Pixi for all commands in a clone. Follow the README's
+`How to install <https://github.com/ornlneutronimaging/bm3dornl#how-to-install>`_
+section.
 
 .. code-block:: bash
 
     git clone https://github.com/ornlneutronimaging/bm3dornl.git
     cd bm3dornl
-    pixi install
-    pixi run build
-    pixi run test
+    pixi run build      # build the Rust extension
+    pixi run test       # run the Rust and Python tests
+    pixi run gui        # run the clone's GUI
 
-Verifying Installation
-----------------------
+Each ``pixi run`` command installs the environment on demand. Run
+``pixi install`` first only to create the environment separately.
+
+Verifying the Installation
+--------------------------
+
+After a pip install, start Python with ``python``. In a clone, use
+``pixi run python``. Then run:
 
 .. code-block:: python
 
