@@ -31,7 +31,8 @@ def estimate_noise_sigma(sinogram: np.ndarray) -> float:
     removes most independent pixel noise. Its estimate is therefore much
     smaller than that noise's standard deviation.
 
-    The BM3D pipeline uses this estimator when ``sigma_random`` is 0.0. Streak
+    The BM3D pipeline uses this estimator when ``sigma_random`` is at or
+    below 1e-6, for example 0.0. Streak
     modes estimate after subtracting the streak profile. Generic mode estimates
     on normalized input. Use this function to inspect streak strength or choose
     ``sigma_random`` manually.

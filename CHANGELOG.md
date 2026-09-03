@@ -84,7 +84,8 @@
   (#134). The former docstring described general image noise. Its example
   expected about 0.1 for independent Gaussian noise but produced about 0.013.
   Vertical smoothing intentionally suppresses independent pixel noise. The
-  estimator also fills `sigma_random` when its value is 0.0. Python docstrings,
+  estimator also fills `sigma_random` when its value is at or below 1e-6, such as 0.0.
+  Python docstrings,
   Rust comments, and the crate README now state this behavior. The example now
   constructs vertical streak noise. Tests cover both noise cases. Runtime
   behavior is unchanged.

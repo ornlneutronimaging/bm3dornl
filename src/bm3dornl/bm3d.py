@@ -74,7 +74,8 @@ def bm3d_ring_artifact_removal(
         Use ``"generic"`` for white noise. Use ``"streak"`` to estimate and
         subtract a vertical streak profile before BM3D. Default: ``"streak"``.
     sigma_random : float, optional
-        Random-noise standard deviation. Default: 0.1.
+        Random-noise standard deviation. Values at or below 1e-6 trigger
+        automatic estimation. Default: 0.1.
     patch_size : int, optional
         Patch size for block matching. Default: 8.
     step_size : int, optional
