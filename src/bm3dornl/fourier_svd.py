@@ -44,7 +44,7 @@ def fourier_svd_removal(
     Returns
     -------
     np.ndarray
-        Destriped sinogram with the input shape and dtype. Non-floating inputs
+        Destriped sinogram with the input shape and dtype. Other dtypes
         are converted back to their original dtype.
     """
     if sinogram.ndim != 2:
