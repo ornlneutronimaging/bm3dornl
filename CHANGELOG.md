@@ -20,6 +20,7 @@
 
 ### Documentation
 
+- Install instructions now separate the two audiences. The README, the documentation site, and CONTRIBUTING.md state that a source checkout is built, tested, and run only through pixi, that `pip install -e .` is not a supported path, and that the `[gui]` extra installs the released GUI binary from PyPI rather than building the checkout's GUI; the command for the latter, `pixi run gui`, was previously undocumented. CONTRIBUTING.md's setup step pointed at a micromamba environment file that does not exist in the repository and its test commands bypassed pixi; both now use the pixi tasks.
 - `estimate_noise_sigma`: the docstring claimed the function estimates the image's noise standard deviation and demonstrated it on i.i.d. Gaussian noise, promising a result "close to 0.1" that the function does not produce (it returns ~0.013 there). The estimator measures the amplitude of vertical streaks — its vertical Gaussian pre-filter deliberately suppresses pixel-level i.i.d. noise — and is the same estimator the pipeline uses to fill in `sigma_random` when it is set to 0.0. The Python docstring, the Rust doc comments, and the crate README now state that contract, the example constructs actual streak noise, and new tests pin both behaviours (#134). No behaviour changed.
 
 ### Known limitation

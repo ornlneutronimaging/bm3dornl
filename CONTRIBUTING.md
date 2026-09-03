@@ -36,12 +36,16 @@ By participating in this project, you agree to abide by the [Code of Conduct](CO
     git remote add upstream https://github.com/ornlneutronimaging/bm3dornl.git
     ```
 
-4. **Create a Virtual Environment**: Set up a virtual environment to manage dependencies.
+4. **Set Up the Environment**: The project uses [pixi](https://prefix.dev) for everything in a source checkout. It provides Python, Rust, HDF5, and the other build dependencies; do not use `pip install -e .`, `maturin`, or `cargo` directly.
 
     ```bash
-    micromamba create -f environment.yml
-    micromamba activate bm3dornl
+    pixi install       # create the environment
+    pixi run build     # build the Rust extension, install the package in editable mode
+    pixi run test      # run the Rust and Python test suites
+    pixi run gui       # run the GUI from your checkout
     ```
+
+    The full command table is in the [Development](README.md#development) section of the README.
 
 ## Development Workflow
 
@@ -82,21 +86,29 @@ By participating in this project, you agree to abide by the [Code of Conduct](CO
 - **Docstrings**: Use `numpy` docstrings style to document all public modules, classes, and functions.
 - **Type Annotations**: Use type annotations for function signatures.
 - **Imports**: Group imports into standard library, third-party, and local module sections. Use absolute imports.
+- **Rust**: `pixi run lint` must pass; it runs `cargo fmt --check` and `clippy` with warnings treated as errors.
 
 ## Testing
 
-We use `pytest` for testing. Ensure that your changes are covered by tests.
+Ensure that your changes are covered by tests. The Rust tests live next to the code in `src/rust_core`, the Python tests in `tests/`.
 
-- **Run Tests**: Run the tests using `pytest`.
+- **Run All Tests**: Rust and Python together.
 
     ```bash
-    pytest -v
+    pixi run test
     ```
 
-- **Check Coverage**: Check the test coverage.
+- **Run One Suite**:
 
     ```bash
-    pytest --cov=src/bm3dornl
+    pixi run test-rust
+    pixi run test-python
+    ```
+
+- **Check Coverage**: Python test coverage.
+
+    ```bash
+    pixi run pytest --cov=src/bm3dornl
     ```
 
 ## Submitting Changes

@@ -34,7 +34,17 @@ guide, and the API reference.
 How to install
 --------------
 
-**Using Pip**
+There are two ways to get bm3dornl, for two audiences:
+
+- **Users**: install the released packages from PyPI with pip, as below.
+- **Developers and reviewers working from a clone of this repository**: use
+  [pixi](https://prefix.dev), and only pixi; see [Development](#development).
+  `pip install -e .` is not a supported path: the Rust extension is built by
+  `pixi run build`, and the `[gui]` extra downloads the *released* GUI binary
+  from PyPI instead of building the GUI in your checkout. To run the GUI from
+  a checkout, use `pixi run gui`.
+
+**Using Pip (released packages)**
 
 ```bash
 # Core library only
@@ -50,13 +60,6 @@ pip install bm3dornl[gui]
 |----------|--------------|---------|-----|
 | Linux | x86_64 | ✅ | ✅ |
 | macOS | ARM64 (Apple Silicon) | ✅ | ✅ |
-
-**Using Pixi (Development)**
-
-```bash
-pixi install
-pixi run build
-```
 
 Usage
 -----
@@ -131,19 +134,31 @@ Key optimizations:
 Development
 -----------
 
-We use [pixi](https://prefix.dev) for development environment management.
+Everything in a source checkout runs through [pixi](https://prefix.dev). It
+provides Python, Rust, HDF5 and the other build dependencies, so nothing else
+needs to be installed, and it is the only supported way to build, test, or run
+the code in a clone. Do not use `pip install -e .`, `maturin`, or `cargo`
+directly.
 
-1.  Clone repo.
-2.  Run `pixi run build` to compile the Rust backend and install in editable mode.
-3.  Run `pixi run test` to run tests.
-4.  Run `pixi run bench` to run performance benchmarks.
+| Task | Command |
+|------|---------|
+| Create the environment | `pixi install` |
+| Build the Rust extension and install the package in editable mode | `pixi run build` |
+| Run all tests (Rust and Python) | `pixi run test` |
+| Lint (rustfmt and clippy) | `pixi run lint` |
+| Run the GUI from the checkout | `pixi run gui` (release build) or `pixi run gui-debug` |
+| Run the benchmarks | `pixi run bench` |
 
 ```bash
 git clone https://github.com/ornlneutronimaging/bm3dornl.git
 cd bm3dornl
 pixi run build
 pixi run test
+pixi run gui
 ```
+
+The first `pixi run gui` compiles the GUI application, which takes a few
+minutes; later runs start immediately.
 
 ### Optional: test-data submodule
 
@@ -170,6 +185,8 @@ BM3DORNL includes a standalone GUI application for interactive ring artifact rem
 
 ### Installation
 
+Released binaries (Linux x86_64 and macOS Apple Silicon):
+
 ```bash
 pip install bm3dornl[gui]
 ```
@@ -180,7 +197,17 @@ Or install the GUI separately:
 pip install bm3dornl-gui
 ```
 
+From a source checkout, the GUI is built and run from your clone with pixi
+instead (see [Development](#development)); the pip packages above always
+contain the last released binary, not the code in the checkout:
+
+```bash
+pixi run gui
+```
+
 ### Launching
+
+The released binary installs a `bm3dornl-gui` command:
 
 ```bash
 bm3dornl-gui

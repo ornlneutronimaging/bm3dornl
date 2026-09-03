@@ -7,6 +7,8 @@ from tomography data.
 Installation
 ------------
 
+Released binaries (Linux x86_64 and macOS Apple Silicon):
+
 .. code-block:: bash
 
     # Install with the main package
@@ -15,8 +17,18 @@ Installation
     # Or install separately
     pip install bm3dornl-gui
 
+From a source checkout, build and run the GUI in your clone with pixi instead;
+the pip packages above always contain the last released binary, not the code
+in the checkout:
+
+.. code-block:: bash
+
+    pixi run gui
+
 Launching
 ---------
+
+The released binary installs a ``bm3dornl-gui`` command:
 
 .. code-block:: bash
 
