@@ -37,9 +37,9 @@ How to install
 
 Use pip for published releases and [Pixi](https://prefix.dev) for a clone.
 
-Do not run `pip install -e .` in a clone. `pip install -e .` is unsupported
-because clone builds compile the Rust extension with Maturin inside the pinned
-Pixi environment. The `pixi run build` task performs that step.
+Do not run `pip install -e .` in a clone. It is unsupported: Pixi pins every
+dependency in `pixi.lock`, and pip resolves its own set. `pixi run build`
+compiles the Rust extension and installs the package in editable mode.
 
 The `[gui]` extra installs the separate `bm3dornl-gui` binary wheel from PyPI.
 It does not build the GUI in a clone. Run the clone's GUI with `pixi run gui`.
@@ -126,8 +126,10 @@ Processing time for one 720×725 sinogram, mean of 100 runs (measured
 | bm3dornl, Fourier-SVD | 0.017 s | 0.022 s |
 | bm3d-streak-removal (reference, x86_64 only) | 31.8 s | not available |
 
-The Rust backend runs in parallel across cores with Rayon. The full method
-comparison is in `notebooks/evaluation_performance.ipynb`.
+The Rust backend runs in parallel across cores with Rayon. The benchmark study
+behind these numbers, including the TomoPy comparison, lives on the
+`feature/joss-paper` branch under `study/`. A smaller comparison notebook is
+`notebooks/evaluation_performance.ipynb`.
 
 Key optimizations:
 - Integral image pre-screening for fast block matching
@@ -139,8 +141,9 @@ Development
 -----------
 
 Use Pixi for every command in a clone. See [How to install](#how-to-install)
-for the install policy. Pixi supplies Python, Rust, HDF5, and the remaining
-build dependencies.
+for the install policy. Pixi supplies Python, Maturin, HDF5, and the other
+build dependencies. It does not supply Rust: install a stable Rust toolchain
+with [rustup](https://rustup.rs) first, so that `cargo` is on your PATH.
 
 | Task | Command |
 |------|---------|
@@ -155,6 +158,7 @@ Clone the repository, enter its directory, then run `pixi run build`,
 `pixi run test`, and `pixi run gui`, in that order.
 
 ```bash
+# Prerequisites: Pixi and a stable Rust toolchain (rustup)
 git clone https://github.com/ornlneutronimaging/bm3dornl.git
 cd bm3dornl
 pixi run build

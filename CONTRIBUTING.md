@@ -36,8 +36,9 @@ By participating in this project, you agree to abide by the [Code of Conduct](CO
     ```
 
 4. **Use Pixi.** Contributors must use [Pixi](https://prefix.dev) for clone
-   builds and tests. `pip install -e .` is unsupported because clone builds
-   must compile the Rust extension through the pinned Pixi toolchain.
+   builds and tests. `pip install -e .` is unsupported: Pixi pins every
+   dependency in `pixi.lock`, and pip resolves its own set. Pixi does not
+   supply Rust; install a stable Rust toolchain with rustup first.
 
    After cloning, run `pixi run build`, `pixi run test`, then `pixi run gui`.
 

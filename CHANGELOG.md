@@ -4,26 +4,32 @@
 
 ### Fixed
 
-- GUI HDF5 volumes load at bulk-read speed again. The loader now reads gzip
-  data in chunk-aligned slice blocks. Each chunk decompresses once while load
-  progress remains visible. A 591-slice test volume loads in about 4 seconds.
-  Slice-by-slice loading took about 62 seconds. This is about 16 times faster.
+- GUI HDF5 volumes load at bulk-read speed again. The slow path came from the
+  load progress bar added after 0.10.0, which read the dataset slice by slice.
+  The loader now reads chunked datasets in chunk-aligned slice blocks;
+  gzip-compressed data was the measured case. Each chunk decompresses once
+  while load progress remains visible. A 591-slice test volume loads in about
+  4 seconds. Slice-by-slice loading took about 62 seconds. This is about 16
+  times faster.
   Loaded values remain identical to the previous reader. A test covers a final
   block with fewer slices.
 - Fourier-SVD now removes streaks from flat-background sinograms (#133). The
   fix covers `fourier_svd_removal` and the `FourierSvd` mode. Previously, the
   threshold used the median absolute deviation (MAD). MAD measures the median
   distance from a set's median. Flat air columns reduced MAD to floating-point
-  rounding values. The shipped test sinogram produced about 1e-11. The gate
-  then protected all details. Neither `fft_alpha` nor `notch_width` affected
-  the output. The method now detects thresholds below 1e-6 of the largest
+  rounding values. The shipped test sinogram produced about 1e-11. The
+  magnitude gate removes detail below a threshold and protects detail above
+  it. With a threshold at rounding level, it protected all details. Neither
+  `fft_alpha` nor `notch_width` affected the output. The method now detects thresholds below 1e-6 of the largest
   deviation. It then estimates scale from deviations above rounding noise.
-  This recovery requires informative values in one-quarter of the columns.
-  It also limits correction energy to 10% of input energy. Larger corrections
-  could remove the sample instead of streaks.
-- Fourier-SVD preserves prior output outside that edge case. Output comparisons
-  covered the full measured CG-1D volume and noise-bearing synthetic cases.
-  Of 540 measured sinograms, 533 follow the original path unchanged. The other
+  This recovery requires informative values in at least a quarter of the
+  columns, and never fewer than 16 columns. It declines, returning the input
+  unchanged, when the correction would exceed 10% of the input energy. A
+  larger correction could remove the sample instead of streaks.
+- Outside that edge case, Fourier-SVD output is byte-identical to the previous
+  release. The comparison covered every output of the full measured CG-1D
+  volume and the noise-bearing synthetic cases. Of 540 measured sinograms, 533
+  follow the original path unchanged. The other
   seven have zero MAD in their column profiles. A median filter can produce
   exact zeros for most details on a smooth profile. No scale can be estimated
   from zero spread. Those seven inputs now return unchanged. That result is
@@ -61,7 +67,8 @@
   logarithm produces unusable output. Varying input without positive values is
   rejected with a message naming the flag. A constant blank slice remains
   unchanged. This rework affects only multiscale processing. Single-scale
-  streak, generic, and Fourier-SVD processing otherwise retain prior behavior.
+  streak, generic, and Fourier-SVD processing are unchanged by it; the
+  Fourier-SVD fix above is a separate change.
 
 ### Changed
 
@@ -102,8 +109,8 @@
 - Upgrade Pixi to 0.68 or newer before using this clone. `pixi.lock` now uses
   lock-file format 7. Other Neutron Data Project repositories use this format.
   The package URLs are unchanged from the previous lock. Only the file layout
-  changed. Continuous integration now uses Pixi 0.78.0, which generated the
-  lock.
+  changed. Continuous integration moved from Pixi 0.62.2 to 0.78.0, the version that
+  generated the lock.
 
 ## 0.10.0 - 2026-06-17
 
