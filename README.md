@@ -127,7 +127,7 @@ Processing time for one 720×725 sinogram, mean of 100 runs (measured
 | bm3d-streak-removal (reference, x86_64 only) | 31.8 s | not available |
 
 The Rust backend runs in parallel across cores with Rayon. The full method
-comparison, including TomoPy, is in `study/README.md`.
+comparison is in `notebooks/evaluation_performance.ipynb`.
 
 Key optimizations:
 - Integral image pre-screening for fast block matching
