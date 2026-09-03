@@ -1,6 +1,6 @@
 [project]
 name = "bm3dornl"
-version = "0.10.0"
+version = "0.11.0"
 description = "BM3D for streak artifact removal in neutron imaging"
 requires-python = ">=3.12"
 dependencies = [
@@ -24,7 +24,7 @@ issues = "https://github.com/ornlneutronimaging/bm3dornl/issues"
 # src/rust_core/crates/bm3d_gui_egui on release tags). This extra installs that
 # released binary; it does not build the GUI in a source checkout. From a
 # checkout, run the GUI with `pixi run gui`.
-gui = ["bm3dornl-gui==0.10.0"]
+gui = ["bm3dornl-gui==0.11.0"]
 progress = ["tqdm"]
 
 [build-system]

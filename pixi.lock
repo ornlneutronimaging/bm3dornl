@@ -5471,7 +5471,7 @@ packages:
   - numpy
   - scipy
   - scikit-image
-  - bm3dornl-gui==0.10.0 ; extra == 'gui'
+  - bm3dornl-gui==0.11.0 ; extra == 'gui'
   - tqdm ; extra == 'progress'
   requires_python: '>=3.12'
 - pypi: https://files.pythonhosted.org/packages/83/60/d497a310bde3f01cb805196ac61b7ad6dc5dcf8dce66634dc34364b20b4f/lazy_loader-0.4-py3-none-any.whl
