@@ -20,6 +20,10 @@ documentation = "https://bm3dornl.readthedocs.io/en/latest/"
 issues = "https://github.com/ornlneutronimaging/bm3dornl/issues"
 
 [project.optional-dependencies]
+# The GUI is a separately published binary wheel (bm3dornl-gui, built from
+# src/rust_core/crates/bm3d_gui_egui on release tags). This extra installs that
+# released binary; it does not build the GUI in a source checkout. From a
+# checkout, run the GUI with `pixi run gui`.
 gui = ["bm3dornl-gui==0.10.0"]
 progress = ["tqdm"]
 

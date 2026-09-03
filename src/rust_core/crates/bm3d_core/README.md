@@ -4,15 +4,16 @@
 [![Documentation](https://docs.rs/bm3d_core/badge.svg)](https://docs.rs/bm3d_core)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-Pure Rust implementation of the BM3D (Block-Matching and 3D filtering) denoising algorithm, optimized for streak/ring artifact removal in tomographic imaging.
+This pure Rust crate implements block-matching and three-dimensional filtering
+(BM3D). It includes processing for streak and ring artifacts in tomography data.
 
 ## Features
 
-- **Generic Float Support**: Works with both `f32` and `f64` precision via the `Bm3dFloat` trait
-- **Streak Artifact Removal**: Specialized mode for vertical streak artifacts common in neutron and X-ray imaging
-- **Multi-Scale Processing**: Pyramid-based processing for wide streaks that single-scale cannot capture
-- **Fourier-SVD Method**: Fast alternative algorithm combining FFT-based detection with rank-1 SVD
-- **High Performance**: Parallelized with Rayon, optimized block matching with integral images
+- **Generic float support:** Use `f32` or `f64` through the `Bm3dFloat` trait.
+- **Streak removal:** Target vertical artifacts in neutron and X-ray imaging.
+- **Multiscale processing:** Process streaks wider than one scale can capture.
+- **Fourier-SVD method:** Combine frequency detection with rank-one matrix decomposition.
+- **Parallel processing:** Use Rayon and integral-image block matching.
 
 ## Installation
 
@@ -20,7 +21,7 @@ Add this to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-bm3d_core = "0.7"
+bm3d_core = "0.10.0"
 ```
 
 ## Quick Start
@@ -50,29 +51,29 @@ let denoised = bm3d_ring_artifact_removal(image.view(), RingRemovalMode::Streak,
 
 ### High-Level Functions
 
-- `bm3d_ring_artifact_removal` - Main entry point for ring/streak artifact removal
-- `multiscale_bm3d_streak_removal` - Multi-scale processing for wide streaks
+- `bm3d_ring_artifact_removal` - Main entry point for ring and streak removal
+- `multiscale_bm3d_streak_removal` - Multiscale processing for wide streaks
 
 ### Configuration
 
-- `Bm3dConfig` - Configuration struct for BM3D parameters
-- `RingRemovalMode` - `Generic` (white noise) or `Streak` (directional artifacts)
-- `MultiscaleConfig` - Configuration for multi-scale processing
+- `Bm3dConfig` - BM3D parameter configuration
+- `RingRemovalMode` - `Generic` for white noise or `Streak` for directional artifacts
+- `MultiscaleConfig` - Multiscale parameter configuration
 
 ### Low-Level Components
 
-- `run_bm3d_kernel` - Core BM3D kernel for a single image
-- `run_bm3d_step` - Single BM3D step (hard/wiener threshold)
-- `estimate_noise_sigma` - Vertical-streak noise level estimation (fills in `sigma_random` when it is set to 0.0)
+- `run_bm3d_kernel` - BM3D kernel for one image
+- `run_bm3d_step` - One hard-threshold or Wiener-filtering step
+- `estimate_noise_sigma` - Vertical-streak noise estimate used when `sigma_random` is at or below `1e-6`, for example `0.0`
 
 ## Performance
 
-Optimizations include:
+The implementation uses:
 - Integral image pre-screening for fast block matching
 - Early termination in distance calculations
 - Pre-computed FFT plans (`Bm3dPlans`)
 - Fast Walsh-Hadamard transform for 8×8 patches
-- Zero-overhead parallelism via Rayon
+- Parallel processing through Rayon
 
 ## References
 
@@ -81,10 +82,13 @@ Optimizations include:
 
 ## License
 
-MIT License - see [LICENSE](https://github.com/ornlneutronimaging/bm3dornl/blob/main/LICENSE) for details.
+The crate uses the MIT License. See
+[LICENSE](https://github.com/ornlneutronimaging/bm3dornl/blob/main/LICENSE).
 
 ## Related
 
-This crate is part of the [bm3dornl](https://github.com/ornlneutronimaging/bm3dornl) project, which also provides:
+This crate belongs to the
+[bm3dornl](https://github.com/ornlneutronimaging/bm3dornl) project. The project
+also provides:
 - Python bindings via PyO3
 - GUI application for interactive denoising
