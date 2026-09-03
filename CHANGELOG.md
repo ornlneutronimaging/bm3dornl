@@ -4,32 +4,105 @@
 
 ### Fixed
 
-- GUI: loading HDF5 volumes is back at bulk-read speed. The load progress bar introduced in 0.10.0's follow-up work read the dataset slice by slice, and on gzip-chunked datasets every chunk spans several slices, so each chunk was decompressed once per slice it covers — measured 16x slower than a bulk read on the chunked test volume (~62 s vs ~4 s for 591 slices). The loader now reads chunk-aligned blocks of slices, so each chunk decompresses exactly once and the progress bar is kept. Loaded volumes are identical to the previous reader's, pinned by a test on a chunked file whose slice count is not a multiple of the block.
-- Fourier-SVD: `fourier_svd_removal` (and the `FourierSvd` ring-removal mode that calls it) no longer returns flat-background sinograms unchanged. Its magnitude gate removes detail below a threshold and protects detail above it, and the threshold comes from a MAD-based scale of the rank-1 column profile. MAD is the median of the absolute deviations, so when most columns see numerically flat air — the normal case for simulated phantoms — it collapses to machine residue (about 1e-11 on the shipped test sinogram), the gate removes nothing, and the call returns its input with no influence from `fft_alpha` or `notch_width` (#133). That specific degeneracy is now detected (threshold below 1e-6 of the largest deviation, a regime the gate cannot act in), and the scale is re-estimated over the entries above the numerical floor. The rescue is guarded: it declines and keeps the no-op unless at least a quarter of the columns carry information, and unless the resulting correction stays under 10% of the input's energy — a correction larger than that would be removing the sample, not streaks.
-- Every input outside that degeneracy is byte-identical to the previous release, verified output-for-output against the previous build across the full measured CG-1D volume and the noise-bearing synthetic cases. 533 of the volume's 540 sinograms take the original path unchanged; the remaining 7 have a column profile with exactly zero median deviation (the median filter returns an element of its window, so on a smooth profile more than half the detail entries can be exactly zero), where the previous code substituted a standard deviation and measurably degraded the output against the volume's reference reconstruction. No scale is estimable from zero dispersion, so those are now returned unchanged — closer to the reference than either previous behaviour.
-- GUI: the Multiscale Streak panel gains an "Input is already log-transformed (attenuation)" toggle, wired to the multiscale pipeline's `log_domain_input`. Without it the GUI could only run the linear-transmission path, which applies a second logarithm to attenuation sinograms and produces unusable output on the usual normalized CG-1D data.
-- GUI: cancelling a processing run no longer strands the app. The cancel path joined the worker thread and then dropped the progress channel unread, so the worker's final "cancelled" message never reached the state machine — the progress bar froze mid-run, the Process button never returned, and only loading a new file recovered (#136). The cancel path now drains the channel after the worker exits (so a run that finished just before the request still delivers its result), reports a worker that died without a result as an error, and otherwise lands in the cancelled state, whose existing UI offers Process again as intended.
-- GUI: in Compare view, the "Original", "Processed", and "Difference" titles now sit centered over their respective image panels instead of clustering in the upper-left corner (the label row asked for panel-wide cells but the layout only advanced by the text width) (#137).
-- GUI: patch size is now a slider covering 4-16 instead of a menu offering only 4, 8, or 16. The core accepts any patch size (only the optional 8x8 Hadamard fast mode is size-specific, and it simply stays off for other sizes), and the documentation recommends 7 or 8 — a value the menu made unreachable (#135).
-- Multiscale: the multiscale streak path was reworked to follow Mäkinen et al. (2021) more closely. It now denoises in the log domain the model is defined on, on a vertically binned sinogram, as overlapping segments with a locally estimated sigma, with each pyramid level given the noise spectrum its own residual actually has; the automatic noise estimate measures the streak amplitude instead of the air-region floor, which previously collapsed to quantization residue on flat-background inputs and silently turned the whole correction into a no-op. The input is expected to be linear transmission data (the pipeline applies and undoes the logarithm itself); data that is already log-transformed — attenuation sinograms, the normal CG-1D product — must be declared with `log_domain_input=True` (Python) or the matching GUI toggle, otherwise it is logged a second time and the result is unusable. Input with no positive values is rejected with a message naming that flag (a constant blank slice passes through unchanged). The rework touches only the multiscale path: single-scale streak, generic, and Fourier-SVD behave exactly as they did before it (Fourier-SVD's own change is the separate entry above).
+- GUI HDF5 volumes load at bulk-read speed again. The loader now reads gzip
+  data in chunk-aligned slice blocks. Each chunk decompresses once while load
+  progress remains visible. A 591-slice test volume loads in about 4 seconds.
+  Slice-by-slice loading took about 62 seconds. This is about 16 times faster.
+  Loaded values remain identical to the previous reader. A test covers a final
+  block with fewer slices.
+- Fourier-SVD now removes streaks from flat-background sinograms (#133). The
+  fix covers `fourier_svd_removal` and the `FourierSvd` mode. Previously, the
+  threshold used the median absolute deviation (MAD). MAD measures the median
+  distance from a set's median. Flat air columns reduced MAD to floating-point
+  rounding values. The shipped test sinogram produced about 1e-11. The gate
+  then protected all details. Neither `fft_alpha` nor `notch_width` affected
+  the output. The method now detects thresholds below 1e-6 of the largest
+  deviation. It then estimates scale from deviations above rounding noise.
+  This recovery requires informative values in one-quarter of the columns.
+  It also limits correction energy to 10% of input energy. Larger corrections
+  could remove the sample instead of streaks.
+- Fourier-SVD preserves prior output outside that edge case. Output comparisons
+  covered the full measured CG-1D volume and noise-bearing synthetic cases.
+  Of 540 measured sinograms, 533 follow the original path unchanged. The other
+  seven have zero MAD in their column profiles. A median filter can produce
+  exact zeros for most details on a smooth profile. No scale can be estimated
+  from zero spread. Those seven inputs now return unchanged. That result is
+  closer to the reference than the former standard-deviation fallback.
+- The GUI can process logged attenuation sinograms in multiscale mode. Its
+  Multiscale Streak panel now includes an "Input is already log-transformed
+  (attenuation)" toggle. The toggle sets `log_domain_input`. Without it, the
+  GUI applied a second logarithm to attenuation data. This made normalized
+  CG-1D results unusable.
+- Cancelling GUI processing returns the app to a ready state (#136). Previously,
+  cancellation joined the worker and stopped reading its progress channel.
+  The final cancellation message never reached the application state. The
+  progress bar and Process button then remained stuck. Loading another file
+  was the only recovery. Cancellation now drains the channel after the worker
+  exits. A just-finished result still reaches the app. A missing worker result
+  becomes an error. Otherwise, the app enters its existing cancelled state and
+  enables Process again.
+- Compare-view titles now center above their image panels (#137). The Original,
+  Processed, and Difference labels previously clustered at the upper left. The
+  layout reserved panel-wide cells but advanced only by each label's width.
+- The GUI patch-size control now supports every value from 4 through 16 (#135).
+  It replaces a menu limited to 4, 8, or 16. The core accepts every size in
+  this range. Its optional Hadamard fast path applies only to 8-by-8 patches.
+  Other sizes use the regular path. Patch size 7 is now selectable as the
+  documentation recommends.
+- Multiscale streak removal now follows Mäkinen et al. (2021) more closely. It
+  denoises logarithmic attenuation data. It first averages adjacent sinogram
+  rows, then processes overlapping horizontal segments. Each segment receives
+  a local noise estimate. Each pyramid level receives the frequency profile of
+  its remaining noise. Automatic estimation now measures streak amplitude.
+  Previously, measurements from flat air regions could approach zero. This
+  silently disabled the entire correction. Linear transmission input is logged
+  and restored internally. Logged attenuation input requires
+  `log_domain_input=True` or the matching GUI toggle. Otherwise, a second
+  logarithm produces unusable output. Varying input without positive values is
+  rejected with a message naming the flag. A constant blank slice remains
+  unchanged. This rework affects only multiscale processing. Single-scale
+  streak, generic, and Fourier-SVD processing otherwise retain prior behavior.
 
 ### Changed
 
-- The `bm3dornl.plot` module was removed and its single function, `compute_cdf`, relocated to `bm3dornl.utils` (#138). The module never contained plotting code — `compute_cdf` computes an image's cumulative distribution function, a diagnostic that fits the utils module's purpose. Anyone importing `from bm3dornl.plot import compute_cdf` must switch to `from bm3dornl.utils import compute_cdf`; the function itself is unchanged.
-- Fourier-SVD output changes on flat-background inputs as a consequence of the fix above. Any previously recorded Fourier-SVD quality figures for such inputs were measured on an essentially unmodified array and should be regenerated. On the benchmark phantom, SSIM against ground truth rises from 0.9510 — the unprocessed input's own score — to 0.9737.
+- Import `compute_cdf` from `bm3dornl.utils` now (#138). The removed
+  `bm3dornl.plot` module contained only this function. It computes an image's
+  cumulative distribution function. The function itself is unchanged.
+- Regenerate saved Fourier-SVD quality values for flat-background inputs. The
+  fix above changes outputs that were previously almost identical to their
+  inputs. On the benchmark phantom, the structural similarity index (SSIM)
+  rises from 0.9510 to 0.9737. The unprocessed input also scored 0.9510.
 
 ### Documentation
 
-- Install instructions now separate the two audiences. The README, the documentation site, and CONTRIBUTING.md state that a source checkout is built, tested, and run only through pixi, that `pip install -e .` is not a supported path, and that the `[gui]` extra installs the released GUI binary from PyPI rather than building the checkout's GUI; the command for the latter, `pixi run gui`, was previously undocumented. CONTRIBUTING.md's setup step pointed at a micromamba environment file that does not exist in the repository and its test commands bypassed pixi; both now use the pixi tasks.
-- `estimate_noise_sigma`: the docstring claimed the function estimates the image's noise standard deviation and demonstrated it on i.i.d. Gaussian noise, promising a result "close to 0.1" that the function does not produce (it returns ~0.013 there). The estimator measures the amplitude of vertical streaks — its vertical Gaussian pre-filter deliberately suppresses pixel-level i.i.d. noise — and is the same estimator the pipeline uses to fill in `sigma_random` when it is set to 0.0. The Python docstring, the Rust doc comments, and the crate README now state that contract, the example constructs actual streak noise, and new tests pin both behaviours (#134). No behaviour changed.
+- Install documentation now separates releases from clones. Clone builds,
+  tests, and GUI runs use Pixi. `pip install -e .` is unsupported. The `[gui]`
+  extra installs the released GUI binary from PyPI. Run a clone's GUI with
+  `pixi run gui`. The previous contributor setup named a missing micromamba
+  file. Its test commands also bypassed Pixi. Both now use supported Pixi tasks.
+- `estimate_noise_sigma` documentation now describes vertical streak amplitude
+  (#134). The former docstring described general image noise. Its example
+  expected about 0.1 for independent Gaussian noise but produced about 0.013.
+  Vertical smoothing intentionally suppresses independent pixel noise. The
+  estimator also fills `sigma_random` when its value is 0.0. Python docstrings,
+  Rust comments, and the crate README now state this behavior. The example now
+  constructs vertical streak noise. Tests cover both noise cases. Runtime
+  behavior is unchanged.
 
 ### Known limitation
 
-- When a sinogram's background is both the majority of columns and carries noise, the MAD scale reports that noise floor, and streaks larger than the background noise are still under-corrected. This regime is unchanged by the fix (outputs remain byte-identical to the previous release there); correcting it needs a reliable separation of sample columns from background columns, which is follow-up work.
+- Fourier-SVD can under-correct streaks above background noise. This occurs when
+  noisy background occupies most columns, because MAD then measures background
+  noise. Outputs in this case remain byte-identical to the previous release.
+  A future fix needs reliable separation of sample and background columns.
 
 ### Internal
 
-- `pixi.lock` was regenerated in lock-file format 7, the format the other Neutron Data Project repositories now use. The locked package set is unchanged (verified URL for URL against the previous lock); only the file layout differs. Format 7 needs pixi 0.68 or newer, so anyone on an older pixi must upgrade before running `pixi` in this repo, and the CI pin moved from v0.62.2 to v0.78.0, the version that produced the lock.
+- Upgrade Pixi to 0.68 or newer before using this clone. `pixi.lock` now uses
+  lock-file format 7. Other Neutron Data Project repositories use this format.
+  The package URLs are unchanged from the previous lock. Only the file layout
+  changed. Continuous integration now uses Pixi 0.78.0, which generated the
+  lock.
 
 ## 0.10.0 - 2026-06-17
 

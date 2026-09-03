@@ -1,23 +1,4 @@
-"""
-Fourier-SVD Streak Removal
-
-A two-stage algorithm for removing vertical streak artifacts from sinograms:
-
-Stage 1: FFT-Guided Energy Detection
-- Apply FFT and isolate vertical frequencies (Fy ≈ 0) using Gaussian notch filter
-- Compute per-column energy profile from isolated streak spectrum
-- Use energy profile to spatially modulate removal threshold
-
-Stage 2: Rank-1 SVD with Magnitude Gating
-- Extract first principal component via power iteration
-- Median filter the v-vector to separate baseline from streak detail
-- Apply soft magnitude gating: ``1 / (1 + (|v| / threshold)^exponent)``
-- Reconstruct streak as rank-1 outer product and subtract from input
-
-Parameters:
-- fft_alpha: Controls FFT energy influence on threshold modulation (default: 1.0)
-- notch_width: Gaussian notch filter width in frequency domain (default: 2.0)
-"""
+"""Remove vertical streaks with frequency detection and matrix decomposition."""
 
 import numpy as np
 import logging
@@ -41,33 +22,30 @@ def fourier_svd_removal(
     notch_width: float = 2.0,
 ) -> np.ndarray:
     """
-    Fourier-SVD Streak Removal.
+    Remove vertical streaks with Fourier-SVD processing.
 
-    A two-stage algorithm combining FFT-based energy detection with rank-1 SVD
-    for removing vertical streak artifacts from sinograms.
-
-    Benchmark Performance:
-    - Speed: ~2.6x faster than BM3D.
-    - Low SNR: Superior limits (cleaner noise floor).
-    - High SNR: Excellent structure preservation (avoids wall attack).
+    The first stage detects vertical-frequency energy with a fast Fourier
+    transform (FFT). The second stage uses rank-one singular value decomposition
+    (SVD) to estimate and subtract the streak pattern.
 
     Parameters
     ----------
     sinogram : np.ndarray
-        Input sinogram (2D array). Supported types: float32, float64.
+        Two-dimensional sinogram. Float32 and float64 use matching backends.
+        Other dtypes are processed as float32.
     fft_alpha : float, optional
-        FFT-guided trust factor for adaptive thresholding. Higher values increase
-        sensitivity to vertical energy in the frequency domain. Set to 0.0 to disable
-        FFT-guided gating and use fixed thresholds. Default: 1.0.
+        Weight given to detected vertical-frequency energy. Higher values make
+        that energy influence the removal threshold more strongly. Set 0.0 to
+        use fixed thresholds. Default: 1.0.
     notch_width : float, optional
-        Width of the Gaussian notch filter in frequency domain (in pixels). Controls
-        the selectivity of the vertical frequency isolation. Larger values accept
-        more off-axis frequencies. Default: 2.0.
+        Gaussian notch width in frequency bins. Larger values include more
+        frequencies away from the vertical axis. Default: 2.0.
 
     Returns
     -------
     np.ndarray
-        Destriped sinogram (same shape/type).
+        Destriped sinogram with the input shape and dtype. Non-floating inputs
+        are converted back to their original dtype.
     """
     if sinogram.ndim != 2:
         raise ValueError(f"Input must be 2D array, got shape {sinogram.shape}")

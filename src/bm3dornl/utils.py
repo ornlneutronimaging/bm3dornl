@@ -18,38 +18,34 @@ logger = logging.getLogger(__name__)
 
 def estimate_noise_sigma(sinogram: np.ndarray) -> float:
     """
-    Estimate the standard deviation of vertical streak noise in a sinogram.
+    Estimate the amplitude of vertical streak noise in a sinogram.
 
-    This implements the sigma estimation from Makinen et al. (2021). The image
-    is smoothed with a tall vertical Gaussian (sigma = height / 12), which
-    passes column-wise (vertical streak) structure but suppresses pixel-level
-    random noise, then high-pass filtered horizontally (Daubechies-3) to
-    isolate column-to-column variation. The scaled median absolute deviation
-    (1.4826 * MAD) of the filtered result is returned.
+    This implements the estimator from Mäkinen et al. (2021). It first smooths
+    vertically with a Gaussian width of ``height / 12``. This preserves streaks
+    while suppressing pixel noise. A Daubechies-3 high-pass filter then isolates
+    changes between columns.
 
-    The returned value is therefore the amplitude of vertical streaks — the
-    sinogram signature of ring artifacts — not the pixel-level standard
-    deviation of the image. For purely independent (i.i.d.) pixel noise the
-    vertical smoothing removes most of what the filter measures, and the
-    result lands far below the pixel-level sigma (roughly 8x smaller for a
-    256-row image; the taller the image, the stronger the suppression).
+    The result is 1.4826 times the median absolute deviation (MAD). MAD is the
+    median distance from the filtered values' median. The result measures vertical
+    streak amplitude, not pixel-level standard deviation. Vertical smoothing
+    removes most independent pixel noise. Its estimate is therefore much
+    smaller than that noise's standard deviation.
 
-    This is the same estimator the BM3D pipeline runs internally to fill in
-    ``sigma_random`` when it is set to 0.0 (in the streak-removal modes that
-    estimate is taken after the streak profile has been subtracted; in
-    generic mode, on the normalized input). As a standalone diagnostic it is
-    useful for judging streak strength or for choosing ``sigma_random``
-    manually.
+    The BM3D pipeline uses this estimator when ``sigma_random`` is 0.0. Streak
+    modes estimate after subtracting the streak profile. Generic mode estimates
+    on normalized input. Use this function to inspect streak strength or choose
+    ``sigma_random`` manually.
 
     Parameters
     ----------
     sinogram : np.ndarray
-        Input sinogram (2D array). Supported types: float32, float64.
+        Two-dimensional sinogram. Float32 and float64 use matching backends.
+        Other dtypes are converted to float32.
 
     Returns
     -------
     float
-        Estimated standard deviation of the vertical streak noise.
+        Estimated amplitude of the vertical streak noise.
 
     Examples
     --------

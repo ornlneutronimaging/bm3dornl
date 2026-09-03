@@ -1,8 +1,6 @@
 # Contributing to BM3D-ORNL
 
-Thank you for considering contributing to the BM3D-ORNL project!
-We welcome contributions from the community and are grateful for your help in improving this library.
-This guide provides instructions on how to contribute to the project.
+Thank you for contributing to BM3D-ORNL. This guide explains the project workflow.
 
 ## Table of Contents
 
@@ -21,116 +19,121 @@ By participating in this project, you agree to abide by the [Code of Conduct](CO
 
 ## Getting Started
 
-1. **Fork the Repository**: Fork the [bm3dornl repository](https://github.com/ornlneutronimaging/bm3dornl) to your GitHub account.
+1. **Fork the repository.** Create a fork of the
+   [bm3dornl repository](https://github.com/ornlneutronimaging/bm3dornl).
 
-2. **Clone the Fork**: Clone your forked repository to your local machine.
+2. **Clone your fork.**
 
     ```bash
     git clone https://github.com/your-username/bm3dornl.git
     cd bm3dornl
     ```
 
-3. **Set Upstream Remote**: Add the original repository as an upstream remote.
+3. **Add the upstream remote.**
 
     ```bash
     git remote add upstream https://github.com/ornlneutronimaging/bm3dornl.git
     ```
 
-4. **Set Up the Environment**: The project uses [pixi](https://prefix.dev) for everything in a source checkout. It provides Python, Rust, HDF5, and the other build dependencies; do not use `pip install -e .`, `maturin`, or `cargo` directly.
+4. **Use Pixi.** Contributors must use [Pixi](https://prefix.dev) for clone
+   builds and tests. `pip install -e .` is unsupported because clone builds
+   must compile the Rust extension through the pinned Pixi toolchain.
+
+   After cloning, run `pixi run build`, `pixi run test`, then `pixi run gui`.
 
     ```bash
-    pixi install       # create the environment
-    pixi run build     # build the Rust extension, install the package in editable mode
-    pixi run test      # run the Rust and Python test suites
-    pixi run gui       # run the GUI from your checkout
+    pixi run build     # build the Rust extension
+    pixi run test      # run the Rust and Python tests
+    pixi run gui       # run the clone's GUI
     ```
 
-    The full command table is in the [Development](README.md#development) section of the README.
+   Each `pixi run` command installs the environment on demand. Run
+   `pixi install` first only to create the environment separately.
+
+   See the README's [How to install](README.md#how-to-install) section for the
+   install policy. The [Development](README.md#development) section lists all
+   supported tasks.
 
 ## Development Workflow
 
-- **Create a Branch**: Create a new branch for your feature or bugfix.
+- **Create a branch.** Use a focused name for your change.
 
     ```bash
-    git checkout -b feature/your-feature-name
+    git switch -c feature/your-feature-name
     ```
 
-- **Make Changes**: Make your changes in the codebase. Use `pre-commit` to help you format your code and check for common issues.
+- **Make your changes.** Keep each change focused.
 
     ```bash
-    pre-commit install
+    pixi run lint
     ```
 
-> Note: you only need to run `pre-commit install` once. After that, the pre-commit checks will run automatically before each commit.
+  Run the lint task before committing. It checks Rust formatting and Clippy.
 
-- **Write Tests**: Write tests for your changes to ensure they are well-tested. See the [testing](#testing) section for more details.
+- **Write tests.** Cover new behavior and regressions. See [Testing](#testing).
 
-- **Commit Changes**: Commit your changes with a meaningful commit message.
+- **Commit the change.** Use a concise, meaningful message.
 
     ```bash
     git add .
     git commit -m "Description of your changes"
     ```
 
-- **Push Changes**: Push your changes to your forked repository.
+- **Push the branch.** Send it to your fork.
 
     ```bash
     git push origin feature/your-feature-name
     ```
 
-- **Open a Pull Request**: Open a pull request (PR) from your forked repository to the `next` branch of the original repository. Provide a clear description of your changes and any relevant information.
+- **Open a pull request.** Target the original repository's `next` branch.
+  Describe the change and its verification.
 
 ## Coding Standards
 
-- **PEP 8**: Follow the PEP 8 style guide for Python code.
-- **Docstrings**: Use `numpy` docstrings style to document all public modules, classes, and functions.
-- **Type Annotations**: Use type annotations for function signatures.
-- **Imports**: Group imports into standard library, third-party, and local module sections. Use absolute imports.
-- **Rust**: `pixi run lint` must pass; it runs `cargo fmt --check` and `clippy` with warnings treated as errors.
+- **Python style:** Follow PEP 8.
+- **Docstrings:** Use NumPy-style docstrings for public modules, classes, and functions.
+- **Type annotations:** Annotate function signatures.
+- **Imports:** Group standard-library, third-party, and local imports. Use absolute imports.
+- **Rust:** Run `pixi run lint`. It checks formatting and treats Clippy warnings as errors.
 
 ## Testing
 
-Ensure that your changes are covered by tests. The Rust tests live next to the code in `src/rust_core`, the Python tests in `tests/`.
+Cover your changes with tests. Rust tests live under `src/rust_core`.
+Python tests live under `tests/`.
 
-- **Run All Tests**: Rust and Python together.
+- **Run all tests.** This task runs Rust and Python tests.
 
     ```bash
     pixi run test
     ```
 
-- **Run One Suite**:
+- **Run one test suite.**
 
     ```bash
     pixi run test-rust
     pixi run test-python
     ```
 
-- **Check Coverage**: Python test coverage.
-
-    ```bash
-    pixi run pytest --cov=src/bm3dornl
-    ```
-
 ## Submitting Changes
 
-1. **Ensure Tests Pass**: Make sure all tests pass and the coverage is satisfactory.
+1. **Run the checks.** Ensure `pixi run lint`, `pixi run test`, and
+   `pixi run build` pass.
 
-2. **Update Documentation**: If your changes affect the documentation, update the relevant sections.
+2. **Update documentation.** Revise any affected pages.
 
-3. **Open a Pull Request**: Open a pull request with a clear description of your changes. Reference any related issues in your PR description.
+3. **Open a pull request.** Describe the change and reference related issues.
 
-4. **Review Process**: Your pull request will be reviewed by the maintainers. Be prepared to make changes based on feedback.
+4. **Address review feedback.** Maintainers may request changes.
 
 ## Reporting Issues
 
-If you find a bug or have a feature request, please open an issue on the [GitHub issues page](https://github.com/ornlneutronimaging/bm3dornl/issues).
-Provide as much detail as possible, including steps to reproduce the issue if applicable.
+Report bugs and feature requests on the
+[GitHub issues page](https://github.com/ornlneutronimaging/bm3dornl/issues).
+Include reproduction steps for bugs.
 
-For usage questions rather than bug reports, please start a [GitHub Discussion](https://github.com/ornlneutronimaging/bm3dornl/discussions)
-instead, so that issues stay focused on defects and feature requests.
+Start a [GitHub Discussion](https://github.com/ornlneutronimaging/bm3dornl/discussions)
+for usage questions. This keeps issues focused on defects and features.
 
 ## Contact
 
-If you have any questions or need further assistance, please contact the [repo maintainer](mailto:zhangc@ornl.gov).
-
-Thank you for contributing to BM3D-ORNL!
+Contact the [repository maintainer](mailto:zhangc@ornl.gov) for further help.

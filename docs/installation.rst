@@ -10,19 +10,19 @@ Requirements
 Installing from PyPI
 --------------------
 
-**Core Library**
+Install the core library:
 
 .. code-block:: bash
 
     pip install bm3dornl
 
-**With GUI Application**
+Install the library and the released GUI:
 
 .. code-block:: bash
 
     pip install bm3dornl[gui]
 
-Or install the GUI separately:
+To install only the released GUI, run:
 
 .. code-block:: bash
 
@@ -39,27 +39,29 @@ Supported Platforms
 | macOS    | ARM64 (Apple Silicon) | Yes     | Yes |
 +----------+-----------------------+---------+-----+
 
-Working from a Source Checkout
-------------------------------
+Working in a Clone
+------------------
 
-Everything in a clone of the repository runs through `pixi <https://prefix.dev>`_,
-which provides Python, Rust, HDF5, and the other build dependencies. It is the
-only supported way to build, test, or run the code in a checkout. ``pip install -e .``
-is not supported: the Rust extension is built by ``pixi run build``, and the
-``[gui]`` extra downloads the released GUI binary from PyPI instead of building
-the GUI in your checkout.
+Use Pixi for all commands in a clone. Follow the README's
+`How to install <https://github.com/ornlneutronimaging/bm3dornl#how-to-install>`_
+section.
 
 .. code-block:: bash
 
     git clone https://github.com/ornlneutronimaging/bm3dornl.git
     cd bm3dornl
-    pixi install        # create the environment
-    pixi run build      # build the Rust extension, install the package in editable mode
-    pixi run test       # run the Rust and Python test suites
-    pixi run gui        # run the GUI from your checkout (compiles it on first use)
+    pixi run build      # build the Rust extension
+    pixi run test       # run the Rust and Python tests
+    pixi run gui        # run the clone's GUI
 
-Verifying Installation
-----------------------
+Each ``pixi run`` command installs the environment on demand. Run
+``pixi install`` first only to create the environment separately.
+
+Verifying the Installation
+--------------------------
+
+After a pip install, start Python with ``python``. In a clone, use
+``pixi run python``. Then run:
 
 .. code-block:: python
 

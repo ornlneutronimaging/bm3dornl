@@ -1,8 +1,7 @@
 Tutorial
 ========
 
-This tutorial demonstrates how to use BM3DORNL for removing ring artifacts from
-tomography sinograms using synthetic phantom data.
+Use this tutorial to remove ring artifacts from a synthetic sinogram.
 
 For an interactive version of this tutorial, see the Jupyter notebook:
 `notebooks/tutorial.ipynb <https://github.com/ornlneutronimaging/bm3dornl/blob/main/notebooks/tutorial.ipynb>`_
@@ -10,10 +9,9 @@ For an interactive version of this tutorial, see the Jupyter notebook:
 Overview
 --------
 
-Ring artifacts are a common problem in neutron and X-ray tomography caused by
-detector pixel response variations. In sinogram space, these appear as vertical
-streaks. BM3DORNL provides specialized algorithms to remove these artifacts while
-preserving image structure.
+Detector response variations can cause rings in reconstructed tomography images.
+These artifacts appear as vertical streaks in a sinogram. BM3DORNL targets those
+streaks while preserving image structure.
 
 Generating Test Data
 --------------------
@@ -62,7 +60,7 @@ The main function is ``bm3d_ring_artifact_removal``:
 
     from bm3dornl import bm3d_ring_artifact_removal
 
-    # For ring artifacts, always use mode="streak"
+    # Use streak mode for ring artifacts
     denoised = bm3d_ring_artifact_removal(
         noisy_sinogram,
         mode="streak",
@@ -72,13 +70,14 @@ The main function is ``bm3d_ring_artifact_removal``:
 Generic vs Streak Mode
 ----------------------
 
+BM3D means block-matching and three-dimensional filtering.
 BM3DORNL provides two modes:
 
-- **generic**: Standard BM3D for white (random) noise
-- **streak**: Specialized mode for vertical streak artifacts
+- **generic:** Standard BM3D for white random noise
+- **streak:** Processing for vertical streak artifacts
 
-For ring artifact removal, always use ``mode="streak"``. It specifically targets
-vertical structures while preserving horizontal (angular) information.
+Use ``mode="streak"`` for vertical ring-artifact streaks. This mode preserves
+horizontal angular information.
 
 .. code-block:: python
 
@@ -95,12 +94,12 @@ vertical structures while preserving horizontal (angular) information.
         sigma_random=0.05,
     )
 
-    # Streak mode will show better artifact removal with less structure loss
+    # Compare the modes on your data
 
 Parameter Tuning
 ----------------
 
-The most important parameter is ``sigma_random``, which controls denoising strength:
+``sigma_random`` sets denoising strength:
 
 .. code-block:: python
 
@@ -119,7 +118,7 @@ The most important parameter is ``sigma_random``, which controls denoising stren
         sinogram, mode="streak", sigma_random=0.15
     )
 
-For quality vs speed tradeoffs, adjust ``step_size``:
+Adjust ``step_size`` to trade speed for quality:
 
 .. code-block:: python
 
@@ -136,7 +135,7 @@ For quality vs speed tradeoffs, adjust ``step_size``:
 Processing 3D Stacks
 --------------------
 
-BM3DORNL handles 3D sinogram stacks automatically:
+Pass a three-dimensional array to process a sinogram stack:
 
 .. code-block:: python
 
@@ -151,7 +150,7 @@ BM3DORNL handles 3D sinogram stacks automatically:
 Evaluating Results
 ------------------
 
-Always check the difference image to verify you're removing artifacts, not signal:
+Inspect the difference image for removed signal:
 
 .. code-block:: python
 
@@ -168,20 +167,24 @@ Always check the difference image to verify you're removing artifacts, not signa
     axes[2].set_title('Removed (should show vertical streaks)')
     plt.show()
 
-The difference image should show primarily vertical streaks (the artifacts being removed).
-If you see horizontal structure, reduce ``sigma_random``.
+The difference should contain mainly vertical streaks. Reduce ``sigma_random``
+if it contains horizontal structure.
 
 Best Practices
 --------------
 
-1. **Always use streak mode** for ring artifacts in sinograms
+1. **Use streak mode** for ring artifacts in sinograms.
 
-2. **Normalize your data** to [0, 1] range for best results
+2. **Keep the original value range.** Single-scale processing normalizes
+   nonconstant data to [0, 1] internally. It restores the original range.
+   Multiscale mode expects linear transmission data unless
+   ``log_domain_input=True``. Python converts values to ``float32`` before Rust
+   processing.
 
-3. **Start with low sigma_random** and increase gradually
+3. **Start with a low ``sigma_random``.** Increase it gradually.
 
-4. **Check the difference image** to ensure you're removing artifacts, not signal
+4. **Check the difference image.** Confirm that it contains artifacts, not signal.
 
-5. **Use batch_size** to control memory for large 3D stacks
+5. **Set ``batch_size``** to control memory for large stacks.
 
-6. **Compare with generic mode** to verify streak mode is providing benefit
+6. **Compare both modes** on your data.

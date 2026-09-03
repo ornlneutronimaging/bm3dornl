@@ -11,17 +11,18 @@
 BM3D ORNL
 =========
 
-A high-performance BM3D denoising library for neutron imaging, optimized for streak/ring artifact removal from sinograms.
+BM3D ORNL removes streak and ring artifacts from neutron-imaging sinograms.
+BM3D means block-matching and three-dimensional filtering.
 
 The BM3D algorithm was originally proposed by K. Dabov, A. Foi, V. Katkovnik, and K. Egiazarian in the paper "Image Denoising by Sparse 3D Transform-Domain Collaborative Filtering" (2007).
 
-**BM3D ORNL** provides a Python API with a **Rust backend** for efficient, parallel processing of tomography data. Key features:
+The library provides a Python API backed by Rust. Key features include:
 
-- **Streak/Ring Artifact Removal**: Specialized mode for removing vertical streak artifacts common in neutron and X-ray imaging
-- **Multi-Scale Processing**: True multi-scale BM3D for handling wide streaks that single-scale cannot capture (based on Mäkinen et al. 2021)
-- **Fourier-SVD Method**: Alternative fast algorithm (~2.6x faster than BM3D) combining FFT-based energy detection with rank-1 SVD
-- **Stack Processing**: Efficient batched processing of 3D sinogram stacks
-- **High Performance**: Rust backend with optimized block matching (integral images, early termination) and transforms (Hadamard, FFT)
+- **Streak removal** targets vertical detector artifacts.
+- **Multiscale processing** handles streaks wider than one scale can capture.
+- **Fourier-SVD** combines frequency detection with rank-one matrix decomposition.
+- **Stack processing** batches three-dimensional sinogram data.
+- **Rust processing** accelerates block matching and transforms.
 
 Documentation
 -------------
@@ -34,15 +35,14 @@ guide, and the API reference.
 How to install
 --------------
 
-There are two ways to get bm3dornl, for two audiences:
+Use pip for published releases and [Pixi](https://prefix.dev) for a clone.
 
-- **Users**: install the released packages from PyPI with pip, as below.
-- **Developers and reviewers working from a clone of this repository**: use
-  [pixi](https://prefix.dev), and only pixi; see [Development](#development).
-  `pip install -e .` is not a supported path: the Rust extension is built by
-  `pixi run build`, and the `[gui]` extra downloads the *released* GUI binary
-  from PyPI instead of building the GUI in your checkout. To run the GUI from
-  a checkout, use `pixi run gui`.
+Do not run `pip install -e .` in a clone. `pip install -e .` is unsupported
+because clone builds compile the Rust extension with Maturin inside the pinned
+Pixi environment. The `pixi run build` task performs that step.
+
+The `[gui]` extra installs the separate `bm3dornl-gui` binary wheel from PyPI.
+It does not build the GUI in a clone. Run the clone's GUI with `pixi run gui`.
 
 **Using Pip (released packages)**
 
@@ -101,29 +101,29 @@ denoised = bm3d_ring_artifact_removal(
 
 ### Fourier-SVD Method (v0.7.0+)
 
-For faster processing with excellent results on many datasets:
+For an alternative streak-removal method:
 
 ```python
 from bm3dornl.fourier_svd import fourier_svd_removal
 
-# Fast streak removal (~2.6x faster than BM3D)
+# Fourier-guided streak removal
 denoised = fourier_svd_removal(
     sinogram,
-    fft_alpha=1.0,          # FFT-guided trust factor (0.0 disables FFT guidance)
-    notch_width=2.0,        # Gaussian notch filter width
+    fft_alpha=1.0,          # Weight for detected vertical-frequency energy
+    notch_width=2.0,        # Gaussian notch width in frequency bins
 )
 ```
 
 Performance
 -----------
 
-The **Rust backend** provides high performance for tomography stacks:
+The Rust backend processes tomography stacks in parallel:
 
 | Metric | Value |
 |--------|-------|
 | **Speed** | ~0.63s per frame (512×512) on Apple Silicon |
 | **Memory** | >50% reduction via chunked processing |
-| **Parallelism** | Zero-overhead parallel processing via Rayon |
+| **Parallelism** | Parallel processing with Rayon |
 
 Key optimizations:
 - Integral image pre-screening for fast block matching
@@ -134,20 +134,21 @@ Key optimizations:
 Development
 -----------
 
-Everything in a source checkout runs through [pixi](https://prefix.dev). It
-provides Python, Rust, HDF5 and the other build dependencies, so nothing else
-needs to be installed, and it is the only supported way to build, test, or run
-the code in a clone. Do not use `pip install -e .`, `maturin`, or `cargo`
-directly.
+Use Pixi for every command in a clone. See [How to install](#how-to-install)
+for the install policy. Pixi supplies Python, Rust, HDF5, and the remaining
+build dependencies.
 
 | Task | Command |
 |------|---------|
-| Create the environment | `pixi install` |
-| Build the Rust extension and install the package in editable mode | `pixi run build` |
+| Create the environment without running a task (optional) | `pixi install` |
+| Build the Rust extension | `pixi run build` |
 | Run all tests (Rust and Python) | `pixi run test` |
 | Lint (rustfmt and clippy) | `pixi run lint` |
-| Run the GUI from the checkout | `pixi run gui` (release build) or `pixi run gui-debug` |
+| Run the clone's GUI | `pixi run gui` (release build) or `pixi run gui-debug` |
 | Run the benchmarks | `pixi run bench` |
+
+Clone the repository, enter its directory, then run `pixi run build`,
+`pixi run test`, and `pixi run gui`, in that order.
 
 ```bash
 git clone https://github.com/ornlneutronimaging/bm3dornl.git
@@ -157,14 +158,17 @@ pixi run test
 pixi run gui
 ```
 
+Each `pixi run` command installs the environment on demand. Run `pixi install`
+first only when you want to create the environment separately.
+
 The first `pixi run gui` compiles the GUI application, which takes a few
 minutes; later runs start immediately.
 
 ### Optional: test-data submodule
 
-`tests/bm3dornl-data` is a Git submodule holding reference data for the notebooks in
-`notebooks/`. **It is not required to build the package or run the test suite** — the
-plain `git clone` above is all you need for `pixi run build` and `pixi run test`.
+`tests/bm3dornl-data` is a Git submodule with notebook reference data. It is
+not required to build the package or run tests. The clone command above is
+enough for `pixi run build` and `pixi run test`.
 
 Fetch it only if you want to run the notebooks:
 
@@ -173,10 +177,10 @@ git submodule update --init tests/bm3dornl-data
 git -C tests/bm3dornl-data lfs pull
 ```
 
-The submodule is hosted on `code.ornl.gov` and clones anonymously over HTTPS — no ORNL
-account or SSH key is needed. Note that `tomostack_small.h5` is stored in Git LFS and is
-about 1.4 GB, so the `lfs pull` step takes a while; without Git LFS installed the file
-stays on disk as a small text pointer.
+The submodule is hosted on `code.ornl.gov`. It clones anonymously over HTTPS,
+without an ORNL account or SSH key. The `tomostack_small.h5` file is about
+1.4 GB. It uses Git Large File Storage (Git LFS). Without Git LFS, the file
+remains a small text pointer. The `lfs pull` step can take time.
 
 GUI Application
 ---------------
@@ -197,9 +201,7 @@ Or install the GUI separately:
 pip install bm3dornl-gui
 ```
 
-From a source checkout, the GUI is built and run from your clone with pixi
-instead (see [Development](#development)); the pip packages above always
-contain the last released binary, not the code in the checkout:
+In a clone, run the GUI through Pixi. See [How to install](#how-to-install).
 
 ```bash
 pixi run gui
@@ -218,7 +220,8 @@ bm3dornl-gui
 - Load HDF5 files with tree browser for dataset selection
 - Interactive slice viewer with histogram
 - Side-by-side comparison of original and processed images
-- Real-time parameter adjustment
+- Adjust parameters before processing
+- View the processed result after processing finishes
 - ROI selection for histogram (Shift+drag to select region)
 - Export processed data to TIFF or HDF5
 
@@ -244,23 +247,23 @@ Parameter Reference
 | `batch_size` | `32` | Batch size for stack processing |
 | `streak_sigma_smooth` | `3.0` | Smoothing for streak mode (streak mode only) |
 | `multiscale` | `False` | Enable multi-scale processing for wide streaks |
-| `num_scales` | `None` | Number of scales (auto-detected if None) |
+| `num_scales` | `None` | Number of scales (`None` selects it automatically) |
 | `filter_strength` | `1.0` | Filtering strength multiplier for multi-scale |
-| `debin_iterations` | `30` | Debinning iterations for multi-scale |
+| `debin_iterations` | `30` | Cubic-spline expansion iterations for multiscale corrections |
 
 ### Fourier-SVD Parameters
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `fft_alpha` | `1.0` | FFT-guided trust factor (0.0 disables FFT guidance) |
-| `notch_width` | `2.0` | Gaussian notch filter width in frequency domain |
+| `fft_alpha` | `1.0` | Weight for detected vertical-frequency energy |
+| `notch_width` | `2.0` | Gaussian notch width in frequency bins |
 
 Contributing and Support
 ------------------------
 
-- **Contributing**: see [CONTRIBUTING.md](CONTRIBUTING.md) for development setup,
-  coding standards, testing, and the pull request process. Participation is
-  governed by our [Code of Conduct](CODE_OF_CONDUCT.md).
+- **Contributing**: see [CONTRIBUTING.md](CONTRIBUTING.md) for setup, coding
+  standards, testing, and pull requests. Participation follows our
+  [Code of Conduct](CODE_OF_CONDUCT.md).
 - **Reporting issues**: open an issue at
   <https://github.com/ornlneutronimaging/bm3dornl/issues>. Please include your
   platform, the bm3dornl version, and a minimal reproduction.
