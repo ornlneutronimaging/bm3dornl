@@ -1,0 +1,18 @@
+cff-version: 1.2.0
+message: If you use this software, please cite it as below.
+title: 'BM3DORNL: High-Performance BM3D Denoising for Neutron Tomography'
+type: software
+authors:
+- given-names: Chen
+  family-names: Zhang
+  orcid: https://orcid.org/0000-0001-8374-4467
+- given-names: Jean-Christophe
+  family-names: Bilheux
+  orcid: https://orcid.org/0000-0003-2172-6487
+- given-names: Dmitry
+  family-names: Ganyushin
+- given-names: Pete
+  family-names: Peterson
+  orcid: https://orcid.org/0000-0002-1353-0348
+repository-code: https://github.com/ornlneutronimaging/bm3dornl
+license: MIT
