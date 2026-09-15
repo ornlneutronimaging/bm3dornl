@@ -30,7 +30,9 @@ eframe = "0.29"
 egui_plot = "0.29"
 hdf5-metno = { version = "0.11", features = ["static", "zlib"] }
 hdf5-metno-sys = { version = "0.10", features = ["static", "zlib", "threadsafe"] }
-rfd = "0.15"
+# gtk3 backend (not the default xdg-portal one): the portal ignores
+# set_directory, so dialogs would not open in the selected IPTS folder.
+rfd = { version = "0.15", default-features = false, features = ["gtk3"] }
 tiff = "0.9"
 ndarray = "0.15"
 bm3d_core = { path = "../bm3d_core" }
