@@ -1,3 +1,4 @@
+pub use detector_orientation::{Detector, Orientation, Selection, Source};
 use hdf5_metno::File as H5File;
 use ndarray::Array3;
 use std::fs::{self, File};
@@ -218,11 +219,13 @@ pub fn find_3d_datasets(entries: &[Hdf5Entry]) -> Vec<String> {
     paths
 }
 
-/// What a [`LoadingJob`] is reading.
+/// What a [`LoadingJob`] is reading. TIFF sources carry the detector
+/// orientation applied to every page (HDF5 stacks are already processed
+/// data and are loaded as-is).
 enum LoadSource {
     Hdf5 { path: PathBuf, dataset: String },
-    TiffStack(PathBuf),
-    TiffSequence(PathBuf),
+    TiffStack(PathBuf, Orientation),
+    TiffSequence(PathBuf, Orientation),
 }
 
 /// A volume load running on a background thread, so the UI can show a
@@ -235,6 +238,9 @@ pub struct LoadingJob {
     /// The file (or folder) being loaded, shown next to the bar and kept
     /// as the app's `file_path` once loaded.
     pub source: PathBuf,
+    /// How every frame is re-oriented relative to the file on disk
+    /// (`Identity` for HDF5).
+    pub orientation: Orientation,
 }
 
 impl LoadingJob {
@@ -242,22 +248,22 @@ impl LoadingJob {
         Self::start(LoadSource::Hdf5 { path, dataset })
     }
 
-    pub fn start_tiff_stack(path: PathBuf) -> Self {
-        Self::start(LoadSource::TiffStack(path))
+    pub fn start_tiff_stack(path: PathBuf, orientation: Orientation) -> Self {
+        Self::start(LoadSource::TiffStack(path, orientation))
     }
 
-    pub fn start_tiff_sequence(folder: PathBuf) -> Self {
-        Self::start(LoadSource::TiffSequence(folder))
+    pub fn start_tiff_sequence(folder: PathBuf, orientation: Orientation) -> Self {
+        Self::start(LoadSource::TiffSequence(folder, orientation))
     }
 
     fn start(source: LoadSource) -> Self {
         let done = Arc::new(AtomicUsize::new(0));
         let total = Arc::new(AtomicUsize::new(0));
         let (tx, rx) = channel();
-        let source_path = match &source {
-            LoadSource::Hdf5 { path, .. } => path.clone(),
-            LoadSource::TiffStack(path) => path.clone(),
-            LoadSource::TiffSequence(folder) => folder.clone(),
+        let (source_path, orientation) = match &source {
+            LoadSource::Hdf5 { path, .. } => (path.clone(), Orientation::Identity),
+            LoadSource::TiffStack(path, o) => (path.clone(), *o),
+            LoadSource::TiffSequence(folder, o) => (folder.clone(), *o),
         };
         let thread_done = Arc::clone(&done);
         let thread_total = Arc::clone(&total);
@@ -266,8 +272,8 @@ impl LoadingJob {
                 LoadSource::Hdf5 { path, dataset } => {
                     load_hdf5_dataset_with_progress(&path, &dataset, &thread_done, &thread_total)
                 }
-                LoadSource::TiffStack(path) => load_tiff_stack(&path),
-                LoadSource::TiffSequence(folder) => load_tiff_sequence(&folder),
+                LoadSource::TiffStack(path, o) => load_tiff_stack(&path, o),
+                LoadSource::TiffSequence(folder, o) => load_tiff_sequence(&folder, o),
             };
             let _ = tx.send(result);
         });
@@ -276,6 +282,7 @@ impl LoadingJob {
             done,
             total,
             source: source_path,
+            orientation,
         }
     }
 
@@ -292,8 +299,11 @@ impl LoadingJob {
 }
 
 /// Load a multi-page TIFF as a 3D volume.
-/// Shape will be [num_pages, height, width].
-pub fn load_tiff_stack(path: &Path) -> Result<Volume3D, DataLoadError> {
+/// Shape will be [num_pages, height, width] *after* `orientation` is applied
+/// to every page (see [`detector_orientation`]: Timepix pages are transposed,
+/// CCD pages flipped vertically; the on-disk `w × h` page becomes
+/// `orientation.dims(w, h)`).
+pub fn load_tiff_stack(path: &Path, orientation: Orientation) -> Result<Volume3D, DataLoadError> {
     let file = File::open(path).map_err(|e| DataLoadError::IoError(e.to_string()))?;
     let reader = BufReader::new(file);
     let mut decoder = Decoder::new(reader).map_err(|e| DataLoadError::TiffError(e.to_string()))?;
@@ -366,28 +376,49 @@ pub fn load_tiff_stack(path: &Path) -> Result<Volume3D, DataLoadError> {
         ));
     }
 
-    let num_pages = pages.len();
+    pages_to_volume(pages, width, height, orientation)
+}
 
-    // Create 3D array [num_pages, height, width]
-    let mut data = Array3::<f32>::zeros((num_pages, height, width));
-    for (page_idx, page_data) in pages.into_iter().enumerate() {
-        for (pixel_idx, val) in page_data.into_iter().enumerate() {
-            let y = pixel_idx / width;
-            let x = pixel_idx % width;
-            if y < height && x < width {
-                data[[page_idx, y, x]] = val;
-            }
+/// Stack row-major `width × height` pages into a `[n, height', width']`
+/// volume, re-orienting every page with `orientation` on the way.
+fn pages_to_volume(
+    pages: Vec<Vec<f32>>,
+    width: usize,
+    height: usize,
+    orientation: Orientation,
+) -> Result<Volume3D, DataLoadError> {
+    let num_pages = pages.len();
+    let (ow, oh) = orientation.dims(width, height);
+    let mut flat: Vec<f32> = Vec::with_capacity(num_pages * ow * oh);
+    for page in pages {
+        if page.len() != width * height {
+            return Err(DataLoadError::InvalidDimensions(format!(
+                "page holds {} values, expected {}x{}",
+                page.len(),
+                width,
+                height
+            )));
+        }
+        if orientation.is_identity() {
+            flat.extend_from_slice(&page);
+        } else {
+            flat.extend_from_slice(&orientation.apply_vec(&page, width, height));
         }
     }
-
+    let data = Array3::from_shape_vec((num_pages, oh, ow), flat)
+        .map_err(|e| DataLoadError::InvalidDimensions(e.to_string()))?;
     Ok(Volume3D::new(data))
 }
 
 /// Load a sequence of TIFF files from a folder as a 3D volume.
 /// Files are sorted using natural sort order (img_1, img_2, img_10, not img_1, img_10, img_2).
 /// Only .tif and .tiff files are included; other files are silently ignored.
-/// Shape will be [num_files, height, width].
-pub fn load_tiff_sequence(folder: &Path) -> Result<Volume3D, DataLoadError> {
+/// Shape will be [num_files, height, width] after `orientation` is applied
+/// to every file (see [`load_tiff_stack`]).
+pub fn load_tiff_sequence(
+    folder: &Path,
+    orientation: Orientation,
+) -> Result<Volume3D, DataLoadError> {
     // Read directory and collect TIFF files
     let entries = fs::read_dir(folder).map_err(|e| DataLoadError::IoError(e.to_string()))?;
 
@@ -495,21 +526,7 @@ pub fn load_tiff_sequence(folder: &Path) -> Result<Volume3D, DataLoadError> {
         images.push(image_f32);
     }
 
-    let num_images = images.len();
-
-    // Create 3D array [num_images, height, width]
-    let mut data = Array3::<f32>::zeros((num_images, height, width));
-    for (img_idx, img_data) in images.into_iter().enumerate() {
-        for (pixel_idx, val) in img_data.into_iter().enumerate() {
-            let y = pixel_idx / width;
-            let x = pixel_idx % width;
-            if y < height && x < width {
-                data[[img_idx, y, x]] = val;
-            }
-        }
-    }
-
-    Ok(Volume3D::new(data))
+    pages_to_volume(images, width, height, orientation)
 }
 
 /// Information about an HDF5 entry for tree display.
@@ -595,6 +612,39 @@ fn build_group_tree(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Orientation is applied per page: a 3 wide × 2 tall page
+    ///   1 2 3
+    ///   4 5 6
+    /// becomes 2 wide × 3 tall when transposed, upside down when flipped.
+    #[test]
+    fn pages_are_oriented_on_load() {
+        let page: Vec<f32> = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+        let v = pages_to_volume(vec![page.clone(); 2], 3, 2, Orientation::Identity).unwrap();
+        assert_eq!(v.raw_data().shape(), &[2, 2, 3]);
+        assert_eq!(v.raw_data()[[1, 1, 2]], 6.0);
+        let v = pages_to_volume(vec![page.clone()], 3, 2, Orientation::Transpose).unwrap();
+        assert_eq!(v.raw_data().shape(), &[1, 3, 2]);
+        assert_eq!(
+            v.raw_data().as_slice().unwrap(),
+            &[1.0, 4.0, 2.0, 5.0, 3.0, 6.0]
+        );
+        let v = pages_to_volume(vec![page], 3, 2, Orientation::FlipVertical).unwrap();
+        assert_eq!(v.raw_data().shape(), &[1, 2, 3]);
+        assert_eq!(
+            v.raw_data().as_slice().unwrap(),
+            &[4.0, 5.0, 6.0, 1.0, 2.0, 3.0]
+        );
+        // the automatic guess follows the VENUS folder layout
+        assert_eq!(
+            Selection::from_path(Path::new("/SNS/VENUS/IPTS-1/images/tpx1/run")).orientation(),
+            Orientation::Transpose
+        );
+        assert_eq!(
+            Selection::from_path(Path::new("/SNS/VENUS/IPTS-1/images/ikonxl/a.tiff")).orientation(),
+            Orientation::FlipVertical
+        );
+    }
 
     #[test]
     fn test_natural_sort_simple() {

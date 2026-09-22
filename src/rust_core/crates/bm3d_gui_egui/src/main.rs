@@ -8,7 +8,9 @@ mod data;
 mod processing;
 mod ui;
 
-use data::{LoadingJob, Volume3D, build_hdf5_tree, find_3d_datasets};
+use data::{
+    Detector, LoadingJob, Orientation, Selection, Volume3D, build_hdf5_tree, find_3d_datasets,
+};
 use eframe::egui;
 use processing::{ProcessingManager, ProcessingState};
 use std::path::PathBuf;
@@ -37,10 +39,11 @@ USAGE:
   bm3dornl-gui [OPTIONS] [FILE]
 
 ARGS:
-  FILE  Volume to open on startup: an HDF5 file (.h5/.hdf5/.nxs) or a
-        multi-page TIFF stack (.tif/.tiff). An HDF5 file containing exactly
-        one 3D dataset is loaded directly (with a progress bar); otherwise
-        the dataset browser opens.
+  FILE  Volume to open on startup: an HDF5 file (.h5/.hdf5/.nxs), a
+        multi-page TIFF stack (.tif/.tiff) or a folder of TIFF files
+        (loaded as a sequence). An HDF5 file containing exactly one 3D
+        dataset is loaded directly (with a progress bar); otherwise the
+        dataset browser opens.
 
 OPTIONS:
   -d, --dataset <PATH>       HDF5 dataset to load from FILE (e.g.
@@ -49,15 +52,31 @@ OPTIONS:
                              \"Return data to main application\" button that
                              writes the processed volume to FILE (HDF5,
                              dataset /data) and closes the tool
+  --detector <NAME>          Force the detector TIFF data is loaded as, which
+                             decides how every page is oriented: timepix
+                             (transposed), ccd (flipped vertically), qhy
+                             (as-is, not decided yet) or as-is. By default
+                             the detector is recognized from the folder
+                             layout (images/tpx1, images/ikonxl, …); the
+                             top bar has a combobox to change it. Saved
+                             files are written back in the on-disk
+                             orientation. HDF5 stacks are always loaded
+                             as-is
   -h, --help                 Show this help
 ";
 
-/// `(file, dataset, return path)` from the command line; exits on `--help`
-/// or bad args.
-fn parse_args() -> (Option<PathBuf>, Option<String>, Option<PathBuf>) {
+/// `(file, dataset, return path, detector override)` from the command
+/// line; exits on `--help` or bad args.
+fn parse_args() -> (
+    Option<PathBuf>,
+    Option<String>,
+    Option<PathBuf>,
+    Option<Detector>,
+) {
     let mut file = None;
     let mut dataset = None;
     let mut return_path = None;
+    let mut detector = None;
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -79,6 +98,13 @@ fn parse_args() -> (Option<PathBuf>, Option<String>, Option<PathBuf>) {
                     std::process::exit(2);
                 }
             },
+            "--detector" => match args.next().as_deref().map(Detector::parse) {
+                Some(Some(d)) => detector = Some(d),
+                _ => {
+                    eprintln!("--detector requires timepix, ccd, qhy or as-is\n\n{USAGE}");
+                    std::process::exit(2);
+                }
+            },
             _ if arg.starts_with('-') => {
                 eprintln!("unknown option {arg}\n\n{USAGE}");
                 std::process::exit(2);
@@ -86,11 +112,11 @@ fn parse_args() -> (Option<PathBuf>, Option<String>, Option<PathBuf>) {
             _ => file = Some(PathBuf::from(arg)),
         }
     }
-    (file, dataset, return_path)
+    (file, dataset, return_path, detector)
 }
 
 fn main() -> eframe::Result<()> {
-    let (startup_file, startup_dataset, return_path) = parse_args();
+    let (startup_file, startup_dataset, return_path, detector_override) = parse_args();
     let mut viewport = egui::ViewportBuilder::default().with_inner_size([1400.0, 900.0]);
 
     // Set application icon if available
@@ -108,6 +134,7 @@ fn main() -> eframe::Result<()> {
         Box::new(move |_cc| {
             let mut app = App {
                 return_path,
+                detector_override,
                 ..Default::default()
             };
             if let Some(file) = startup_file {
@@ -176,6 +203,15 @@ struct App {
     // Set when launched with --called-from-app: where the "Return data to
     // main application" button writes the processed volume.
     return_path: Option<PathBuf>,
+
+    // Detector forced by the user (`--detector` / top-bar combobox); `None`
+    // = recognize it from the folder layout of the TIFF being loaded.
+    detector_override: Option<Detector>,
+    // Detector of the loaded volume (automatic guess + override).
+    detector: Selection,
+    // How the loaded volume's pages were re-oriented relative to the files
+    // on disk; undone when saving. `Identity` for HDF5 input.
+    orientation: Orientation,
 }
 
 impl Default for App {
@@ -202,6 +238,9 @@ impl Default for App {
             error_message: None,
             loading: None,
             return_path: None,
+            detector_override: None,
+            detector: Selection::default(),
+            orientation: Orientation::default(),
         }
     }
 }
@@ -245,15 +284,113 @@ impl App {
         self.display_mode = DisplayMode::Single;
     }
 
+    /// Detector (hence orientation) to load the TIFF data at `path` with:
+    /// the user's override, else the folder layout.
+    fn select_detector(&mut self, path: &std::path::Path) -> Orientation {
+        let mut sel = Selection::from_path(path);
+        sel.manual = self.detector_override;
+        self.detector = sel;
+        sel.orientation()
+    }
+
     fn load_tiff_sequence(&mut self, folder: PathBuf) {
         self.reset_for_load();
-        self.loading = Some(LoadingJob::start_tiff_sequence(folder));
+        let orientation = self.select_detector(&folder);
+        self.loading = Some(LoadingJob::start_tiff_sequence(folder, orientation));
+    }
+
+    /// Whether the loaded volume came from TIFF files (the only input the
+    /// detector orientation applies to).
+    fn source_is_tiff(&self) -> bool {
+        self.file_path.as_ref().is_some_and(|p| {
+            p.is_dir()
+                || p.extension()
+                    .and_then(|e| e.to_str())
+                    .is_some_and(|e| e.eq_ignore_ascii_case("tif") || e.eq_ignore_ascii_case("tiff"))
+        })
+    }
+
+    /// Reload the current TIFF source (the detector override changed).
+    fn reload_tiff(&mut self) {
+        let Some(path) = self.file_path.clone() else {
+            return;
+        };
+        if path.is_dir() {
+            self.load_tiff_sequence(path);
+        } else if self.source_is_tiff() {
+            self.load_file(path);
+        }
+    }
+
+    /// Top-bar combobox choosing the detector: "auto" follows the folder
+    /// layout, the other entries force one. Changing it reloads the TIFF
+    /// data; HDF5 stacks are always loaded as-is.
+    fn show_detector_combo(&mut self, ui: &mut egui::Ui) {
+        let is_tiff = self.source_is_tiff();
+        ui.label("Detector:").on_hover_text(
+            "How TIFF pages are oriented on load: Timepix → transposed, CCD → flipped \
+             vertically, QHY → not decided yet (as-is). 'auto' recognizes the detector from \
+             the folder layout (images/tpx1, images/ikonxl, …). Saved files are written back \
+             in the on-disk orientation. HDF5 stacks are loaded as-is.",
+        );
+        let auto_text = if is_tiff && self.detector.is_auto() {
+            format!("auto: {}", self.detector.summary())
+        } else {
+            "auto".to_owned()
+        };
+        let current = match self.detector_override {
+            None => auto_text.clone(),
+            Some(d) => d.label().to_owned(),
+        };
+        let mut changed = false;
+        egui::ComboBox::from_id_salt("detector")
+            .selected_text(current)
+            .show_ui(ui, |ui| {
+                if ui
+                    .selectable_label(self.detector_override.is_none(), auto_text)
+                    .on_hover_text("Guess the detector from the folder layout")
+                    .clicked()
+                    && self.detector_override.is_some()
+                {
+                    self.detector_override = None;
+                    changed = true;
+                }
+                for d in Detector::ALL {
+                    if ui
+                        .selectable_label(self.detector_override == Some(d), d.label())
+                        .on_hover_text(d.description())
+                        .clicked()
+                        && self.detector_override != Some(d)
+                    {
+                        self.detector_override = Some(d);
+                        changed = true;
+                    }
+                }
+            });
+        if self.volume.is_some() {
+            let text = if is_tiff {
+                self.orientation.label().to_owned()
+            } else {
+                "as-is (HDF5)".to_owned()
+            };
+            ui.label(egui::RichText::new(text).weak())
+                .on_hover_text(self.detector.detector().description());
+        }
+        if changed && is_tiff && self.loading.is_none() {
+            self.reload_tiff();
+        }
     }
 
     /// Open the file passed on the command line: TIFF stacks load directly;
     /// an HDF5 file loads the requested dataset — or its only 3D dataset —
     /// directly, and falls back to the dataset browser otherwise.
     fn open_startup_file(&mut self, path: PathBuf, dataset: Option<String>) {
+        if path.is_dir() {
+            // A folder of TIFF files: loaded as a sequence, like "Import
+            // TIFF Sequence..." (other tools hand previews over this way).
+            self.load_tiff_sequence(path);
+            return;
+        }
         let extension = path
             .extension()
             .and_then(|e| e.to_str())
@@ -301,7 +438,8 @@ impl App {
                 }
             },
             "tif" | "tiff" => {
-                self.loading = Some(LoadingJob::start_tiff_stack(path));
+                let orientation = self.select_detector(&path);
+                self.loading = Some(LoadingJob::start_tiff_stack(path, orientation));
             }
             _ => {
                 self.error_message = Some(format!("Unsupported file type: {}", extension));
@@ -441,7 +579,7 @@ impl App {
                 message: "Saving...".to_string(),
             };
 
-            match save_volume(data.as_array(), request) {
+            match save_volume(data.as_array(), self.orientation, request) {
                 Ok(()) => {
                     self.save_dialog.state = SaveState::Completed {
                         path: request.path.clone(),
@@ -655,7 +793,7 @@ impl App {
             format: SaveFormat::Hdf5,
             hdf5_dataset_path: "/data".to_string(),
         };
-        match save_volume(processed.raw_data(), &request) {
+        match save_volume(processed.raw_data(), self.orientation, &request) {
             Ok(()) => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
             Err(e) => {
                 self.error_message = Some(format!("Failed to return the data: {}", e));
@@ -672,9 +810,14 @@ impl eframe::App for App {
             match job.poll() {
                 Some(Ok(volume)) => {
                     let source = job.source.clone();
+                    let orientation = job.orientation;
                     self.loading = None;
                     self.setup_volume(volume);
                     self.file_path = Some(source);
+                    self.orientation = orientation;
+                    if orientation.is_identity() && !self.source_is_tiff() {
+                        self.detector = Selection::default();
+                    }
                 }
                 Some(Err(e)) => {
                     self.error_message = Some(format!("Failed to load: {}", e));
@@ -775,6 +918,9 @@ impl eframe::App for App {
                             .unwrap_or("unknown")
                     ));
                 }
+
+                ui.separator();
+                self.show_detector_combo(ui);
 
                 if let Some(vol) = self.current_volume() {
                     let shape = vol.original_shape();

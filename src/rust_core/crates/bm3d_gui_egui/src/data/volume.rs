@@ -41,6 +41,14 @@ impl AxisMapping {
 }
 
 /// 3D volume data with axis mapping support.
+///
+/// Detector orientation (Timepix transpose, CCD vertical flip — see
+/// `detector_orientation`) is applied to every 2-D page by the TIFF loaders
+/// *before* the volume is built, so `[D0, D1, D2]` already holds the
+/// sample-oriented frames. The axis mapping below only chooses which of
+/// D0/D1/D2 is shown horizontally, vertically and as the slice axis: the
+/// `reversed_axes` in [`Volume3D::get_slice`] is that permutation, not a
+/// second detector transpose — the two never stack.
 pub struct Volume3D {
     /// Raw data stored as f32, shape is [D0, D1, D2]
     data: Array3<f32>,

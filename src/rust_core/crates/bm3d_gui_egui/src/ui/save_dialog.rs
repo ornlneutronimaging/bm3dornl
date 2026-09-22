@@ -1,3 +1,4 @@
+use crate::data::Orientation;
 use eframe::egui;
 use ndarray::Array3;
 use std::path::PathBuf;
@@ -251,12 +252,42 @@ pub struct SaveRequest {
     pub hdf5_dataset_path: String,
 }
 
-/// Save volume data to file
-pub fn save_volume(data: &Array3<f32>, request: &SaveRequest) -> Result<(), String> {
+/// Save volume data to file. `orientation` is how the volume's pages were
+/// re-oriented on load (see [`crate::data::LoadingJob::orientation`]): it
+/// is undone here so the saved pages align pixel for pixel with the input
+/// files on disk (`Identity` writes the volume as it is).
+pub fn save_volume(
+    data: &Array3<f32>,
+    orientation: Orientation,
+    request: &SaveRequest,
+) -> Result<(), String> {
+    let undone;
+    let data = if orientation.is_identity() {
+        data
+    } else {
+        undone = undo_orientation(data, orientation);
+        &undone
+    };
     match request.format {
         SaveFormat::Tiff => save_as_tiff(data, &request.path),
         SaveFormat::Hdf5 => save_as_hdf5(data, &request.path, &request.hdf5_dataset_path),
     }
+}
+
+/// Put every `[n, h, w]` page back in its on-disk orientation.
+fn undo_orientation(data: &Array3<f32>, orientation: Orientation) -> Array3<f32> {
+    let (n, h, w) = data.dim();
+    let (dw, dh) = orientation.inverse().dims(w, h);
+    let mut flat = Vec::with_capacity(n * h * w);
+    for i in 0..n {
+        let page = data.slice(ndarray::s![i, .., ..]);
+        let page: Vec<f32> = match page.as_slice_memory_order() {
+            Some(v) if page.is_standard_layout() => v.to_vec(),
+            _ => page.iter().copied().collect(),
+        };
+        flat.extend_from_slice(&orientation.undo_vec(&page, w, h));
+    }
+    Array3::from_shape_vec((n, dh, dw), flat).expect("undo keeps the pixel count")
 }
 
 fn save_as_tiff(data: &Array3<f32>, path: &PathBuf) -> Result<(), String> {
@@ -434,9 +465,53 @@ mod tests {
         let _cleanup = TempFileCleanup(path.clone());
 
         save_as_bigtiff(&data, &path).unwrap();
-        let loaded = load_tiff_stack(&path).unwrap();
+        let loaded = load_tiff_stack(&path, Orientation::Identity).unwrap();
 
         assert_eq!(loaded.raw_data().shape(), data.shape());
         assert_eq!(loaded.raw_data(), &data);
+    }
+
+    /// A volume loaded with a detector orientation is written back in the
+    /// on-disk orientation: reading the saved file as-is gives the on-disk
+    /// pages, reading it with the same orientation gives the volume back.
+    #[test]
+    fn save_undoes_the_load_orientation() {
+        for orientation in [Orientation::Transpose, Orientation::FlipVertical] {
+            let mut path = std::env::temp_dir();
+            let unique_id = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos();
+            path.push(format!(
+                "bm3dornl-orient-test-{}-{}-{:?}.tiff",
+                std::process::id(),
+                unique_id,
+                orientation
+            ));
+            let _cleanup = TempFileCleanup(path.clone());
+
+            // on disk: 2 pages of 3 wide × 2 tall
+            let disk = Array3::from_shape_vec(
+                (2, 2, 3),
+                vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0],
+            )
+            .unwrap();
+            save_as_classic_tiff(&disk, &path).unwrap();
+            let oriented = load_tiff_stack(&path, orientation).unwrap();
+            let (ow, oh) = orientation.dims(3, 2);
+            assert_eq!(oriented.raw_data().shape(), &[2, oh, ow]);
+
+            let request = SaveRequest {
+                path: path.clone(),
+                data_type: SaveDataType::Original,
+                format: SaveFormat::Tiff,
+                hdf5_dataset_path: String::new(),
+            };
+            save_volume(oriented.raw_data(), orientation, &request).unwrap();
+            let back_on_disk = load_tiff_stack(&path, Orientation::Identity).unwrap();
+            assert_eq!(back_on_disk.raw_data(), &disk, "{orientation:?}");
+            let reloaded = load_tiff_stack(&path, orientation).unwrap();
+            assert_eq!(reloaded.raw_data(), oriented.raw_data(), "{orientation:?}");
+        }
     }
 }

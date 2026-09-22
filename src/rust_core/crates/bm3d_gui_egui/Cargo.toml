@@ -36,4 +36,7 @@ rfd = { version = "0.15", default-features = false, features = ["gtk3"] }
 tiff = "0.9"
 ndarray = "0.15"
 bm3d_core = { path = "../bm3d_core" }
+# Detector → orientation of TIFF frames on load (Timepix: transpose, CCD: flip
+# vertically). Vec API only: the shared crate's ndarray feature is 0.17.
+detector_orientation = { path = "../../../../../rust_detector_orientation", default-features = false }
 image = { version = "0.25", default-features = false, features = ["png"] }
