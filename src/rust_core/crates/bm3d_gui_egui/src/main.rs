@@ -54,8 +54,8 @@ OPTIONS:
                              dataset /data) and closes the tool
   --detector <NAME>          Force the detector TIFF data is loaded as, which
                              decides how every page is oriented: timepix
-                             (transposed), ccd (flipped vertically), qhy
-                             (as-is, not decided yet) or as-is. By default
+                             (transposed), ccd (flipped vertically and horizontally), qhy
+                             (rotated 90° counterclockwise) or as-is. By default
                              the detector is recognized from the folder
                              layout (images/tpx1, images/ikonxl, …); the
                              top bar has a combobox to change it. Saved
@@ -329,7 +329,7 @@ impl App {
         let is_tiff = self.source_is_tiff();
         ui.label("Detector:").on_hover_text(
             "How TIFF pages are oriented on load: Timepix → transposed, CCD → flipped \
-             vertically, QHY → not decided yet (as-is). 'auto' recognizes the detector from \
+             vertically, QHY → rotated 90° counterclockwise. 'auto' recognizes the detector from \
              the folder layout (images/tpx1, images/ikonxl, …). Saved files are written back \
              in the on-disk orientation. HDF5 stacks are loaded as-is.",
         );

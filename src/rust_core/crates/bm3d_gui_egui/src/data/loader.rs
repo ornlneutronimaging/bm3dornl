@@ -301,7 +301,7 @@ impl LoadingJob {
 /// Load a multi-page TIFF as a 3D volume.
 /// Shape will be [num_pages, height, width] *after* `orientation` is applied
 /// to every page (see [`detector_orientation`]: Timepix pages are transposed,
-/// CCD pages flipped vertically; the on-disk `w × h` page becomes
+/// CCD pages flipped vertically and horizontally; the on-disk `w × h` page becomes
 /// `orientation.dims(w, h)`).
 pub fn load_tiff_stack(path: &Path, orientation: Orientation) -> Result<Volume3D, DataLoadError> {
     let file = File::open(path).map_err(|e| DataLoadError::IoError(e.to_string()))?;
@@ -642,7 +642,7 @@ mod tests {
         );
         assert_eq!(
             Selection::from_path(Path::new("/SNS/VENUS/IPTS-1/images/ikonxl/a.tiff")).orientation(),
-            Orientation::FlipVertical
+            Orientation::Rotate180
         );
     }
 
