@@ -49,7 +49,7 @@
   and generic output with `search_step=step_size`, stay bit-identical.
 - Multiscale output can also change, because its internal scales often have
   sizes off the reference grid. The change is usually small (at most 6.1e-3
-  in the JOSS benchmark and on real sinograms). On some inputs, though, it
+  in our tests). On some inputs, though, it
   changes the decision of the multiscale wall gate, which keeps straight
   object edges from being removed as stripes. In a synthetic test with
   `sigma_random` set to the true noise level, the gate then missed a straight
