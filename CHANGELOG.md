@@ -1,5 +1,53 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- **Behavior change:** generic mode, the general-purpose BM3D denoiser, now
+  tests every candidate position in the block-matching search window, as BM3D
+  specifies (#163). The search used to step by `step_size`, the stride
+  between reference patches. That left more bias and blocky errors at edges
+  that do not sit on the reference grid. Generic output changes. Generic
+  processing takes 2 to 3 times as long at the default `search_window` (a
+  512 x 512 image: 0.56 s instead of 0.27 s on one thread), and more with a
+  larger window (about 5 to 6 times at `search_window=64`).
+- New `search_step` parameter: the stride between candidate positions in the
+  block-matching search (#163). `None`, the default, uses 1 in generic mode
+  and `step_size` in streak, multiscale and Fourier-SVD modes, so their
+  search does not change. Pass `search_step=step_size` to restore the old
+  generic output. `search_step=0` raises a `ValueError`.
+- `bm3d_ring_artifact_removal` takes `search_step` as its last parameter. The
+  `bm3d_rust` bindings take it as a last keyword argument, so existing
+  positional calls keep working. In the low-level kernel bindings
+  (`bm3d_hard_thresholding`, `bm3d_wiener_filtering` and their stack and f64
+  variants), `None` means `step_size`.
+- Rust core: `Bm3dConfig` has a new field `search_step: Option<usize>` and
+  `Bm3dKernelConfig` a new field `search_step: usize`. Struct literals of
+  `Bm3dKernelConfig`, and of `Bm3dConfig` without `..Default::default()`, must
+  set it.
+
+### Fixed
+
+- The bottom and right edges of the image are now filtered in the
+  single-scale modes (generic, streak and Fourier-SVD), for 2D and 3D input
+  (#163). Reference patches sat only at multiples of `step_size`. When the
+  image size minus `patch_size` was not a multiple of `step_size` (at the
+  defaults, any size not divisible by 4), the last rows or columns came back
+  unfiltered, with all of their noise. For example, a 720 x 725 sinogram lost
+  its last column. One extra reference row and column now reach each edge.
+  Where the grid already reaches both edges, streak and Fourier-SVD output,
+  and generic output with `search_step=step_size`, stay bit-identical.
+- Multiscale output can also change, because its internal scales often have
+  sizes off the reference grid. The change is usually small (at most 6.1e-3
+  in the JOSS benchmark and on real sinograms). On some inputs, though, it
+  changes the decision of the multiscale wall gate, which keeps straight
+  object edges from being removed as stripes. In a synthetic test with
+  `sigma_random` set to the true noise level, the gate then missed a straight
+  object edge more often, and that edge came out smeared (RMSE 0.0105 to
+  0.0123). With the default `sigma_random`, 0.11.0 already misses this edge.
+  The gate is tracked as a separate issue.
+
 ## 0.11.0 - 2026-09-03
 
 ### Fixed

@@ -56,6 +56,7 @@ def bm3d_ring_artifact_removal(
     debin_iterations: int = 30,
     log_domain_input: bool = False,
     progress=False,
+    search_step: int | None = None,
 ) -> np.ndarray:
     """Remove ring artifacts (streaks) from a sinogram or a stack of sinograms.
 
@@ -79,7 +80,7 @@ def bm3d_ring_artifact_removal(
     patch_size : int, optional
         Patch size for block matching. Default: 8.
     step_size : int, optional
-        Stride between extracted patches. Default: 4.
+        Stride between reference patches. Default: 4.
     search_window : int, optional
         Block-matching search window. Default: 24.
     max_matches : int, optional
@@ -121,6 +122,14 @@ def bm3d_ring_artifact_removal(
         ``True`` displays a tqdm progress bar. Install it with the ``progress``
         extra. A callable receives ``(current, total)`` after each slice.
         Two-dimensional processing ignores this option. Default: ``False``.
+    search_step : int | None, optional
+        Stride between candidate positions in the block-matching search.
+        ``None`` uses 1 (every position) in ``"generic"`` mode and
+        ``step_size`` in the other modes, including multiscale. Generic mode
+        used to search with ``step_size``; ``search_step=step_size`` restores
+        that output and speed. The default generic search takes 2 to 3 times
+        as long at the default ``search_window``, and more with a larger
+        window. Default: ``None``.
 
     Returns
     -------
@@ -132,7 +141,8 @@ def bm3d_ring_artifact_removal(
     Raises
     ------
     ValueError
-        If multiscale=True with mode other than "streak".
+        If multiscale=True with mode other than "streak", or if search_step
+        is 0.
     """
     # Validate multiscale + mode combination
     if multiscale and mode != "streak":
@@ -163,6 +173,7 @@ def bm3d_ring_artifact_removal(
                 max_matches=max_matches,
                 sigma_random=float(sigma_random),
                 log_domain_input=log_domain_input,
+                search_step=search_step,
             )
         else:
             # Single-scale BM3D
@@ -180,6 +191,7 @@ def bm3d_ring_artifact_removal(
                 sigma_map_smoothing=sigma_map_smoothing,
                 streak_sigma_scale=streak_sigma_scale,
                 psd_width=psd_width,
+                search_step=search_step,
             )
 
     # =========================================================================
@@ -233,6 +245,7 @@ def bm3d_ring_artifact_removal(
                     max_matches=max_matches,
                     sigma_random=float(sigma_random),
                     log_domain_input=log_domain_input,
+                    search_step=search_step,
                 )
                 if _progress_bar is not None:
                     _progress_bar.update(1)
@@ -242,6 +255,11 @@ def bm3d_ring_artifact_removal(
             if _progress_bar is not None:
                 _progress_bar.close()
         return output_result
+
+    # The stack kernels do not know the mode; resolve the per-mode default
+    # here, as Bm3dConfig does for 2D input.
+    if search_step is None:
+        search_step = 1 if mode == "generic" else step_size
 
     # 1. Global Stats (Min/Max)
     d_min = float(sinogram.min())
@@ -332,6 +350,7 @@ def bm3d_ring_artifact_removal(
                 step_size,
                 search_window,
                 max_matches,
+                search_step=search_step,
             )
 
             # Build per-batch Rust progress callback for the Wiener pass
@@ -355,6 +374,7 @@ def bm3d_ring_artifact_removal(
                 search_window,
                 max_matches,
                 progress_callback=_rust_cb,
+                search_step=search_step,
             )
 
             # 5. Denormalize and Store
