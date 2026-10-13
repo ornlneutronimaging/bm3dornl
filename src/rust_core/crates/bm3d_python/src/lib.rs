@@ -586,7 +586,7 @@ pub fn estimate_streak_profile_py_f64<'py>(
 /// patch_size : int, optional
 ///     Block matching patch size. Default: 8
 /// step_size : int, optional
-///     Stride between reference patches. Default: 4
+///     Stride between reference patches, at most patch_size. Default: 4
 /// search_window : int, optional
 ///     Search window size for block matching. Default: 24
 /// max_matches : int, optional
@@ -922,7 +922,7 @@ pub fn estimate_noise_sigma_py_f64(sinogram: PyReadonlyArray2<'_, f64>) -> PyRes
 /// patch_size : int, optional
 ///     Block matching patch size. Default: 8
 /// step_size : int, optional
-///     Stride between reference patches. Default: 4
+///     Stride between reference patches, at most patch_size. Default: 4
 /// search_window : int, optional
 ///     Search window size for block matching. Default: 24
 /// max_matches : int, optional

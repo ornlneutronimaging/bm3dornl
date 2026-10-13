@@ -70,7 +70,7 @@ pub struct Bm3dKernelConfig<F: Bm3dFloat> {
     pub sigma_random: F,
     pub threshold: F,
     pub patch_size: usize,
-    /// Stride between reference patches.
+    /// Stride between reference patches, at most `patch_size`.
     pub step_size: usize,
     pub search_window: usize,
     pub max_matches: usize,
@@ -108,6 +108,33 @@ pub fn check_image_size(rows: usize, cols: usize, patch_size: usize) -> Result<(
             "Image size ({}, {}) is smaller than patch_size {}",
             rows, cols, patch_size
         ));
+    }
+    Ok(())
+}
+
+/// Refuse a reference stride of 0 or one larger than the patch.
+///
+/// Reference patches sit `step_size` apart, so a larger stride leaves gaps
+/// between them, and the pixels in the gaps come back unfiltered (#166).
+pub(crate) fn check_step_size(step_size: usize, patch_size: usize) -> Result<(), String> {
+    if step_size == 0 {
+        return Err("step_size must be > 0".to_string());
+    }
+    if step_size > patch_size {
+        return Err(format!(
+            "step_size ({}) must not exceed patch_size ({})",
+            step_size, patch_size
+        ));
+    }
+    Ok(())
+}
+
+/// Refuse kernel strides that would leave pixels unfiltered or panic in
+/// `step_by`: see [`check_step_size`], and a `search_step` of 0.
+fn check_kernel_strides<F: Bm3dFloat>(config: &Bm3dKernelConfig<F>) -> Result<(), String> {
+    check_step_size(config.step_size, config.patch_size)?;
+    if config.search_step == 0 {
+        return Err("search_step must be > 0".to_string());
     }
     Ok(())
 }
@@ -2045,6 +2072,7 @@ pub fn run_bm3d_step<F: Bm3dFloat>(
             sigma_map.dim()
         ));
     }
+    check_kernel_strides(config)?;
     let (rows, cols) = input_noisy.dim();
     check_image_size(rows, cols, config.patch_size)?;
 
@@ -2094,6 +2122,7 @@ pub fn run_bm3d_step_stack<F: Bm3dFloat>(
             sigma_map.dim()
         ));
     }
+    check_kernel_strides(config)?;
     check_image_size(rows, cols, config.patch_size)?;
 
     let mut output = Array3::<F>::zeros((n, rows, cols));

@@ -26,6 +26,15 @@
   `Bm3dKernelConfig` a new field `search_step: usize`. Struct literals of
   `Bm3dKernelConfig`, and of `Bm3dConfig` without `..Default::default()`, must
   set it.
+- **Behavior change:** a `step_size` larger than `patch_size` is now refused
+  with `ValueError: step_size (s) must not exceed patch_size (p)` on every
+  path (#166). Such a stride left gaps between the reference patches, and the
+  pixels in the gaps came back unfiltered: in generic mode on a 64 x 80 image
+  at `patch_size=8`, `step_size=12` left 2880 of 5120 pixels unchanged.
+  `step_size` equal to `patch_size` stays valid. In the Rust core,
+  `Bm3dConfig::validate`, `run_bm3d_step` and `run_bm3d_step_stack` return
+  the same error. The two kernels also return an error, instead of a panic,
+  for a `step_size` or `search_step` of 0.
 
 ### Fixed
 
