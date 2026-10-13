@@ -7,7 +7,7 @@
 //! Both f32 and f64 precision are supported. Functions with `_f64` suffix
 //! accept and return float64 numpy arrays.
 
-use ndarray::{Array2, Array3, ArrayView2, ArrayView3};
+use ndarray::{Array2, Array3, ArrayView, ArrayView2, ArrayView3, CowArray, Dimension};
 use numpy::{PyArray1, PyArray2, PyArray3, PyReadonlyArray2, PyReadonlyArray3, ToPyArray};
 use pyo3::prelude::*;
 
@@ -53,6 +53,21 @@ fn map_stack_error<T>(result: Result<T, String>) -> PyResult<T> {
             pyo3::exceptions::PyValueError::new_err(e)
         }
     })
+}
+
+/// `array` in standard (row-major) layout: borrowed when it already is,
+/// copied otherwise.
+///
+/// The bm3d_core fast paths read standard layout only. Any other layout
+/// (Fortran order, negative strides, a strided view) takes a slower indexed
+/// path that agrees only to rounding. Converting here runs the same code on
+/// the same data, so every layout gives the C-order output exactly (#164).
+fn standard_layout<A: Clone, D: Dimension>(array: ArrayView<'_, A, D>) -> CowArray<'_, A, D> {
+    if array.is_standard_layout() {
+        CowArray::from(array)
+    } else {
+        CowArray::from(array.as_standard_layout().into_owned())
+    }
 }
 
 /// Candidate-search stride of a low-level kernel binding. These bindings do
@@ -161,11 +176,11 @@ pub fn bm3d_hard_thresholding<'py>(
 ) -> PyResult<Bound<'py, PyArray2<f32>>> {
     let plans = bm3d_core::pipeline::Bm3dPlans::new(patch_size, max_matches);
     let output = run_bm3d_step_compat(
-        input_noisy.as_array(),
-        input_pilot.as_array(),
+        standard_layout(input_noisy.as_array()).view(),
+        standard_layout(input_pilot.as_array()).view(),
         Bm3dMode::HardThreshold,
-        sigma_psd.as_array(),
-        sigma_map.as_array(),
+        standard_layout(sigma_psd.as_array()).view(),
+        standard_layout(sigma_map.as_array()).view(),
         sigma_random,
         threshold,
         patch_size,
@@ -199,11 +214,11 @@ pub fn bm3d_wiener_filtering<'py>(
 ) -> PyResult<Bound<'py, PyArray2<f32>>> {
     let plans = bm3d_core::pipeline::Bm3dPlans::new(patch_size, max_matches);
     let output = run_bm3d_step_compat(
-        input_noisy.as_array(),
-        input_pilot.as_array(),
+        standard_layout(input_noisy.as_array()).view(),
+        standard_layout(input_pilot.as_array()).view(),
         Bm3dMode::Wiener,
-        sigma_psd.as_array(),
-        sigma_map.as_array(),
+        standard_layout(sigma_psd.as_array()).view(),
+        standard_layout(sigma_map.as_array()).view(),
         sigma_random,
         0.0,
         patch_size,
@@ -237,10 +252,10 @@ pub fn bm3d_hard_thresholding_stack<'py>(
     progress_callback: Option<Py<PyAny>>,
     search_step: Option<usize>,
 ) -> PyResult<Bound<'py, PyArray3<f32>>> {
-    let noisy = input_noisy.as_array().to_owned();
-    let pilot = input_pilot.as_array().to_owned();
-    let psd = sigma_psd.as_array().to_owned();
-    let smap = sigma_map.as_array().to_owned();
+    let noisy = standard_layout(input_noisy.as_array()).into_owned();
+    let pilot = standard_layout(input_pilot.as_array()).into_owned();
+    let psd = standard_layout(sigma_psd.as_array()).into_owned();
+    let smap = standard_layout(sigma_map.as_array()).into_owned();
     let plans = bm3d_core::pipeline::Bm3dPlans::new(patch_size, max_matches);
     let output = py.detach(|| {
         let progress_fn: Option<ProgressFn> = progress_callback.map(make_progress_fn);
@@ -284,10 +299,10 @@ pub fn bm3d_wiener_filtering_stack<'py>(
     progress_callback: Option<Py<PyAny>>,
     search_step: Option<usize>,
 ) -> PyResult<Bound<'py, PyArray3<f32>>> {
-    let noisy = input_noisy.as_array().to_owned();
-    let pilot = input_pilot.as_array().to_owned();
-    let psd = sigma_psd.as_array().to_owned();
-    let smap = sigma_map.as_array().to_owned();
+    let noisy = standard_layout(input_noisy.as_array()).into_owned();
+    let pilot = standard_layout(input_pilot.as_array()).into_owned();
+    let psd = standard_layout(sigma_psd.as_array()).into_owned();
+    let smap = standard_layout(sigma_map.as_array()).into_owned();
     let plans = bm3d_core::pipeline::Bm3dPlans::new(patch_size, max_matches);
     let output = py.detach(|| {
         let progress_fn: Option<ProgressFn> = progress_callback.map(make_progress_fn);
@@ -325,7 +340,7 @@ pub fn test_block_matching_rust(
     let (rows, cols) = input.as_array().dim();
     check_image_size(rows, cols, patch_size).map_err(pyo3::exceptions::PyValueError::new_err)?;
     let result = bm3d_core::pipeline::test_block_matching(
-        input.as_array(),
+        standard_layout(input.as_array()).view(),
         ref_r,
         ref_c,
         patch_size,
@@ -344,8 +359,9 @@ pub fn estimate_streak_profile_py<'py>(
     sigma_smooth: f32,
     iterations: usize,
 ) -> PyResult<Bound<'py, PyArray1<f32>>> {
-    let sinogram_view = sinogram.as_array();
-    let result = bm3d_core::estimate_streak_profile_impl(sinogram_view, sigma_smooth, iterations);
+    let sinogram_view = standard_layout(sinogram.as_array());
+    let result =
+        bm3d_core::estimate_streak_profile_impl(sinogram_view.view(), sigma_smooth, iterations);
     Ok(result.to_pyarray(py))
 }
 
@@ -374,11 +390,11 @@ pub fn bm3d_hard_thresholding_f64<'py>(
 ) -> PyResult<Bound<'py, PyArray2<f64>>> {
     let plans = bm3d_core::pipeline::Bm3dPlans::new(patch_size, max_matches);
     let output = run_bm3d_step_compat(
-        input_noisy.as_array(),
-        input_pilot.as_array(),
+        standard_layout(input_noisy.as_array()).view(),
+        standard_layout(input_pilot.as_array()).view(),
         Bm3dMode::HardThreshold,
-        sigma_psd.as_array(),
-        sigma_map.as_array(),
+        standard_layout(sigma_psd.as_array()).view(),
+        standard_layout(sigma_map.as_array()).view(),
         sigma_random,
         threshold,
         patch_size,
@@ -412,11 +428,11 @@ pub fn bm3d_wiener_filtering_f64<'py>(
 ) -> PyResult<Bound<'py, PyArray2<f64>>> {
     let plans = bm3d_core::pipeline::Bm3dPlans::new(patch_size, max_matches);
     let output = run_bm3d_step_compat(
-        input_noisy.as_array(),
-        input_pilot.as_array(),
+        standard_layout(input_noisy.as_array()).view(),
+        standard_layout(input_pilot.as_array()).view(),
         Bm3dMode::Wiener,
-        sigma_psd.as_array(),
-        sigma_map.as_array(),
+        standard_layout(sigma_psd.as_array()).view(),
+        standard_layout(sigma_map.as_array()).view(),
         sigma_random,
         0.0,
         patch_size,
@@ -450,10 +466,10 @@ pub fn bm3d_hard_thresholding_stack_f64<'py>(
     progress_callback: Option<Py<PyAny>>,
     search_step: Option<usize>,
 ) -> PyResult<Bound<'py, PyArray3<f64>>> {
-    let noisy = input_noisy.as_array().to_owned();
-    let pilot = input_pilot.as_array().to_owned();
-    let psd = sigma_psd.as_array().to_owned();
-    let smap = sigma_map.as_array().to_owned();
+    let noisy = standard_layout(input_noisy.as_array()).into_owned();
+    let pilot = standard_layout(input_pilot.as_array()).into_owned();
+    let psd = standard_layout(sigma_psd.as_array()).into_owned();
+    let smap = standard_layout(sigma_map.as_array()).into_owned();
     let plans = bm3d_core::pipeline::Bm3dPlans::new(patch_size, max_matches);
     let output = py.detach(|| {
         let progress_fn: Option<ProgressFn> = progress_callback.map(make_progress_fn);
@@ -497,10 +513,10 @@ pub fn bm3d_wiener_filtering_stack_f64<'py>(
     progress_callback: Option<Py<PyAny>>,
     search_step: Option<usize>,
 ) -> PyResult<Bound<'py, PyArray3<f64>>> {
-    let noisy = input_noisy.as_array().to_owned();
-    let pilot = input_pilot.as_array().to_owned();
-    let psd = sigma_psd.as_array().to_owned();
-    let smap = sigma_map.as_array().to_owned();
+    let noisy = standard_layout(input_noisy.as_array()).into_owned();
+    let pilot = standard_layout(input_pilot.as_array()).into_owned();
+    let psd = standard_layout(sigma_psd.as_array()).into_owned();
+    let smap = standard_layout(sigma_map.as_array()).into_owned();
     let plans = bm3d_core::pipeline::Bm3dPlans::new(patch_size, max_matches);
     let output = py.detach(|| {
         let progress_fn: Option<ProgressFn> = progress_callback.map(make_progress_fn);
@@ -538,7 +554,7 @@ pub fn test_block_matching_rust_f64(
     let (rows, cols) = input.as_array().dim();
     check_image_size(rows, cols, patch_size).map_err(pyo3::exceptions::PyValueError::new_err)?;
     let result = bm3d_core::pipeline::test_block_matching(
-        input.as_array(),
+        standard_layout(input.as_array()).view(),
         ref_r,
         ref_c,
         patch_size,
@@ -557,8 +573,9 @@ pub fn estimate_streak_profile_py_f64<'py>(
     sigma_smooth: f64,
     iterations: usize,
 ) -> PyResult<Bound<'py, PyArray1<f64>>> {
-    let sinogram_view = sinogram.as_array();
-    let result = bm3d_core::estimate_streak_profile_impl(sinogram_view, sigma_smooth, iterations);
+    let sinogram_view = standard_layout(sinogram.as_array());
+    let result =
+        bm3d_core::estimate_streak_profile_impl(sinogram_view.view(), sigma_smooth, iterations);
     Ok(result.to_pyarray(py))
 }
 
@@ -713,8 +730,12 @@ pub fn bm3d_ring_artifact_removal_2d<'py>(
     config.search_step = search_step;
 
     // Call Rust implementation
-    let output = bm3d_ring_artifact_removal(sinogram.as_array(), ring_mode, &config)
-        .map_err(pyo3::exceptions::PyValueError::new_err)?;
+    let output = bm3d_ring_artifact_removal(
+        standard_layout(sinogram.as_array()).view(),
+        ring_mode,
+        &config,
+    )
+    .map_err(pyo3::exceptions::PyValueError::new_err)?;
 
     Ok(output.to_pyarray(py))
 }
@@ -820,8 +841,12 @@ pub fn bm3d_ring_artifact_removal_2d_f64<'py>(
     config.search_step = search_step;
 
     // Call Rust implementation
-    let output = bm3d_ring_artifact_removal(sinogram.as_array(), ring_mode, &config)
-        .map_err(pyo3::exceptions::PyValueError::new_err)?;
+    let output = bm3d_ring_artifact_removal(
+        standard_layout(sinogram.as_array()).view(),
+        ring_mode,
+        &config,
+    )
+    .map_err(pyo3::exceptions::PyValueError::new_err)?;
 
     Ok(output.to_pyarray(py))
 }
@@ -836,8 +861,11 @@ pub fn fourier_svd_removal_py<'py>(
     fft_alpha: f32,
     notch_width: f32,
 ) -> PyResult<Bound<'py, PyArray2<f32>>> {
-    let output =
-        bm3d_core::fourier_svd::fourier_svd_removal(sinogram.as_array(), fft_alpha, notch_width);
+    let output = bm3d_core::fourier_svd::fourier_svd_removal(
+        standard_layout(sinogram.as_array()).view(),
+        fft_alpha,
+        notch_width,
+    );
     Ok(output.to_pyarray(py))
 }
 
@@ -851,8 +879,11 @@ pub fn fourier_svd_removal_py_f64<'py>(
     fft_alpha: f64,
     notch_width: f64,
 ) -> PyResult<Bound<'py, PyArray2<f64>>> {
-    let output =
-        bm3d_core::fourier_svd::fourier_svd_removal(sinogram.as_array(), fft_alpha, notch_width);
+    let output = bm3d_core::fourier_svd::fourier_svd_removal(
+        standard_layout(sinogram.as_array()).view(),
+        fft_alpha,
+        notch_width,
+    );
     Ok(output.to_pyarray(py))
 }
 
@@ -886,7 +917,9 @@ pub fn fourier_svd_removal_py_f64<'py>(
 #[pyfunction]
 #[pyo3(name = "estimate_noise_sigma_rust")]
 pub fn estimate_noise_sigma_py(sinogram: PyReadonlyArray2<'_, f32>) -> PyResult<f32> {
-    Ok(bm3d_core::estimate_noise_sigma(sinogram.as_array()))
+    Ok(bm3d_core::estimate_noise_sigma(
+        standard_layout(sinogram.as_array()).view(),
+    ))
 }
 
 /// Estimate noise standard deviation using MAD-based robust estimation (f64).
@@ -895,7 +928,9 @@ pub fn estimate_noise_sigma_py(sinogram: PyReadonlyArray2<'_, f32>) -> PyResult<
 #[pyfunction]
 #[pyo3(name = "estimate_noise_sigma_rust_f64")]
 pub fn estimate_noise_sigma_py_f64(sinogram: PyReadonlyArray2<'_, f64>) -> PyResult<f64> {
-    Ok(bm3d_core::estimate_noise_sigma(sinogram.as_array()))
+    Ok(bm3d_core::estimate_noise_sigma(
+        standard_layout(sinogram.as_array()).view(),
+    ))
 }
 
 // ============================================================================
@@ -1026,8 +1061,9 @@ pub fn multiscale_bm3d_streak_removal_2d<'py>(
     config.bm3d_config.search_step = search_step;
 
     // Call Rust implementation
-    let output = multiscale_bm3d_streak_removal(sinogram.as_array(), &config)
-        .map_err(pyo3::exceptions::PyValueError::new_err)?;
+    let output =
+        multiscale_bm3d_streak_removal(standard_layout(sinogram.as_array()).view(), &config)
+            .map_err(pyo3::exceptions::PyValueError::new_err)?;
 
     Ok(output.to_pyarray(py))
 }
@@ -1124,8 +1160,9 @@ pub fn multiscale_bm3d_streak_removal_2d_f64<'py>(
     config.bm3d_config.search_step = search_step;
 
     // Call Rust implementation
-    let output = multiscale_bm3d_streak_removal(sinogram.as_array(), &config)
-        .map_err(pyo3::exceptions::PyValueError::new_err)?;
+    let output =
+        multiscale_bm3d_streak_removal(standard_layout(sinogram.as_array()).view(), &config)
+            .map_err(pyo3::exceptions::PyValueError::new_err)?;
 
     Ok(output.to_pyarray(py))
 }

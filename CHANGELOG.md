@@ -69,6 +69,18 @@
   `patch_size` unfiltered. The Rust kernels `run_bm3d_step` and
   `run_bm3d_step_stack` return the same error, from the new public check
   `bm3d_core::pipeline::check_image_size`.
+- Input arrays that are not C-contiguous now give the same output as C-order
+  input (#164). The Rust fast paths read pixel data in memory order but
+  indexed it as row-major, so a Fortran-order or negative-stride array was
+  read with rows and columns, or the column order, mixed up. This affected 3D
+  stacks with F-contiguous slices (for example a `transpose(0, 2, 1)` view, or
+  `np.asfortranarray` of a one-slice stack: RMSE 0.352 instead of 0.006
+  against the clean image), the `bm3d_rust` bindings, `fourier_svd_removal`
+  and `estimate_noise_sigma`. 2D input to `bm3d_ring_artifact_removal` was
+  not affected. The bindings now convert input to C order, so every layout
+  gives the C-order output exactly. In the Rust core, the fast paths take
+  only standard-layout arrays; other layouts take the indexed path, which
+  agrees with the standard-layout result to rounding.
 
 ## 0.11.0 - 2026-09-03
 

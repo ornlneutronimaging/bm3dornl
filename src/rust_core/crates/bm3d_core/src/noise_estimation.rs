@@ -143,10 +143,11 @@ pub(crate) fn gaussian_filter_1d_vertical_recursive<F: Bm3dFloat>(
     let mut output = Array2::zeros((rows, cols));
     let mut forward = vec![F::zero(); rows];
 
-    if let (Some(data_slice), Some(output_slice)) = (
-        data.as_slice_memory_order(),
-        output.as_slice_memory_order_mut(),
-    ) {
+    // `data` is the caller's array. The fast path indexes it as a row-major
+    // slice, so it needs standard layout (`as_slice`); `output` is ours.
+    if let (Some(data_slice), Some(output_slice)) =
+        (data.as_slice(), output.as_slice_memory_order_mut())
+    {
         for c in 0..cols {
             let x0 = data_slice[c];
             let mut f1 = x0;

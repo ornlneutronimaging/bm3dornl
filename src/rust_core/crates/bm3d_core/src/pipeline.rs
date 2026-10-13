@@ -283,7 +283,9 @@ impl<F: Bm3dFloat> PatchTransformCache<F> {
                 ndarray::ArrayViewMut2::from_shape((self.patch_size, self.patch_size), out)
                     .expect("output transform slice shape should match patch size");
             transforms::wht2d_8x8_forward_into_view(patch, out_view);
-        } else if let Some(image_data) = image.as_slice_memory_order() {
+        } else if let Some(image_data) = image.as_slice() {
+            // `as_slice` is Some only in standard (row-major) layout, which
+            // the strided fast path indexes; other layouts take the view path.
             fft2d_strided_patch_into_with_plan_scratch(
                 image_data,
                 image.dim().1,
