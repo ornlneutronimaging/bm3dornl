@@ -73,7 +73,8 @@ def bm3d_ring_artifact_removal(
         Input with shape ``(H, W)`` or ``(N, H, W)``.
     mode : str, optional
         Use ``"generic"`` for white noise. Use ``"streak"`` to estimate and
-        subtract a vertical streak profile before BM3D. Default: ``"streak"``.
+        subtract a vertical streak profile before BM3D. Case-insensitive.
+        Default: ``"streak"``.
     sigma_random : float, optional
         Random-noise standard deviation. Values at or below 1e-6 trigger
         automatic estimation. Default: 0.1.
@@ -140,13 +141,22 @@ def bm3d_ring_artifact_removal(
 
     Raises
     ------
+    TypeError
+        If mode is not a str.
     ValueError
         If multiscale=True with mode other than "streak", or if search_step
         is 0.
     """
+    if not isinstance(mode, str):
+        raise TypeError(f"mode must be a str, got {type(mode).__name__}")
+    # The 2D bindings parse the mode case-insensitively; use the same rule for
+    # every path, so 2D and 3D resolve the same mode and per-mode defaults.
+    mode_arg = mode
+    mode = mode.lower()
+
     # Validate multiscale + mode combination
     if multiscale and mode != "streak":
-        raise ValueError(f"multiscale=True only supports mode='streak', got mode='{mode}'")
+        raise ValueError(f"multiscale=True only supports mode='streak', got mode='{mode_arg}'")
 
 
 

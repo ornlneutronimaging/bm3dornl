@@ -29,9 +29,9 @@
 
 ### Fixed
 
-- The bottom and right edges of the image are now filtered in the
-  single-scale modes (generic, streak and Fourier-SVD), for 2D and 3D input
-  (#163). Reference patches sat only at multiples of `step_size`. When the
+- The bottom and right edges of the image are now filtered in generic and
+  streak modes (2D and 3D input) and in Fourier-SVD mode (2D input) (#163).
+  Reference patches sat only at multiples of `step_size`. When the
   image size minus `patch_size` was not a multiple of `step_size` (at the
   defaults, any size not divisible by 4), the last rows or columns came back
   unfiltered, with all of their noise. For example, a 720 x 725 sinogram lost
@@ -47,6 +47,10 @@
   object edge more often, and that edge came out smeared (RMSE 0.0105 to
   0.0123). With the default `sigma_random`, 0.11.0 already misses this edge.
   The gate is tracked in #167.
+- `mode` in `bm3d_ring_artifact_removal` is now case-insensitive on every
+  path, as it already was for 2D single-scale input. In 3D, `mode="Streak"`
+  used to run generic processing, and `multiscale=True` refused `"Streak"`. A
+  `mode` that is not a string now raises `TypeError` on every path.
 
 ## 0.11.0 - 2026-09-03
 

@@ -74,6 +74,43 @@ def test_multiscale_default_searches_on_step_size(dim):
     ), "multiscale default searches every position"
 
 
+@pytest.mark.parametrize("spelling", ["Generic", "GENERIC"])
+@pytest.mark.parametrize("dim", ["2d", "3d"])
+def test_generic_default_ignores_mode_case(dim, spelling):
+    # The 2D binding lowercases the mode, so the 3D path must resolve the
+    # per-mode default from the same mode.
+    image = noisy_step_edges(SHAPES[dim])
+    assert np.array_equal(run(image, mode=spelling), run(image, mode="generic"))
+
+
+@pytest.mark.parametrize("dim", ["2d", "3d"])
+def test_streak_mode_ignores_case(dim):
+    image = noisy_step_edges(SHAPES[dim])
+    assert np.array_equal(run(image, mode="Streak"), run(image, mode="streak"))
+
+
+@pytest.mark.parametrize("dim", ["2d", "3d"])
+def test_multiscale_accepts_streak_mode_in_any_case(dim):
+    image = noisy_step_edges(MULTISCALE_SHAPES[dim])
+    assert np.array_equal(
+        run(image, mode="Streak", multiscale=True), run(image, mode="streak", multiscale=True)
+    )
+
+
+def test_multiscale_mode_error_names_the_given_mode():
+    image = noisy_step_edges(SHAPES["2d"])
+    with pytest.raises(ValueError, match="got mode='Generic'"):
+        run(image, mode="Generic", multiscale=True)
+
+
+@pytest.mark.parametrize("dim", ["2d", "3d"])
+@pytest.mark.parametrize("bad_mode", [None, 1])
+def test_non_str_mode_raises_type_error(dim, bad_mode):
+    image = noisy_step_edges(SHAPES[dim])
+    with pytest.raises(TypeError, match="mode must be a str"):
+        run(image, mode=bad_mode)
+
+
 @pytest.mark.parametrize("dim", ["2d", "3d"])
 @pytest.mark.parametrize("mode", ["generic", "streak"])
 def test_explicit_search_step_is_used(mode, dim):
