@@ -46,7 +46,7 @@
   `sigma_random` set to the true noise level, the gate then missed a straight
   object edge more often, and that edge came out smeared (RMSE 0.0105 to
   0.0123). With the default `sigma_random`, 0.11.0 already misses this edge.
-  The gate is tracked as a separate issue.
+  The gate is tracked in #167.
 
 ## 0.11.0 - 2026-09-03
 
