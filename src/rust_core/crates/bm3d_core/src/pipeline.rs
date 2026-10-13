@@ -97,6 +97,21 @@ fn reference_positions(extent: usize, patch_size: usize, step_size: usize) -> Ve
     positions
 }
 
+/// Refuse an image smaller than the patch in either dimension.
+///
+/// Block matching reads `patch_size` rows and columns from every reference
+/// position, so such an image cannot be filtered. Every entry point that
+/// filters an image uses this check, so they all report the same error.
+pub fn check_image_size(rows: usize, cols: usize, patch_size: usize) -> Result<(), String> {
+    if rows < patch_size || cols < patch_size {
+        return Err(format!(
+            "Image size ({}, {}) is smaller than patch_size {}",
+            rows, cols, patch_size
+        ));
+    }
+    Ok(())
+}
+
 /// Helper struct to manage pre-computed FFT plans.
 /// Reusing plans avoids expensive re-initialization overhead (~45% speedup).
 /// We pre-compute:
@@ -2030,6 +2045,8 @@ pub fn run_bm3d_step<F: Bm3dFloat>(
             sigma_map.dim()
         ));
     }
+    let (rows, cols) = input_noisy.dim();
+    check_image_size(rows, cols, config.patch_size)?;
 
     Ok(run_bm3d_kernel(
         input_noisy,
@@ -2077,6 +2094,7 @@ pub fn run_bm3d_step_stack<F: Bm3dFloat>(
             sigma_map.dim()
         ));
     }
+    check_image_size(rows, cols, config.patch_size)?;
 
     let mut output = Array3::<F>::zeros((n, rows, cols));
     let mut scratch_pool = KernelScratchPool::<F>::new();

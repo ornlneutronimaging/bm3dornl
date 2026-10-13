@@ -11,6 +11,7 @@ use ndarray::{Array2, Array3, ArrayView2, ArrayView3};
 use numpy::{PyArray1, PyArray2, PyArray3, PyReadonlyArray2, PyReadonlyArray3, ToPyArray};
 use pyo3::prelude::*;
 
+use bm3d_core::pipeline::check_image_size;
 use bm3d_core::{Bm3dConfig, RingRemovalMode, bm3d_ring_artifact_removal};
 use bm3d_core::{Bm3dFloat, Bm3dKernelConfig, Bm3dPlans};
 use bm3d_core::{Bm3dMode, run_bm3d_step, run_bm3d_step_stack};
@@ -321,6 +322,8 @@ pub fn test_block_matching_rust(
     search_win: usize,
     max_matches: usize,
 ) -> PyResult<Vec<(usize, usize, f32)>> {
+    let (rows, cols) = input.as_array().dim();
+    check_image_size(rows, cols, patch_size).map_err(pyo3::exceptions::PyValueError::new_err)?;
     let result = bm3d_core::pipeline::test_block_matching(
         input.as_array(),
         ref_r,
@@ -532,6 +535,8 @@ pub fn test_block_matching_rust_f64(
     search_win: usize,
     max_matches: usize,
 ) -> PyResult<Vec<(usize, usize, f64)>> {
+    let (rows, cols) = input.as_array().dim();
+    check_image_size(rows, cols, patch_size).map_err(pyo3::exceptions::PyValueError::new_err)?;
     let result = bm3d_core::pipeline::test_block_matching(
         input.as_array(),
         ref_r,

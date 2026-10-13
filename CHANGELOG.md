@@ -51,6 +51,15 @@
   path, as it already was for 2D single-scale input. In 3D, `mode="Streak"`
   used to run generic processing, and `multiscale=True` refused `"Streak"`. A
   `mode` that is not a string now raises `TypeError` on every path.
+- An image smaller than `patch_size` in either dimension now raises
+  `ValueError: Image size (rows, cols) is smaller than patch_size p` on every
+  path, as 2D input already did (#165). The 3D stack path, the low-level
+  kernel bindings and the `test_block_matching_rust` debug bindings used to
+  panic with `pyo3_runtime.PanicException`, which `except Exception` does not
+  catch. Multiscale processing used to return an image with fewer rows than
+  `patch_size` unfiltered. The Rust kernels `run_bm3d_step` and
+  `run_bm3d_step_stack` return the same error, from the new public check
+  `bm3d_core::pipeline::check_image_size`.
 
 ## 0.11.0 - 2026-09-03
 
