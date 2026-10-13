@@ -189,6 +189,24 @@ def test_multiscale_binding_output_does_not_depend_on_layout(name, dtype, cols, 
     assert_same_output(fn, noisy_step_edges((ROWS, cols), dtype=dtype), layout)
 
 
+STREAK_PROFILE_BINDINGS = [
+    ("estimate_streak_profile_rust", np.float32),
+    ("estimate_streak_profile_rust_f64", np.float64),
+]
+
+
+@pytest.mark.parametrize("layout", LAYOUTS)
+@pytest.mark.parametrize(
+    "name,dtype", STREAK_PROFILE_BINDINGS, ids=binding_ids(STREAK_PROFILE_BINDINGS)
+)
+def test_streak_profile_binding_output_does_not_depend_on_layout(name, dtype, layout):
+    # sigma_smooth 3.0 and 3 iterations, the estimate_streak_profile defaults.
+    fn = getattr(bm3d_rust, name)
+    assert_same_output(
+        lambda x: fn(x, 3.0, 3), noisy_step_edges((ROWS, COLS), dtype=dtype), layout
+    )
+
+
 def streak_psd(patch_size, dtype):
     """Anisotropic PSD of the form the 3D streak path builds (varies along rows)."""
     freq = np.arange(patch_size)
