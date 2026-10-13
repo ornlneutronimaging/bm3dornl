@@ -56,7 +56,10 @@ let denoised = bm3d_ring_artifact_removal(image.view(), RingRemovalMode::Streak,
 
 ### Configuration
 
-- `Bm3dConfig` - BM3D parameter configuration
+- `Bm3dConfig` - BM3D parameter configuration. `step_size` is the stride
+  between reference patches. `search_step` is the stride between candidate
+  positions in the block-matching search; `None` uses 1 in `Generic` mode and
+  `step_size` in the other modes
 - `RingRemovalMode` - `Generic` for white noise or `Streak` for directional artifacts
 - `MultiscaleConfig` - Multiscale parameter configuration
 

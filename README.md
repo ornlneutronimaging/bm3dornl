@@ -83,7 +83,7 @@ denoised = bm3d_ring_artifact_removal(
     mode="streak",
     sigma_random=0.1,
     patch_size=8,           # Patch size (7 or 8 recommended)
-    step_size=4,            # Step size for patch extraction
+    step_size=4,            # Stride between reference patches
     search_window=40,       # Max search distance
     max_matches=64,         # Similar patches per 3D group
     batch_size=32,          # Batch size for stack processing
@@ -249,9 +249,10 @@ Parameter Reference
 | `mode` | `"streak"` | `"generic"` for white noise, `"streak"` for ring artifacts |
 | `sigma_random` | `0.1` | Noise standard deviation |
 | `patch_size` | `8` | Patch size (7 or 8 recommended) |
-| `step_size` | `4` | Step size for patch extraction |
+| `step_size` | `4` | Stride between reference patches |
 | `search_window` | `24` | Maximum search distance for similar patches |
 | `max_matches` | `16` | Maximum similar patches per 3D group |
+| `search_step` | `None` | Stride between candidate positions in the block-matching search. `None` uses 1 (every position) in generic mode and `step_size` in streak and multiscale modes. Generic mode used to search with `step_size`; `search_step=step_size` restores that output and speed. The default generic search takes 2 to 3 times as long at the default `search_window`, and more with a larger window |
 | `batch_size` | `32` | Batch size for stack processing |
 | `streak_sigma_smooth` | `3.0` | Smoothing for streak mode (streak mode only) |
 | `multiscale` | `False` | Enable multi-scale processing for wide streaks |

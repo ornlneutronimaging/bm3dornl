@@ -509,6 +509,18 @@ mod tests {
         assert_eq!(config.step_size, 3); // patch_size / 2, integer division
     }
 
+    /// The GUI has no search-stride control, so it leaves `search_step` to
+    /// the per-mode default of bm3d_core (issue #163).
+    #[test]
+    fn search_step_is_left_to_core_default() {
+        let mut params = Bm3dParameters::new();
+        for patch_size in [params.patch_size, 7] {
+            params.patch_size = patch_size;
+            assert_eq!(params.to_config().search_step, None);
+            assert_eq!(params.to_multiscale_config().bm3d_config.search_step, None);
+        }
+    }
+
     #[test]
     fn default_patch_size_matches_core_default() {
         let params = Bm3dParameters::new();

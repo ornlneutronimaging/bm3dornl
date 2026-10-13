@@ -54,6 +54,17 @@ fn map_stack_error<T>(result: Result<T, String>) -> PyResult<T> {
     })
 }
 
+/// Candidate-search stride of a low-level kernel binding. These bindings do
+/// not know the ring-removal mode, so `None` keeps the reference stride
+/// `step_size`, as before `search_step` existed.
+fn kernel_search_step(step_size: usize, search_step: Option<usize>) -> Result<usize, String> {
+    match search_step {
+        Some(0) => Err("search_step must be > 0 (or None for step_size)".to_string()),
+        Some(step) => Ok(step),
+        None => Ok(step_size),
+    }
+}
+
 fn run_bm3d_step_compat<F: Bm3dFloat>(
     input_noisy: ArrayView2<F>,
     input_pilot: ArrayView2<F>,
@@ -66,6 +77,7 @@ fn run_bm3d_step_compat<F: Bm3dFloat>(
     step_size: usize,
     search_window: usize,
     max_matches: usize,
+    search_step: Option<usize>,
     plans: &Bm3dPlans<F>,
 ) -> Result<Array2<F>, String> {
     let config = Bm3dKernelConfig {
@@ -75,6 +87,7 @@ fn run_bm3d_step_compat<F: Bm3dFloat>(
         step_size,
         search_window,
         max_matches,
+        search_step: kernel_search_step(step_size, search_step)?,
         use_hadamard_fast_path: None,
     };
     run_bm3d_step(
@@ -100,6 +113,7 @@ fn run_bm3d_step_stack_compat<F: Bm3dFloat>(
     step_size: usize,
     search_window: usize,
     max_matches: usize,
+    search_step: Option<usize>,
     plans: &Bm3dPlans<F>,
     progress_fn: Option<&dyn Fn(usize, usize) -> Result<(), String>>,
 ) -> Result<Array3<F>, String> {
@@ -110,6 +124,7 @@ fn run_bm3d_step_stack_compat<F: Bm3dFloat>(
         step_size,
         search_window,
         max_matches,
+        search_step: kernel_search_step(step_size, search_step)?,
         use_hadamard_fast_path: None,
     };
     run_bm3d_step_stack(
@@ -125,7 +140,10 @@ fn run_bm3d_step_stack_compat<F: Bm3dFloat>(
 }
 
 /// Hard thresholding step of BM3D for a single 2D image.
+///
+/// `search_step` is the candidate-search stride; `None` uses `step_size`.
 #[pyfunction]
+#[pyo3(signature = (input_noisy, input_pilot, sigma_psd, sigma_map, sigma_random, threshold, patch_size, step_size, search_window, max_matches, search_step=None))]
 pub fn bm3d_hard_thresholding<'py>(
     py: Python<'py>,
     input_noisy: PyReadonlyArray2<'py, f32>,
@@ -138,6 +156,7 @@ pub fn bm3d_hard_thresholding<'py>(
     step_size: usize,
     search_window: usize,
     max_matches: usize,
+    search_step: Option<usize>,
 ) -> PyResult<Bound<'py, PyArray2<f32>>> {
     let plans = bm3d_core::pipeline::Bm3dPlans::new(patch_size, max_matches);
     let output = run_bm3d_step_compat(
@@ -152,6 +171,7 @@ pub fn bm3d_hard_thresholding<'py>(
         step_size,
         search_window,
         max_matches,
+        search_step,
         &plans,
     )
     .map_err(pyo3::exceptions::PyValueError::new_err)?;
@@ -159,7 +179,10 @@ pub fn bm3d_hard_thresholding<'py>(
 }
 
 /// Wiener filtering step of BM3D for a single 2D image.
+///
+/// `search_step` is the candidate-search stride; `None` uses `step_size`.
 #[pyfunction]
+#[pyo3(signature = (input_noisy, input_pilot, sigma_psd, sigma_map, sigma_random, patch_size, step_size, search_window, max_matches, search_step=None))]
 pub fn bm3d_wiener_filtering<'py>(
     py: Python<'py>,
     input_noisy: PyReadonlyArray2<'py, f32>,
@@ -171,6 +194,7 @@ pub fn bm3d_wiener_filtering<'py>(
     step_size: usize,
     search_window: usize,
     max_matches: usize,
+    search_step: Option<usize>,
 ) -> PyResult<Bound<'py, PyArray2<f32>>> {
     let plans = bm3d_core::pipeline::Bm3dPlans::new(patch_size, max_matches);
     let output = run_bm3d_step_compat(
@@ -185,6 +209,7 @@ pub fn bm3d_wiener_filtering<'py>(
         step_size,
         search_window,
         max_matches,
+        search_step,
         &plans,
     )
     .map_err(pyo3::exceptions::PyValueError::new_err)?;
@@ -192,8 +217,10 @@ pub fn bm3d_wiener_filtering<'py>(
 }
 
 /// Hard thresholding step of BM3D for a 3D stack of images.
+///
+/// `search_step` is the candidate-search stride; `None` uses `step_size`.
 #[pyfunction]
-#[pyo3(signature = (input_noisy, input_pilot, sigma_psd, sigma_map, sigma_random, threshold, patch_size, step_size, search_window, max_matches, progress_callback=None))]
+#[pyo3(signature = (input_noisy, input_pilot, sigma_psd, sigma_map, sigma_random, threshold, patch_size, step_size, search_window, max_matches, progress_callback=None, search_step=None))]
 pub fn bm3d_hard_thresholding_stack<'py>(
     py: Python<'py>,
     input_noisy: PyReadonlyArray3<'py, f32>,
@@ -207,6 +234,7 @@ pub fn bm3d_hard_thresholding_stack<'py>(
     search_window: usize,
     max_matches: usize,
     progress_callback: Option<Py<PyAny>>,
+    search_step: Option<usize>,
 ) -> PyResult<Bound<'py, PyArray3<f32>>> {
     let noisy = input_noisy.as_array().to_owned();
     let pilot = input_pilot.as_array().to_owned();
@@ -227,6 +255,7 @@ pub fn bm3d_hard_thresholding_stack<'py>(
             step_size,
             search_window,
             max_matches,
+            search_step,
             &plans,
             progress_fn.as_deref(),
         )
@@ -236,8 +265,10 @@ pub fn bm3d_hard_thresholding_stack<'py>(
 }
 
 /// Wiener filtering step of BM3D for a 3D stack of images.
+///
+/// `search_step` is the candidate-search stride; `None` uses `step_size`.
 #[pyfunction]
-#[pyo3(signature = (input_noisy, input_pilot, sigma_psd, sigma_map, sigma_random, patch_size, step_size, search_window, max_matches, progress_callback=None))]
+#[pyo3(signature = (input_noisy, input_pilot, sigma_psd, sigma_map, sigma_random, patch_size, step_size, search_window, max_matches, progress_callback=None, search_step=None))]
 pub fn bm3d_wiener_filtering_stack<'py>(
     py: Python<'py>,
     input_noisy: PyReadonlyArray3<'py, f32>,
@@ -250,6 +281,7 @@ pub fn bm3d_wiener_filtering_stack<'py>(
     search_window: usize,
     max_matches: usize,
     progress_callback: Option<Py<PyAny>>,
+    search_step: Option<usize>,
 ) -> PyResult<Bound<'py, PyArray3<f32>>> {
     let noisy = input_noisy.as_array().to_owned();
     let pilot = input_pilot.as_array().to_owned();
@@ -270,6 +302,7 @@ pub fn bm3d_wiener_filtering_stack<'py>(
             step_size,
             search_window,
             max_matches,
+            search_step,
             &plans,
             progress_fn.as_deref(),
         )
@@ -318,7 +351,10 @@ pub fn estimate_streak_profile_py<'py>(
 // ============================================================================
 
 /// Hard thresholding step of BM3D for a single 2D image (f64 precision).
+///
+/// `search_step` is the candidate-search stride; `None` uses `step_size`.
 #[pyfunction]
+#[pyo3(signature = (input_noisy, input_pilot, sigma_psd, sigma_map, sigma_random, threshold, patch_size, step_size, search_window, max_matches, search_step=None))]
 pub fn bm3d_hard_thresholding_f64<'py>(
     py: Python<'py>,
     input_noisy: PyReadonlyArray2<'py, f64>,
@@ -331,6 +367,7 @@ pub fn bm3d_hard_thresholding_f64<'py>(
     step_size: usize,
     search_window: usize,
     max_matches: usize,
+    search_step: Option<usize>,
 ) -> PyResult<Bound<'py, PyArray2<f64>>> {
     let plans = bm3d_core::pipeline::Bm3dPlans::new(patch_size, max_matches);
     let output = run_bm3d_step_compat(
@@ -345,6 +382,7 @@ pub fn bm3d_hard_thresholding_f64<'py>(
         step_size,
         search_window,
         max_matches,
+        search_step,
         &plans,
     )
     .map_err(pyo3::exceptions::PyValueError::new_err)?;
@@ -352,7 +390,10 @@ pub fn bm3d_hard_thresholding_f64<'py>(
 }
 
 /// Wiener filtering step of BM3D for a single 2D image (f64 precision).
+///
+/// `search_step` is the candidate-search stride; `None` uses `step_size`.
 #[pyfunction]
+#[pyo3(signature = (input_noisy, input_pilot, sigma_psd, sigma_map, sigma_random, patch_size, step_size, search_window, max_matches, search_step=None))]
 pub fn bm3d_wiener_filtering_f64<'py>(
     py: Python<'py>,
     input_noisy: PyReadonlyArray2<'py, f64>,
@@ -364,6 +405,7 @@ pub fn bm3d_wiener_filtering_f64<'py>(
     step_size: usize,
     search_window: usize,
     max_matches: usize,
+    search_step: Option<usize>,
 ) -> PyResult<Bound<'py, PyArray2<f64>>> {
     let plans = bm3d_core::pipeline::Bm3dPlans::new(patch_size, max_matches);
     let output = run_bm3d_step_compat(
@@ -378,6 +420,7 @@ pub fn bm3d_wiener_filtering_f64<'py>(
         step_size,
         search_window,
         max_matches,
+        search_step,
         &plans,
     )
     .map_err(pyo3::exceptions::PyValueError::new_err)?;
@@ -385,8 +428,10 @@ pub fn bm3d_wiener_filtering_f64<'py>(
 }
 
 /// Hard thresholding step of BM3D for a 3D stack of images (f64 precision).
+///
+/// `search_step` is the candidate-search stride; `None` uses `step_size`.
 #[pyfunction]
-#[pyo3(signature = (input_noisy, input_pilot, sigma_psd, sigma_map, sigma_random, threshold, patch_size, step_size, search_window, max_matches, progress_callback=None))]
+#[pyo3(signature = (input_noisy, input_pilot, sigma_psd, sigma_map, sigma_random, threshold, patch_size, step_size, search_window, max_matches, progress_callback=None, search_step=None))]
 pub fn bm3d_hard_thresholding_stack_f64<'py>(
     py: Python<'py>,
     input_noisy: PyReadonlyArray3<'py, f64>,
@@ -400,6 +445,7 @@ pub fn bm3d_hard_thresholding_stack_f64<'py>(
     search_window: usize,
     max_matches: usize,
     progress_callback: Option<Py<PyAny>>,
+    search_step: Option<usize>,
 ) -> PyResult<Bound<'py, PyArray3<f64>>> {
     let noisy = input_noisy.as_array().to_owned();
     let pilot = input_pilot.as_array().to_owned();
@@ -420,6 +466,7 @@ pub fn bm3d_hard_thresholding_stack_f64<'py>(
             step_size,
             search_window,
             max_matches,
+            search_step,
             &plans,
             progress_fn.as_deref(),
         )
@@ -429,8 +476,10 @@ pub fn bm3d_hard_thresholding_stack_f64<'py>(
 }
 
 /// Wiener filtering step of BM3D for a 3D stack of images (f64 precision).
+///
+/// `search_step` is the candidate-search stride; `None` uses `step_size`.
 #[pyfunction]
-#[pyo3(signature = (input_noisy, input_pilot, sigma_psd, sigma_map, sigma_random, patch_size, step_size, search_window, max_matches, progress_callback=None))]
+#[pyo3(signature = (input_noisy, input_pilot, sigma_psd, sigma_map, sigma_random, patch_size, step_size, search_window, max_matches, progress_callback=None, search_step=None))]
 pub fn bm3d_wiener_filtering_stack_f64<'py>(
     py: Python<'py>,
     input_noisy: PyReadonlyArray3<'py, f64>,
@@ -443,6 +492,7 @@ pub fn bm3d_wiener_filtering_stack_f64<'py>(
     search_window: usize,
     max_matches: usize,
     progress_callback: Option<Py<PyAny>>,
+    search_step: Option<usize>,
 ) -> PyResult<Bound<'py, PyArray3<f64>>> {
     let noisy = input_noisy.as_array().to_owned();
     let pilot = input_pilot.as_array().to_owned();
@@ -463,6 +513,7 @@ pub fn bm3d_wiener_filtering_stack_f64<'py>(
             step_size,
             search_window,
             max_matches,
+            search_step,
             &plans,
             progress_fn.as_deref(),
         )
@@ -530,7 +581,7 @@ pub fn estimate_streak_profile_py_f64<'py>(
 /// patch_size : int, optional
 ///     Block matching patch size. Default: 8
 /// step_size : int, optional
-///     Stride between patches. Default: 4
+///     Stride between reference patches. Default: 4
 /// search_window : int, optional
 ///     Search window size for block matching. Default: 24
 /// max_matches : int, optional
@@ -551,6 +602,9 @@ pub fn estimate_streak_profile_py_f64<'py>(
 ///     FFT-Guided SVD Trust Factor. Default: 1.0 (Fourier-SVD mode only)
 /// notch_width : float, optional
 ///     FFT-Guided SVD Notch Width. Default: 2.0 (Fourier-SVD mode only)
+/// search_step : int, optional
+///     Stride between candidate positions in the block-matching search.
+///     Default: None (1 in generic mode, step_size in the other modes)
 ///
 /// Returns
 /// -------
@@ -572,7 +626,8 @@ pub fn estimate_streak_profile_py_f64<'py>(
     streak_sigma_scale = None,
     psd_width = None,
     fft_alpha = None,
-    notch_width = None
+    notch_width = None,
+    search_step = None
 ))]
 pub fn bm3d_ring_artifact_removal_2d<'py>(
     py: Python<'py>,
@@ -591,6 +646,7 @@ pub fn bm3d_ring_artifact_removal_2d<'py>(
     psd_width: Option<f32>,
     fft_alpha: Option<f32>,
     notch_width: Option<f32>,
+    search_step: Option<usize>,
 ) -> PyResult<Bound<'py, PyArray2<f32>>> {
     // Parse mode
     let ring_mode = match mode.to_lowercase().as_str() {
@@ -648,6 +704,8 @@ pub fn bm3d_ring_artifact_removal_2d<'py>(
     if let Some(v) = notch_width {
         config.notch_width = v;
     }
+    // None keeps the per-mode default of Bm3dConfig.
+    config.search_step = search_step;
 
     // Call Rust implementation
     let output = bm3d_ring_artifact_removal(sinogram.as_array(), ring_mode, &config)
@@ -675,7 +733,8 @@ pub fn bm3d_ring_artifact_removal_2d<'py>(
     streak_sigma_scale = None,
     psd_width = None,
     fft_alpha = None,
-    notch_width = None
+    notch_width = None,
+    search_step = None
 ))]
 pub fn bm3d_ring_artifact_removal_2d_f64<'py>(
     py: Python<'py>,
@@ -694,6 +753,7 @@ pub fn bm3d_ring_artifact_removal_2d_f64<'py>(
     psd_width: Option<f64>,
     fft_alpha: Option<f64>,
     notch_width: Option<f64>,
+    search_step: Option<usize>,
 ) -> PyResult<Bound<'py, PyArray2<f64>>> {
     // Parse mode
     let ring_mode = match mode.to_lowercase().as_str() {
@@ -751,6 +811,8 @@ pub fn bm3d_ring_artifact_removal_2d_f64<'py>(
     if let Some(v) = notch_width {
         config.notch_width = v;
     }
+    // None keeps the per-mode default of Bm3dConfig.
+    config.search_step = search_step;
 
     // Call Rust implementation
     let output = bm3d_ring_artifact_removal(sinogram.as_array(), ring_mode, &config)
@@ -855,11 +917,14 @@ pub fn estimate_noise_sigma_py_f64(sinogram: PyReadonlyArray2<'_, f64>) -> PyRes
 /// patch_size : int, optional
 ///     Block matching patch size. Default: 8
 /// step_size : int, optional
-///     Stride between patches. Default: 4
+///     Stride between reference patches. Default: 4
 /// search_window : int, optional
 ///     Search window size for block matching. Default: 24
 /// max_matches : int, optional
 ///     Maximum similar patches per group. Default: 16
+/// search_step : int, optional
+///     Stride between candidate positions in the block-matching search.
+///     Default: None (step_size at every scale)
 ///
 /// Returns
 /// -------
@@ -882,7 +947,8 @@ pub fn estimate_noise_sigma_py_f64(sinogram: PyReadonlyArray2<'_, f64>) -> PyRes
     sigma_map_smoothing = None,
     streak_sigma_scale = None,
     psd_width = None,
-    log_domain_input = None
+    log_domain_input = None,
+    search_step = None
 ))]
 pub fn multiscale_bm3d_streak_removal_2d<'py>(
     py: Python<'py>,
@@ -902,6 +968,7 @@ pub fn multiscale_bm3d_streak_removal_2d<'py>(
     streak_sigma_scale: Option<f32>,
     psd_width: Option<f32>,
     log_domain_input: Option<bool>,
+    search_step: Option<usize>,
 ) -> PyResult<Bound<'py, PyArray2<f32>>> {
     // Build config with defaults, using struct init syntax
     let default = MultiscaleConfig::<f32>::default();
@@ -950,6 +1017,8 @@ pub fn multiscale_bm3d_streak_removal_2d<'py>(
     if let Some(v) = psd_width {
         config.bm3d_config.psd_width = v;
     }
+    // None keeps the per-mode default of Bm3dConfig.
+    config.bm3d_config.search_step = search_step;
 
     // Call Rust implementation
     let output = multiscale_bm3d_streak_removal(sinogram.as_array(), &config)
@@ -978,7 +1047,8 @@ pub fn multiscale_bm3d_streak_removal_2d<'py>(
     sigma_map_smoothing = None,
     streak_sigma_scale = None,
     psd_width = None,
-    log_domain_input = None
+    log_domain_input = None,
+    search_step = None
 ))]
 pub fn multiscale_bm3d_streak_removal_2d_f64<'py>(
     py: Python<'py>,
@@ -998,6 +1068,7 @@ pub fn multiscale_bm3d_streak_removal_2d_f64<'py>(
     streak_sigma_scale: Option<f64>,
     psd_width: Option<f64>,
     log_domain_input: Option<bool>,
+    search_step: Option<usize>,
 ) -> PyResult<Bound<'py, PyArray2<f64>>> {
     // Build config with defaults, using struct init syntax
     let default = MultiscaleConfig::<f64>::default();
@@ -1044,6 +1115,8 @@ pub fn multiscale_bm3d_streak_removal_2d_f64<'py>(
     if let Some(v) = psd_width {
         config.bm3d_config.psd_width = v;
     }
+    // None keeps the per-mode default of Bm3dConfig.
+    config.bm3d_config.search_step = search_step;
 
     // Call Rust implementation
     let output = multiscale_bm3d_streak_removal(sinogram.as_array(), &config)
