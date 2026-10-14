@@ -81,7 +81,8 @@ def bm3d_ring_artifact_removal(
     patch_size : int, optional
         Patch size for block matching. Default: 8.
     step_size : int, optional
-        Stride between reference patches. Default: 4.
+        Stride between reference patches. It must not exceed ``patch_size``,
+        or pixels between the patches would stay unfiltered. Default: 4.
     search_window : int, optional
         Block-matching search window. Default: 24.
     max_matches : int, optional
@@ -144,8 +145,8 @@ def bm3d_ring_artifact_removal(
     TypeError
         If mode is not a str.
     ValueError
-        If multiscale=True with mode other than "streak", or if search_step
-        is 0.
+        If multiscale=True with mode other than "streak", if step_size is 0
+        or exceeds patch_size, or if search_step is 0.
     """
     if not isinstance(mode, str):
         raise TypeError(f"mode must be a str, got {type(mode).__name__}")

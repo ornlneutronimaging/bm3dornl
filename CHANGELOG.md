@@ -26,6 +26,15 @@
   `Bm3dKernelConfig` a new field `search_step: usize`. Struct literals of
   `Bm3dKernelConfig`, and of `Bm3dConfig` without `..Default::default()`, must
   set it.
+- **Behavior change:** a `step_size` larger than `patch_size` is now refused
+  with `ValueError: step_size (s) must not exceed patch_size (p)` on every
+  path (#166). Such a stride left gaps between the reference patches, and the
+  pixels in the gaps came back unfiltered: in generic mode on a 64 x 80 image
+  at `patch_size=8`, `step_size=12` left 2880 of 5120 pixels unchanged.
+  `step_size` equal to `patch_size` stays valid. In the Rust core,
+  `Bm3dConfig::validate`, `run_bm3d_step` and `run_bm3d_step_stack` return
+  the same error. The two kernels also return an error, instead of a panic,
+  for a `step_size` or `search_step` of 0.
 
 ### Fixed
 
@@ -40,7 +49,7 @@
   and generic output with `search_step=step_size`, stay bit-identical.
 - Multiscale output can also change, because its internal scales often have
   sizes off the reference grid. The change is usually small (at most 6.1e-3
-  in the JOSS benchmark and on real sinograms). On some inputs, though, it
+  in our tests). On some inputs, though, it
   changes the decision of the multiscale wall gate, which keeps straight
   object edges from being removed as stripes. In a synthetic test with
   `sigma_random` set to the true noise level, the gate then missed a straight
@@ -51,6 +60,27 @@
   path, as it already was for 2D single-scale input. In 3D, `mode="Streak"`
   used to run generic processing, and `multiscale=True` refused `"Streak"`. A
   `mode` that is not a string now raises `TypeError` on every path.
+- An image smaller than `patch_size` in either dimension now raises
+  `ValueError: Image size (rows, cols) is smaller than patch_size p` on every
+  path, as 2D input already did (#165). The 3D stack path, the low-level
+  kernel bindings and the `test_block_matching_rust` debug bindings used to
+  panic with `pyo3_runtime.PanicException`, which `except Exception` does not
+  catch. Multiscale processing used to return an image with fewer rows than
+  `patch_size` unfiltered. The Rust kernels `run_bm3d_step` and
+  `run_bm3d_step_stack` return the same error, from the new public check
+  `bm3d_core::pipeline::check_image_size`.
+- Input arrays that are not C-contiguous now give the same output as C-order
+  input (#164). The Rust fast paths read pixel data in memory order but
+  indexed it as row-major, so a Fortran-order or negative-stride array was
+  read with rows and columns, or the column order, mixed up. This affected 3D
+  stacks with F-contiguous slices (for example a `transpose(0, 2, 1)` view, or
+  `np.asfortranarray` of a one-slice stack: RMSE 0.352 instead of 0.006
+  against the clean image), the `bm3d_rust` bindings, `fourier_svd_removal`
+  and `estimate_noise_sigma`. 2D input to `bm3d_ring_artifact_removal` was
+  not affected. The bindings now convert input to C order, so every layout
+  gives the C-order output exactly. In the Rust core, the fast paths take
+  only standard-layout arrays; other layouts take the indexed path, which
+  agrees with the standard-layout result to rounding.
 
 ## 0.11.0 - 2026-09-03
 

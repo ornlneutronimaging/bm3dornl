@@ -70,7 +70,7 @@ pub struct Bm3dKernelConfig<F: Bm3dFloat> {
     pub sigma_random: F,
     pub threshold: F,
     pub patch_size: usize,
-    /// Stride between reference patches.
+    /// Stride between reference patches, at most `patch_size`.
     pub step_size: usize,
     pub search_window: usize,
     pub max_matches: usize,
@@ -95,6 +95,48 @@ fn reference_positions(extent: usize, patch_size: usize, step_size: usize) -> Ve
         positions.push(last);
     }
     positions
+}
+
+/// Refuse an image smaller than the patch in either dimension.
+///
+/// Block matching reads `patch_size` rows and columns from every reference
+/// position, so such an image cannot be filtered. Every entry point that
+/// filters an image uses this check, so they all report the same error.
+pub fn check_image_size(rows: usize, cols: usize, patch_size: usize) -> Result<(), String> {
+    if rows < patch_size || cols < patch_size {
+        return Err(format!(
+            "Image size ({}, {}) is smaller than patch_size {}",
+            rows, cols, patch_size
+        ));
+    }
+    Ok(())
+}
+
+/// Refuse a reference stride of 0 or one larger than the patch.
+///
+/// Reference patches sit `step_size` apart, so a larger stride leaves gaps
+/// between them, and the pixels in the gaps come back unfiltered (#166).
+pub(crate) fn check_step_size(step_size: usize, patch_size: usize) -> Result<(), String> {
+    if step_size == 0 {
+        return Err("step_size must be > 0".to_string());
+    }
+    if step_size > patch_size {
+        return Err(format!(
+            "step_size ({}) must not exceed patch_size ({})",
+            step_size, patch_size
+        ));
+    }
+    Ok(())
+}
+
+/// Refuse kernel strides that would leave pixels unfiltered or panic in
+/// `step_by`: see [`check_step_size`], and a `search_step` of 0.
+fn check_kernel_strides<F: Bm3dFloat>(config: &Bm3dKernelConfig<F>) -> Result<(), String> {
+    check_step_size(config.step_size, config.patch_size)?;
+    if config.search_step == 0 {
+        return Err("search_step must be > 0".to_string());
+    }
+    Ok(())
 }
 
 /// Helper struct to manage pre-computed FFT plans.
@@ -241,7 +283,9 @@ impl<F: Bm3dFloat> PatchTransformCache<F> {
                 ndarray::ArrayViewMut2::from_shape((self.patch_size, self.patch_size), out)
                     .expect("output transform slice shape should match patch size");
             transforms::wht2d_8x8_forward_into_view(patch, out_view);
-        } else if let Some(image_data) = image.as_slice_memory_order() {
+        } else if let Some(image_data) = image.as_slice() {
+            // `as_slice` is Some only in standard (row-major) layout, which
+            // the strided fast path indexes; other layouts take the view path.
             fft2d_strided_patch_into_with_plan_scratch(
                 image_data,
                 image.dim().1,
@@ -2030,6 +2074,9 @@ pub fn run_bm3d_step<F: Bm3dFloat>(
             sigma_map.dim()
         ));
     }
+    check_kernel_strides(config)?;
+    let (rows, cols) = input_noisy.dim();
+    check_image_size(rows, cols, config.patch_size)?;
 
     Ok(run_bm3d_kernel(
         input_noisy,
@@ -2077,6 +2124,8 @@ pub fn run_bm3d_step_stack<F: Bm3dFloat>(
             sigma_map.dim()
         ));
     }
+    check_kernel_strides(config)?;
+    check_image_size(rows, cols, config.patch_size)?;
 
     let mut output = Array3::<F>::zeros((n, rows, cols));
     let mut scratch_pool = KernelScratchPool::<F>::new();

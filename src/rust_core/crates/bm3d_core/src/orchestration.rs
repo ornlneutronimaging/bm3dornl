@@ -17,7 +17,9 @@ use std::time::Instant;
 
 use crate::float_trait::Bm3dFloat;
 use crate::noise_estimation::estimate_noise_sigma;
-use crate::pipeline::{Bm3dKernelConfig, Bm3dMode, run_bm3d_step};
+use crate::pipeline::{
+    Bm3dKernelConfig, Bm3dMode, check_image_size, check_step_size, run_bm3d_step,
+};
 use crate::streak::{estimate_streak_profile_impl, gaussian_blur_1d};
 
 // =============================================================================
@@ -108,7 +110,7 @@ pub struct Bm3dConfig<F: Bm3dFloat> {
     pub sigma_random: F,
     /// Block matching patch size. Default: 8
     pub patch_size: usize,
-    /// Stride between reference patches. Default: 4
+    /// Stride between reference patches, at most `patch_size`. Default: 4
     pub step_size: usize,
     /// Search window size for block matching. Default: 24
     pub search_window: usize,
@@ -175,9 +177,7 @@ impl<F: Bm3dFloat> Bm3dConfig<F> {
         if self.patch_size == 0 {
             return Err("patch_size must be > 0".to_string());
         }
-        if self.step_size == 0 {
-            return Err("step_size must be > 0".to_string());
-        }
+        check_step_size(self.step_size, self.patch_size)?;
         if self.search_window == 0 {
             return Err("search_window must be > 0".to_string());
         }
@@ -435,12 +435,7 @@ pub(crate) fn bm3d_ring_artifact_removal_with_psd<F: Bm3dFloat>(
     let (rows, cols) = sinogram.dim();
 
     // Check image is large enough for patch size
-    if rows < config.patch_size || cols < config.patch_size {
-        return Err(format!(
-            "Image size ({}, {}) is smaller than patch_size {}",
-            rows, cols, config.patch_size
-        ));
-    }
+    check_image_size(rows, cols, config.patch_size)?;
 
     let (d_min, _d_max, range, eps, mut z_norm) = timed!(profile_timing, normalize_ns, {
         // Step 1: Compute global min/max for normalization

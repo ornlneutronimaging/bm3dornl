@@ -64,6 +64,8 @@ Block Matching Parameters
    * - ``step_size``
      - ``4``
      - Stride between reference patches. Lower values can improve quality but take longer.
+       It must not exceed ``patch_size``, or pixels between the patches would
+       stay unfiltered; a larger value raises ``ValueError``.
    * - ``search_window``
      - ``24``
      - Maximum search distance for finding similar patches.

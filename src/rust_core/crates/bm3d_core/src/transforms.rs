@@ -111,10 +111,13 @@ pub fn fft2d_into_with_plan_scratch<F: Bm3dFloat>(
     let row_scratch_len = fft_row_plan.get_inplace_scratch_len();
     let col_scratch_len = fft_col_plan.get_inplace_scratch_len();
 
+    // The fast path indexes `input` and `output` as row-major slices, so it
+    // needs them in standard layout (`as_slice`). `work_complex` is scratch,
+    // written and read only through its slice, so any contiguous layout works.
     if let (Some(input_data), Some(work_data), Some(output_data)) = (
-        input.as_slice_memory_order(),
+        input.as_slice(),
         work_complex.as_slice_memory_order_mut(),
-        output.as_slice_memory_order_mut(),
+        output.as_slice_mut(),
     ) {
         // 1. Transform rows (batched across all rows in one call).
         for r in 0..rows {
@@ -349,10 +352,12 @@ pub fn ifft2d_into_with_plan_scratch<F: Bm3dFloat>(
     let col_scratch_len = ifft_col_plan.get_inplace_scratch_len();
     let row_scratch_len = ifft_row_plan.get_inplace_scratch_len();
 
+    // As in `fft2d_into_with_plan_scratch`: `input` and `output` must be in
+    // standard layout for the fast path; the scratch `work_complex` need not.
     if let (Some(input_data), Some(work_data), Some(output_data)) = (
-        input.as_slice_memory_order(),
+        input.as_slice(),
         work_complex.as_slice_memory_order_mut(),
-        output.as_slice_memory_order_mut(),
+        output.as_slice_mut(),
     ) {
         // 1. Transform columns in-place in complex workspace.
         work_data.copy_from_slice(input_data);
@@ -472,10 +477,9 @@ pub fn ifft2d_inplace_to_real_with_plan_scratch<F: Bm3dFloat>(
     let col_scratch_len = ifft_col_plan.get_inplace_scratch_len();
     let row_scratch_len = ifft_row_plan.get_inplace_scratch_len();
 
-    if let (Some(data), Some(output_data)) = (
-        input_output.as_slice_memory_order_mut(),
-        output.as_slice_memory_order_mut(),
-    ) {
+    // The fast path indexes both buffers as row-major slices, so it needs
+    // them in standard layout (`as_slice_mut`).
+    if let (Some(data), Some(output_data)) = (input_output.as_slice_mut(), output.as_slice_mut()) {
         // 1. Transform columns in-place in complex input/output buffer.
         if rows == cols {
             transpose_square_in_place(data, rows);
