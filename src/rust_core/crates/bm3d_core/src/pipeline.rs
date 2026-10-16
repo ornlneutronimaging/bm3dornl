@@ -70,12 +70,73 @@ pub struct Bm3dKernelConfig<F: Bm3dFloat> {
     pub sigma_random: F,
     pub threshold: F,
     pub patch_size: usize,
+    /// Stride between reference patches, at most `patch_size`.
     pub step_size: usize,
     pub search_window: usize,
     pub max_matches: usize,
+    /// Stride between candidate positions in the block-matching search
+    /// window. 1 tests every position.
+    pub search_step: usize,
     /// Optional per-call override for 8x8 Hadamard fast path.
     /// `Some(true/false)` takes precedence over env/global defaults.
     pub use_hadamard_fast_path: Option<bool>,
+}
+
+/// Reference patch positions along one axis of length `extent`.
+///
+/// The positions are 0, step, 2 * step, ... up to `extent - patch_size`.
+/// When that grid misses `extent - patch_size`, it is added once, so the
+/// last rows and columns are covered. An extent smaller than the patch gets
+/// one reference at 0.
+fn reference_positions(extent: usize, patch_size: usize, step_size: usize) -> Vec<usize> {
+    let last = extent.saturating_sub(patch_size);
+    let mut positions: Vec<usize> = (0..=last).step_by(step_size).collect();
+    if positions.last() != Some(&last) {
+        positions.push(last);
+    }
+    positions
+}
+
+/// Refuse an image smaller than the patch in either dimension.
+///
+/// Block matching reads `patch_size` rows and columns from every reference
+/// position, so such an image cannot be filtered. Every entry point that
+/// filters an image uses this check, so they all report the same error.
+pub fn check_image_size(rows: usize, cols: usize, patch_size: usize) -> Result<(), String> {
+    if rows < patch_size || cols < patch_size {
+        return Err(format!(
+            "Image size ({}, {}) is smaller than patch_size {}",
+            rows, cols, patch_size
+        ));
+    }
+    Ok(())
+}
+
+/// Refuse a reference stride of 0 or one larger than the patch.
+///
+/// Reference patches sit `step_size` apart, so a larger stride leaves gaps
+/// between them, and the pixels in the gaps come back unfiltered (#166).
+pub(crate) fn check_step_size(step_size: usize, patch_size: usize) -> Result<(), String> {
+    if step_size == 0 {
+        return Err("step_size must be > 0".to_string());
+    }
+    if step_size > patch_size {
+        return Err(format!(
+            "step_size ({}) must not exceed patch_size ({})",
+            step_size, patch_size
+        ));
+    }
+    Ok(())
+}
+
+/// Refuse kernel strides that would leave pixels unfiltered or panic in
+/// `step_by`: see [`check_step_size`], and a `search_step` of 0.
+fn check_kernel_strides<F: Bm3dFloat>(config: &Bm3dKernelConfig<F>) -> Result<(), String> {
+    check_step_size(config.step_size, config.patch_size)?;
+    if config.search_step == 0 {
+        return Err("search_step must be > 0".to_string());
+    }
+    Ok(())
 }
 
 /// Helper struct to manage pre-computed FFT plans.
@@ -222,7 +283,9 @@ impl<F: Bm3dFloat> PatchTransformCache<F> {
                 ndarray::ArrayViewMut2::from_shape((self.patch_size, self.patch_size), out)
                     .expect("output transform slice shape should match patch size");
             transforms::wht2d_8x8_forward_into_view(patch, out_view);
-        } else if let Some(image_data) = image.as_slice_memory_order() {
+        } else if let Some(image_data) = image.as_slice() {
+            // `as_slice` is Some only in standard (row-major) layout, which
+            // the strided fast path indexes; other layouts take the view path.
             fft2d_strided_patch_into_with_plan_scratch(
                 image_data,
                 image.dim().1,
@@ -1405,6 +1468,7 @@ fn run_bm3d_kernel_with_scratch<F: Bm3dFloat>(
     let patch_size = config.patch_size;
     let step_size = config.step_size;
     let search_window = config.search_window;
+    let search_step = config.search_step;
     let max_matches = config.max_matches;
     let threshold = config.threshold;
     let use_sigma_map_full = sigma_map.dim() == (rows, cols);
@@ -1418,19 +1482,10 @@ fn run_bm3d_kernel_with_scratch<F: Bm3dFloat>(
     // Pre-compute Integral Images for Block Matching acceleration
     let integral_sum = block_matching::compute_integral_sum_image(input_pilot);
 
-    let r_end = rows.saturating_sub(patch_size) + 1;
-    let c_end = cols.saturating_sub(patch_size) + 1;
-    let ref_rows = if r_end == 0 {
-        0
-    } else {
-        (r_end - 1) / step_size + 1
-    };
-    let ref_cols = if c_end == 0 {
-        0
-    } else {
-        (c_end - 1) / step_size + 1
-    };
-    let total_refs = ref_rows * ref_cols;
+    let ref_row_positions = reference_positions(rows, patch_size, step_size);
+    let ref_col_positions = reference_positions(cols, patch_size, step_size);
+    let ref_cols = ref_col_positions.len();
+    let total_refs = ref_row_positions.len() * ref_cols;
 
     let fft_2d_row_ref = &plans.fft_2d_row;
     let fft_2d_col_ref = &plans.fft_2d_col;
@@ -1547,8 +1602,8 @@ fn run_bm3d_kernel_with_scratch<F: Bm3dFloat>(
                 };
 
                 for ref_index in chunk_start..chunk_end {
-                    let ref_r = (ref_index / ref_cols) * step_size;
-                    let ref_c = (ref_index % ref_cols) * step_size;
+                    let ref_r = ref_row_positions[ref_index / ref_cols];
+                    let ref_c = ref_col_positions[ref_index % ref_cols];
                     // 1. Block Matching
                     timed!(profile_timing, stats.block_matching_ns, {
                         block_matching::find_similar_patches_in_place_sum(
@@ -1558,7 +1613,7 @@ fn run_bm3d_kernel_with_scratch<F: Bm3dFloat>(
                             (patch_size, patch_size),
                             (search_window, search_window),
                             max_matches,
-                            step_size,
+                            search_step,
                             &mut worker.matches,
                         );
                     });
@@ -2019,6 +2074,9 @@ pub fn run_bm3d_step<F: Bm3dFloat>(
             sigma_map.dim()
         ));
     }
+    check_kernel_strides(config)?;
+    let (rows, cols) = input_noisy.dim();
+    check_image_size(rows, cols, config.patch_size)?;
 
     Ok(run_bm3d_kernel(
         input_noisy,
@@ -2066,6 +2124,8 @@ pub fn run_bm3d_step_stack<F: Bm3dFloat>(
             sigma_map.dim()
         ));
     }
+    check_kernel_strides(config)?;
+    check_image_size(rows, cols, config.patch_size)?;
 
     let mut output = Array3::<F>::zeros((n, rows, cols));
     let mut scratch_pool = KernelScratchPool::<F>::new();
@@ -2408,6 +2468,7 @@ mod tests {
             step_size,
             search_window,
             max_matches,
+            search_step: step_size,
             use_hadamard_fast_path: None,
         };
         super::run_bm3d_step(
@@ -2442,6 +2503,7 @@ mod tests {
             step_size,
             search_window,
             max_matches,
+            search_step: step_size,
             use_hadamard_fast_path: None,
         };
         super::run_bm3d_step_stack(
@@ -3217,5 +3279,411 @@ mod tests {
                 step_size
             );
         }
+    }
+
+    // ==================== Edge Strip Coverage (issue #163) ====================
+    //
+    // Reference patches must reach the last row and column. When
+    // (extent - patch_size) is not a multiple of step_size, a reference grid
+    // of multiples of the step stops short of the edge and the kernel returns
+    // the bottom/right strip as a copy of its input. A pixel that no group
+    // aggregates keeps its input value bit for bit; a filtered pixel of a
+    // noisy image does not.
+
+    /// (patch_size, step_size) of the default configuration.
+    const GEOMETRY_8_4: (usize, usize) = (8, 4);
+    /// (patch_size, step_size) the GUI uses for patch 7. Here
+    /// (extent - patch_size) % step_size and extent % step_size differ, so a
+    /// rule on the wrong one shows.
+    const GEOMETRY_7_3: (usize, usize) = (7, 3);
+    const COVERAGE_SEARCH_WINDOW: usize = 24;
+    const COVERAGE_MAX_MATCHES: usize = 16;
+    const COVERAGE_NOISE_SIGMA: f32 = 0.1;
+
+    /// The one place the coverage tests build a kernel config.
+    ///
+    /// The candidate search steps by step_size, and search_window / 2 is a
+    /// multiple of step_size in both geometries. So every candidate of a
+    /// reference on the grid is on the grid too, and a dense search cannot
+    /// hide a missing reference behind a match that happens to cover it.
+    fn coverage_kernel_config<F: Bm3dFloat>(
+        mode: Bm3dMode,
+        (patch_size, step_size): (usize, usize),
+    ) -> Bm3dKernelConfig<F> {
+        let threshold = match mode {
+            Bm3dMode::HardThreshold => 2.7,
+            Bm3dMode::Wiener => 0.0,
+        };
+        Bm3dKernelConfig {
+            sigma_random: F::from_f64_c(f64::from(COVERAGE_NOISE_SIGMA)),
+            threshold: F::from_f64_c(threshold),
+            patch_size,
+            step_size,
+            search_window: COVERAGE_SEARCH_WINDOW,
+            max_matches: COVERAGE_MAX_MATCHES,
+            search_step: step_size,
+            use_hadamard_fast_path: None,
+        }
+    }
+
+    /// Run one kernel pass with white noise. Hard thresholding is its own
+    /// pilot; Wiener gets the clean image as an ideal pilot.
+    fn run_coverage_kernel<F: Bm3dFloat>(
+        clean: &Array2<F>,
+        noisy: &Array2<F>,
+        mode: Bm3dMode,
+        geometry: (usize, usize),
+        plans: &Bm3dPlans<F>,
+    ) -> Array2<F> {
+        let pilot = match mode {
+            Bm3dMode::HardThreshold => noisy,
+            Bm3dMode::Wiener => clean,
+        };
+        let sigma_psd = Array2::<F>::zeros((1, 1));
+        let sigma_map = Array2::<F>::zeros((1, 1));
+        run_bm3d_kernel(
+            noisy.view(),
+            pilot.view(),
+            mode,
+            sigma_psd.view(),
+            sigma_map.view(),
+            &coverage_kernel_config::<F>(mode, geometry),
+            plans,
+        )
+    }
+
+    /// A smooth clean image and the same image with Gaussian noise.
+    fn coverage_images<F: Bm3dFloat>(rows: usize, cols: usize) -> (Array2<F>, Array2<F>) {
+        let clean = Array2::from_shape_fn((rows, cols), |(r, c)| {
+            0.5 + 0.2 * (r as f32 / 7.0).sin() * (c as f32 / 11.0).cos()
+        });
+        let mut rng = SimpleLcg::new((rows * 1000 + cols) as u64);
+        let noisy = clean.mapv(|v| v + COVERAGE_NOISE_SIGMA * rng.next_gaussian());
+        let to_float = |v: f32| F::from_f64_c(f64::from(v));
+        (clean.mapv(to_float), noisy.mapv(to_float))
+    }
+
+    /// Run both kernel passes on each shape and describe every pass that
+    /// returns a pixel equal to its input.
+    fn kernel_coverage_failures<F: Bm3dFloat>(
+        shapes: &[(usize, usize)],
+        geometry: (usize, usize),
+        precision: &str,
+    ) -> Vec<String> {
+        let (patch_size, step_size) = geometry;
+        let plans = Bm3dPlans::<F>::new(patch_size, COVERAGE_MAX_MATCHES);
+        let mut failures = Vec::new();
+        for &(rows, cols) in shapes {
+            let (clean, noisy) = coverage_images::<F>(rows, cols);
+            let strip_rows = (rows - patch_size) % step_size;
+            let strip_cols = (cols - patch_size) % step_size;
+            for mode in [Bm3dMode::HardThreshold, Bm3dMode::Wiener] {
+                let output = run_coverage_kernel(&clean, &noisy, mode, geometry, &plans);
+                let (mut bottom, mut right, mut elsewhere) = (0usize, 0usize, 0usize);
+                for ((r, c), &value) in noisy.indexed_iter() {
+                    if output[[r, c]] != value {
+                        continue;
+                    }
+                    if r >= rows - strip_rows {
+                        bottom += 1;
+                    } else if c >= cols - strip_cols {
+                        right += 1;
+                    } else {
+                        elsewhere += 1;
+                    }
+                }
+                let unfiltered = bottom + right + elsewhere;
+                if unfiltered > 0 {
+                    failures.push(format!(
+                        "{rows}x{cols} patch {patch_size} step {step_size} {mode:?} \
+                         {precision}: {unfiltered} of {} pixels equal the input ({bottom} \
+                         in the last {strip_rows} rows, {right} more in the last \
+                         {strip_cols} columns, {elsewhere} elsewhere)",
+                        rows * cols
+                    ));
+                }
+            }
+        }
+        failures
+    }
+
+    /// Coverage failures of one geometry on each shape, in f32 and f64.
+    fn coverage_failures_f32_f64(
+        shapes: &[(usize, usize)],
+        geometry: (usize, usize),
+    ) -> Vec<String> {
+        let mut failures = kernel_coverage_failures::<f32>(shapes, geometry, "f32");
+        failures.extend(kernel_coverage_failures::<f64>(shapes, geometry, "f64"));
+        failures
+    }
+
+    #[test]
+    fn test_kernel_filters_bottom_and_right_strip() {
+        // Patch 8, step 4: (extent - 8) % 4 is 1, 2 and 3 on rows only, on
+        // columns only, and on both axes.
+        let shapes_8_4 = [
+            (65, 80),
+            (66, 80),
+            (67, 80),
+            (64, 81),
+            (64, 82),
+            (64, 83),
+            (65, 81),
+            (66, 82),
+            (67, 83),
+        ];
+        // Patch 7, step 3: (66 - 7) % 3 and (81 - 7) % 3 are 2, but 66 % 3
+        // and 81 % 3 are 0. (65 - 7) % 3 is 1.
+        let shapes_7_3 = [(66, 66), (66, 81), (65, 81)];
+        let mut failures = coverage_failures_f32_f64(&shapes_8_4, GEOMETRY_8_4);
+        failures.extend(coverage_failures_f32_f64(&shapes_7_3, GEOMETRY_7_3));
+        assert!(
+            failures.is_empty(),
+            "kernel left pixels unfiltered:\n{}",
+            failures.join("\n")
+        );
+    }
+
+    #[test]
+    fn test_kernel_filters_every_pixel_on_aligned_shape() {
+        // Control: (64 - 8) and (80 - 8) are multiples of 4, and (64 - 7) and
+        // (79 - 7) are multiples of 3, so the plain grid already reaches both
+        // edges and no pixel may equal its input.
+        let mut failures = coverage_failures_f32_f64(&[(64, 80)], GEOMETRY_8_4);
+        failures.extend(coverage_failures_f32_f64(&[(64, 79)], GEOMETRY_7_3));
+        assert!(
+            failures.is_empty(),
+            "kernel left pixels unfiltered:\n{}",
+            failures.join("\n")
+        );
+    }
+
+    // ==================== Reference Placement (issue #163) ====================
+    //
+    // Along each axis the references sit at 0, step, 2 * step, ... up to
+    // extent - patch_size, plus extent - patch_size once when that grid
+    // misses it. `reference_positions` builds this list, and the kernel uses
+    // it for both rows and columns. The mirror and crop tests further down
+    // pin the same rule through kernel output, independent of how the kernel
+    // builds its lists.
+
+    #[test]
+    fn test_reference_positions_exact_lists() {
+        let grid = |last: usize, step: usize| (0..=last).step_by(step).collect::<Vec<usize>>();
+        let grid_plus = |last: usize, step: usize, extra: usize| {
+            let mut positions = grid(last, step);
+            positions.push(extra);
+            positions
+        };
+        let aligned = reference_positions(64, 8, 4);
+        assert_eq!(aligned, grid(56, 4));
+        assert_eq!(aligned.len(), 15, "aligned shape gets no extra reference");
+        let cases = [
+            ((65, 8, 4), grid_plus(56, 4, 57)),
+            ((66, 8, 4), grid_plus(56, 4, 58)),
+            ((67, 8, 4), grid_plus(56, 4, 59)),
+            ((8, 8, 4), vec![0]),
+            ((9, 8, 4), vec![0, 1]),
+            ((65, 8, 2), grid_plus(56, 2, 57)),
+            ((20, 8, 1), grid(12, 1)),
+            ((64, 8, 12), vec![0, 12, 24, 36, 48, 56]),
+            // Smaller than the patch: one reference at 0, as before #163.
+            ((5, 8, 4), vec![0]),
+            ((7, 8, 4), vec![0]),
+        ];
+        for ((extent, patch_size, step_size), expected) in cases {
+            assert_eq!(
+                reference_positions(extent, patch_size, step_size),
+                expected,
+                "extent {extent}, patch {patch_size}, step {step_size}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_reference_positions_reach_both_ends_without_duplicates() {
+        for patch_size in [7, 8] {
+            for extent in patch_size..=100 {
+                let last = extent - patch_size;
+                for step_size in 1..=8 {
+                    let positions = reference_positions(extent, patch_size, step_size);
+                    let case = format!(
+                        "extent {extent}, patch {patch_size}, step {step_size}: {positions:?}"
+                    );
+                    assert_eq!(positions.first(), Some(&0), "{case}");
+                    assert_eq!(positions.last(), Some(&last), "{case}");
+                    assert!(
+                        positions.windows(2).all(|pair| pair[0] < pair[1]),
+                        "not strictly increasing (duplicate reference): {case}"
+                    );
+                    assert!(
+                        (0..=last)
+                            .step_by(step_size)
+                            .all(|p| positions.contains(&p)),
+                        "a multiple of the step is missing: {case}"
+                    );
+                    let off_grid: Vec<usize> = positions
+                        .iter()
+                        .copied()
+                        .filter(|p| p % step_size != 0)
+                        .collect();
+                    assert!(
+                        off_grid.is_empty() || off_grid == [last],
+                        "only extent - patch_size may be off the grid: {case}"
+                    );
+                }
+            }
+        }
+    }
+
+    // Before the fix the mirror test holds with a difference of at most
+    // 6.0e-7 (f32) and 1.2e-15 (f64) in both geometries, and the crop test
+    // holds exactly. A misplaced reference changes these pixels by 3e-3 or
+    // more.
+
+    /// Largest |a - b| over the top-left `rows x cols` block.
+    fn max_abs_diff<F: Bm3dFloat>(a: &Array2<F>, b: &Array2<F>, rows: usize, cols: usize) -> f64 {
+        let mut max_diff = 0.0f64;
+        for r in 0..rows {
+            for c in 0..cols {
+                max_diff = max_diff.max((a[[r, c]] - b[[r, c]]).abs().to_f64().unwrap());
+            }
+        }
+        max_diff
+    }
+
+    /// Allowance for outputs that may differ only in rounding.
+    fn rounding_tolerance<F: Bm3dFloat>() -> f64 {
+        64.0 * F::epsilon().to_f64().unwrap()
+    }
+
+    /// Mirror an image top to bottom or left to right.
+    fn mirror<F: Bm3dFloat>(image: &Array2<F>, flip_rows: bool, flip_cols: bool) -> Array2<F> {
+        let (rows, cols) = image.dim();
+        Array2::from_shape_fn((rows, cols), |(r, c)| {
+            let src_r = if flip_rows { rows - 1 - r } else { r };
+            let src_c = if flip_cols { cols - 1 - c } else { c };
+            image[[src_r, src_c]]
+        })
+    }
+
+    /// Describe every kernel pass whose output on a mirrored image is not
+    /// the mirrored output.
+    fn kernel_mirror_failures<F: Bm3dFloat>(
+        shapes: &[(usize, usize)],
+        geometry: (usize, usize),
+        precision: &str,
+    ) -> Vec<String> {
+        let (patch_size, step_size) = geometry;
+        let plans = Bm3dPlans::<F>::new(patch_size, COVERAGE_MAX_MATCHES);
+        let tolerance = rounding_tolerance::<F>();
+        let mut failures = Vec::new();
+        for &(rows, cols) in shapes {
+            let (clean, noisy) = coverage_images::<F>(rows, cols);
+            for mode in [Bm3dMode::HardThreshold, Bm3dMode::Wiener] {
+                let output = run_coverage_kernel(&clean, &noisy, mode, geometry, &plans);
+                for (axis, flip_rows, flip_cols) in
+                    [("rows", true, false), ("columns", false, true)]
+                {
+                    let mirrored = run_coverage_kernel(
+                        &mirror(&clean, flip_rows, flip_cols),
+                        &mirror(&noisy, flip_rows, flip_cols),
+                        mode,
+                        geometry,
+                        &plans,
+                    );
+                    let restored = mirror(&mirrored, flip_rows, flip_cols);
+                    let diff = max_abs_diff(&restored, &output, rows, cols);
+                    if diff > tolerance {
+                        failures.push(format!(
+                            "{rows}x{cols} patch {patch_size} step {step_size} {mode:?} \
+                             {precision}, {axis} mirrored: outputs differ by {diff:.3e} \
+                             (rounding allows {tolerance:.1e})"
+                        ));
+                    }
+                }
+            }
+        }
+        failures
+    }
+
+    #[test]
+    fn test_kernel_commutes_with_mirror_on_aligned_shapes() {
+        // On these shapes the grid 0, step, ..., extent - patch_size reaches
+        // both ends and is symmetric. Matches are sorted by distance, and the
+        // FFT and the thresholds keep coefficient magnitudes under a mirror,
+        // so the kernel commutes with a mirror. An extra reference at an end
+        // that the grid already reaches gives the groups at that end double
+        // weight and breaks the symmetry. With patch 7 and step 3, 64, 67,
+        // 79 and 82 are all 1 modulo 3, so a rule on extent % step_size adds
+        // that extra reference.
+        let mut failures = Vec::new();
+        for (geometry, shapes) in [
+            (GEOMETRY_8_4, [(64, 80), (68, 92)]),
+            (GEOMETRY_7_3, [(64, 79), (67, 82)]),
+        ] {
+            failures.extend(kernel_mirror_failures::<f32>(&shapes, geometry, "f32"));
+            failures.extend(kernel_mirror_failures::<f64>(&shapes, geometry, "f64"));
+        }
+        assert!(
+            failures.is_empty(),
+            "reference set is not symmetric on an aligned shape (duplicate edge \
+             reference?):\n{}",
+            failures.join("\n")
+        );
+    }
+
+    /// Describe every kernel pass whose output on a 64 x 80 crop differs
+    /// from its output on the parent image far from the crop's bottom and
+    /// right edges.
+    fn kernel_crop_failures<F: Bm3dFloat>(
+        shapes: &[(usize, usize)],
+        geometry: (usize, usize),
+        precision: &str,
+    ) -> Vec<String> {
+        let (crop_rows, crop_cols) = (64, 80);
+        let margin = COVERAGE_SEARCH_WINDOW + geometry.0;
+        let (far_rows, far_cols) = (crop_rows - margin, crop_cols - margin);
+        let crop = |image: &Array2<F>| {
+            Array2::from_shape_fn((crop_rows, crop_cols), |(r, c)| image[[r, c]])
+        };
+        let plans = Bm3dPlans::<F>::new(geometry.0, COVERAGE_MAX_MATCHES);
+        let tolerance = rounding_tolerance::<F>();
+        let mut failures = Vec::new();
+        for &(rows, cols) in shapes {
+            let (clean, noisy) = coverage_images::<F>(rows, cols);
+            for mode in [Bm3dMode::HardThreshold, Bm3dMode::Wiener] {
+                let parent = run_coverage_kernel(&clean, &noisy, mode, geometry, &plans);
+                let cropped =
+                    run_coverage_kernel(&crop(&clean), &crop(&noisy), mode, geometry, &plans);
+                let diff = max_abs_diff(&parent, &cropped, far_rows, far_cols);
+                if diff > tolerance {
+                    failures.push(format!(
+                        "{rows}x{cols} {mode:?} {precision}: the first {far_rows} rows and \
+                         {far_cols} columns differ from the 64x80 crop by {diff:.3e} \
+                         (rounding allows {tolerance:.1e})"
+                    ));
+                }
+            }
+        }
+        failures
+    }
+
+    #[test]
+    fn test_kernel_far_pixels_ignore_extra_edge_rows_and_columns() {
+        // A pixel more than search_window + patch_size from the bottom and
+        // right edges of the 64 x 80 crop belongs only to groups whose
+        // reference and search window lie inside the crop. With the grid
+        // anchored at 0, those groups are the same in the crop and in the
+        // parent image, so the pixel keeps its value. A grid anchored at the
+        // far edge moves every reference of the parent image.
+        let shapes = [(65, 81), (66, 82), (67, 83), (64, 83), (67, 80)];
+        let mut failures = kernel_crop_failures::<f32>(&shapes, GEOMETRY_8_4, "f32");
+        failures.extend(kernel_crop_failures::<f64>(&shapes, GEOMETRY_8_4, "f64"));
+        assert!(
+            failures.is_empty(),
+            "reference grid is not anchored at 0:\n{}",
+            failures.join("\n")
+        );
     }
 }

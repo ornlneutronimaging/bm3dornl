@@ -1,11 +1,12 @@
 GUI Application
 ===============
 
-BM3DORNL includes a standalone GUI application for interactive ring artifact removal
-from tomography data.
+BM3DORNL includes a standalone GUI for processing tomography data.
 
 Installation
 ------------
+
+Install a released binary for Linux x86_64 or macOS Apple Silicon:
 
 .. code-block:: bash
 
@@ -15,8 +16,18 @@ Installation
     # Or install separately
     pip install bm3dornl-gui
 
+For a clone, use Pixi. Follow the README's
+`How to install <https://github.com/ornlneutronimaging/bm3dornl#how-to-install>`_
+section.
+
+.. code-block:: bash
+
+    pixi run gui
+
 Launching
 ---------
+
+The released binary installs a ``bm3dornl-gui`` command:
 
 .. code-block:: bash
 
@@ -41,9 +52,9 @@ Features
 
 **Processing**
 
-- Real-time parameter adjustment
+- Adjust parameters before starting processing
 - Support for both ``generic`` and ``streak`` modes
-- Live preview of denoising results
+- View the processed result after the run finishes
 
 **ROI Selection**
 
@@ -76,32 +87,36 @@ Keyboard Shortcuts
 Workflow
 --------
 
-1. **Load Data**: Click "Open" and select an HDF5 or TIFF file. For HDF5, use the tree browser to select a dataset.
+1. **Load data:** Click "Open" and select an HDF5 or TIFF file. For HDF5,
+   select a dataset in the tree browser.
 
-2. **Adjust View**: Use the window/level controls for contrast, the slice slider to
-   move through a 3D stack, and the scroll wheel to zoom.
+2. **Adjust the view:** Use the window and level controls for contrast. Use the
+   slice slider for a three-dimensional stack. Use the scroll wheel to zoom.
 
-3. **Select Parameters**: Adjust denoising parameters in the control panel:
+3. **Select parameters:** Set the denoising parameters before processing.
 
    - Mode: ``streak`` for ring artifacts, ``generic`` for random noise
-   - Sigma: Start low (0.02-0.05) and increase as needed
-   - Other parameters: Usually defaults work well
+   - Sigma: Start at 0.02 to 0.05 and increase as needed
+   - Other parameters: Start with the defaults
 
-4. **Process**: Click "Process" to apply denoising. Compare with original using the split view.
+4. **Process:** Click "Process" to apply denoising. Results appear after the run
+   finishes.
 
-5. **Evaluate**: Use ROI selection (Shift+drag) to check noise statistics in specific regions.
+5. **Evaluate:** Compare the result with the original in split view. Select a
+   region of interest with Shift+drag to inspect local noise statistics.
 
-6. **Export**: Save processed data to TIFF or HDF5 format.
+6. **Export:** Save the result as TIFF or HDF5.
 
 Tips
 ----
 
-- **Start with defaults**: The default parameters work well for most cases.
+- **Start with defaults:** The defaults work well for most cases.
 
-- **Use streak mode**: For ring artifacts in sinograms, always use ``mode="streak"``.
+- **Use streak mode:** Choose ``mode="streak"`` for ring artifacts.
 
-- **Check the histogram**: The histogram should narrow after denoising, indicating reduced noise.
+- **Check the histogram:** A narrower histogram can indicate less noise.
 
-- **Use ROI selection**: Select flat regions to evaluate noise reduction without signal interference.
+- **Use ROI selection:** Select flat regions to evaluate noise reduction.
 
-- **Monitor the difference**: The removed signal should show primarily vertical streaks (for streak mode), not horizontal structure.
+- **Inspect the difference:** In streak mode, removed content should be mainly
+  vertical streaks. Horizontal structure may indicate signal loss.

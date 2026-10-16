@@ -1,7 +1,8 @@
 Parameter Reference
 ===================
 
-This page describes all parameters for the ``bm3d_ring_artifact_removal`` function.
+This page describes every ``bm3d_ring_artifact_removal`` parameter. BM3D means
+block-matching and three-dimensional filtering.
 
 Mode Selection
 --------------
@@ -19,9 +20,8 @@ Mode Selection
 
 .. note::
 
-   For ring artifact removal in tomography sinograms, always use ``mode="streak"``.
-   The streak mode is specifically optimized for vertical artifacts caused by detector
-   pixel response variations.
+   Use ``mode="streak"`` for ring artifacts in tomography sinograms. It targets
+   vertical artifacts from detector response variations.
 
 Noise Parameters
 ----------------
@@ -35,7 +35,7 @@ Noise Parameters
      - Description
    * - ``sigma_random``
      - ``0.1``
-     - Estimated noise standard deviation. Higher values = more aggressive denoising.
+     - Estimated noise standard deviation. Higher values apply stronger denoising.
 
 **Guidelines for sigma_random:**
 
@@ -63,18 +63,30 @@ Block Matching Parameters
      - Size of patches for block matching. Use 7 or 8 for best results.
    * - ``step_size``
      - ``4``
-     - Stride for patch extraction. Lower = better quality but slower.
+     - Stride between reference patches. Lower values can improve quality but take longer.
+       It must not exceed ``patch_size``, or pixels between the patches would
+       stay unfiltered; a larger value raises ``ValueError``.
    * - ``search_window``
      - ``24``
      - Maximum search distance for finding similar patches.
    * - ``max_matches``
      - ``16``
      - Maximum number of similar patches per 3D group.
+   * - ``search_step``
+     - ``None``
+     - Stride between candidate positions in the block-matching search.
+       ``None`` uses 1 (every position) in generic mode and ``step_size`` in
+       streak and multiscale modes.
 
 **Quality vs Speed Tradeoffs:**
 
 - Faster processing: ``step_size=6-8``, ``max_matches=8``
 - Higher quality: ``step_size=2-3``, ``max_matches=32``
+- Generic mode searches every position by default. At the default
+  ``search_window`` this takes 2 to 3 times as long as a search with
+  ``step_size``, and more with a larger window (about 5 to 6 times at
+  ``search_window=64``). Generic mode used to search with ``step_size``;
+  ``search_step=step_size`` restores that output and speed.
 
 Streak Mode Parameters
 ----------------------
@@ -96,13 +108,15 @@ These parameters only apply when ``mode="streak"``:
      - Number of iterations for robust streak estimation.
    * - ``sigma_map_smoothing``
      - ``20.0``
-     - Sigma for smoothing the spatially-varying noise map.
+     - Smoothing width for the noise map. This map stores a local noise estimate
+       for each input position.
    * - ``streak_sigma_scale``
      - ``1.1``
      - Scale factor for streak sigma estimation.
    * - ``psd_width``
      - ``0.6``
-     - PSD Gaussian width for streak mode filtering.
+     - Gaussian width of the power spectral density (PSD) model. PSD describes
+       how noise power varies across frequencies.
 
 Advanced Parameters
 -------------------
@@ -120,10 +134,10 @@ Advanced Parameters
        ``2.7`` for single-scale BM3D and ``3.5`` for multi-scale BM3D.
    * - ``batch_size``
      - ``32``
-     - Chunk size for 3D stack processing (controls memory usage).
+     - Number of stack slices processed together. Smaller chunks use less memory.
    * - ``sigma_map``
      - ``None``
-     - Optional pre-computed sigma map for 3D processing.
+     - Optional map of local noise estimates for three-dimensional processing.
 
 Multiscale Mode (Experimental)
 ------------------------------
@@ -145,13 +159,14 @@ Multiscale Mode (Experimental)
      - Enable multi-scale BM3D for wide streaks. Only works with ``mode="streak"``.
    * - ``num_scales``
      - ``None``
-     - Override automatic scale calculation. If None, uses ``floor(log2(width/40))``.
+     - Override automatic scale selection. ``None`` uses
+       ``min(3, max(0, floor(log2(width / 40))))``.
    * - ``filter_strength``
      - ``1.0``
      - Multiplier for BM3D filtering intensity.
    * - ``debin_iterations``
      - ``30``
-     - Iterations for cubic spline debinning.
+     - Iterations used to expand each binned correction to the original width.
 
 Example Usage
 -------------

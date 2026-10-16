@@ -18,6 +18,7 @@ use ndarray::{Array1, Array2, ArrayView1, ArrayView2, s};
 
 use crate::float_trait::Bm3dFloat;
 use crate::orchestration::{Bm3dConfig, RingRemovalMode, bm3d_ring_artifact_removal};
+use crate::pipeline::check_image_size;
 
 // =============================================================================
 // Constants
@@ -1002,6 +1003,11 @@ pub fn multiscale_bm3d_streak_removal_with_plans<F: Bm3dFloat>(
     plans: &crate::pipeline::Bm3dPlans<F>,
 ) -> Result<Array2<F>, String> {
     config.validate()?;
+    // Check the input itself: the pyramid passes a scale that is too small
+    // for BM3D through unfiltered, so a too-small input would come back
+    // unfiltered instead of refused.
+    let (rows, cols) = sinogram.dim();
+    check_image_size(rows, cols, config.bm3d_config.patch_size)?;
 
     if config.log_domain_input {
         return multiscale_denoise_log_domain(sinogram, config, plans);

@@ -480,10 +480,9 @@ pub fn find_similar_patches_in_place_sum<F: Bm3dFloat>(
     };
 
     let inv_n = F::one() / F::usize_as(ph * pw);
-    if let (Some(image_data), Some(sum_data)) = (
-        image.as_slice_memory_order(),
-        integral_sum.as_slice_memory_order(),
-    ) {
+    // The fast path indexes both arrays as row-major slices, so it needs
+    // standard layout (`as_slice`); any other layout takes the fallback.
+    if let (Some(image_data), Some(sum_data)) = (image.as_slice(), integral_sum.as_slice()) {
         let sum_stride = integral_sum.dim().1;
         let image_cols = w;
         let ref_sum = get_patch_sum_strided(sum_data, sum_stride, ref_r, ref_c, ph, pw);
@@ -556,7 +555,7 @@ pub fn find_similar_patches_in_place_sum<F: Bm3dFloat>(
             }
         }
     } else {
-        // Fallback for non-contiguous views.
+        // Fallback for views not in standard layout.
         let ref_sum = get_patch_sum(integral_sum, ref_r, ref_c, ph, pw);
         for r in (search_r_start..=search_r_end).step_by(step) {
             for c in (search_c_start..=search_c_end).step_by(step) {

@@ -11,14 +11,14 @@ DEFAULT_SINGLE_SCALE_THRESHOLD = 2.7
 
 def estimate_streak_profile(sinogram, sigma_smooth=3.0, iterations=3):
     """
-    Estimate the static vertical streak profile using an iterative robust approach.
+    Estimate the vertical streak profile iteratively.
 
     This is a wrapper that calls the Rust implementation for performance.
 
     Parameters
     ----------
     sinogram : np.ndarray
-        Input 2D sinogram (H x W), dtype should be float32.
+        Two-dimensional sinogram. Values are converted to contiguous float32.
     sigma_smooth : float
         Sigma for vertical Gaussian smoothing (default 3.0).
     iterations : int
@@ -27,7 +27,7 @@ def estimate_streak_profile(sinogram, sigma_smooth=3.0, iterations=3):
     Returns
     -------
     np.ndarray
-        1D streak profile of length W.
+        Float32 streak profile of length W.
     """
     # Ensure float32 for Rust compatibility
     sinogram_f32 = np.ascontiguousarray(sinogram, dtype=np.float32)
@@ -56,82 +56,108 @@ def bm3d_ring_artifact_removal(
     debin_iterations: int = 30,
     log_domain_input: bool = False,
     progress=False,
+    search_step: int | None = None,
 ) -> np.ndarray:
     """Remove ring artifacts (streaks) from a sinogram or a stack of sinograms.
 
-    This function leverages a customized BM3D implementation optimized for streak removal.
-    It supports both 2D (single sinogram) and 3D (stack of sinograms) inputs.
+    BM3D means block-matching and three-dimensional filtering. This function
+    supports a two-dimensional sinogram or a three-dimensional stack.
 
-    For 2D inputs, the entire pipeline runs in Rust for maximum performance.
-    For 3D inputs, Python orchestrates batch processing with Rust kernels.
+    A two-dimensional input runs entirely in Rust. Python batches a
+    three-dimensional input across Rust kernels. Values are converted to
+    contiguous float32 before Rust processing.
 
     Parameters
     ----------
     sinogram : np.ndarray
-        The input data. Can be 2D (H, W) or 3D (N, H, W).
+        Input with shape ``(H, W)`` or ``(N, H, W)``.
     mode : str, optional
-        Operation mode:
-        - "generic": Standard BM3D (assume white noise).
-        - "streak": Additive Streak Removal (Residual Median) + Standard BM3D.
-        By default "streak".
+        Use ``"generic"`` for white noise. Use ``"streak"`` to estimate and
+        subtract a vertical streak profile before BM3D. Case-insensitive.
+        Default: ``"streak"``.
     sigma_random : float, optional
-        Random noise standard deviation, by default 0.1.
+        Random-noise standard deviation. Values at or below 1e-6 trigger
+        automatic estimation. Default: 0.1.
     patch_size : int, optional
-        Size of patches for block matching, by default 8.
+        Patch size for block matching. Default: 8.
     step_size : int, optional
-        Step size (stride) for patch extraction, by default 4.
+        Stride between reference patches. It must not exceed ``patch_size``,
+        or pixels between the patches would stay unfiltered. Default: 4.
     search_window : int, optional
-        Search window size for block matching, by default 24.
+        Block-matching search window. Default: 24.
     max_matches : int, optional
-        Maximum number of similar patches per group, by default 16.
+        Maximum similar patches in each group. Default: 16.
     batch_size : int, optional
-        Chunk size for 3D stack processing, by default 32.
+        Stack slices processed together. Default: 32.
     threshold : float | None, optional
-        Hard thresholding coefficient. If None, the backend default is used:
-        2.7 for single-scale BM3D and 3.5 for multi-scale BM3D.
+        Hard-threshold coefficient. ``None`` uses 2.7 for single-scale BM3D.
+        It uses 3.5 for multiscale BM3D.
     streak_sigma_smooth : float, optional
-        Sigma for smoothing in streak estimation, by default 3.0.
+        Gaussian smoothing width for streak estimation. Default: 3.0.
     streak_iterations : int, optional
-        Number of iterations for streak estimation, by default 2.
+        Streak-estimation iterations. Default: 2.
     sigma_map_smoothing : float, optional
-        Sigma for sigma map profile smoothing, by default 20.0.
+        Smoothing width for the local noise map. Default: 20.0.
     streak_sigma_scale : float, optional
-        Scale factor for streak sigma estimation, by default 1.1.
+        Multiplier for the streak noise estimate. Default: 1.1.
     psd_width : float, optional
-        PSD Gaussian width for streak mode, by default 0.6.
+        Gaussian width for the power spectral density (PSD) model. PSD
+        describes noise power across frequencies. Default: 0.6.
     sigma_map : np.ndarray | None, optional
-        Optional pre-computed sigma map (3D processing only), by default None.
+        Optional map of local noise estimates for stack processing. Default:
+        ``None``.
     multiscale : bool, optional
-        Enable multi-scale processing for handling wide streaks (default False).
+        Enable multiscale processing for wide streaks. Default: ``False``.
     num_scales : int | None, optional
-        Number of scales for multi-scale pyramid. If None, automatic.
+        Override the multiscale depth. ``None`` selects
+        ``min(3, max(0, floor(log2(width / 40))))``.
     filter_strength : float, optional
-        Filtering strength multiplier for multi-scale mode (default 1.0).
+        Multiscale filtering multiplier. Default: 1.0.
     log_domain_input : bool, optional
-        The input is already log-transformed; skip the pipeline's internal
-        log/exp so pre-logged data is not logged twice. Multiscale only.
+        Set ``True`` when multiscale input already contains logarithmic
+        attenuation values. This skips the internal logarithm and exponential.
     debin_iterations : int, optional
-        Number of debinning iterations (default 30).
+        Iterations used to expand each binned correction to its original width.
+        Default: 30.
     progress : bool or callable, optional
-        Progress reporting for 3D stack processing (default False).
-        - False: no progress reporting.
-        - True: display a tqdm progress bar (requires ``pip install tqdm``).
-        - callable(current, total): called after each slice with current/total counts.
-        Ignored silently for 2D inputs.
+        Progress reporting for stack processing. ``False`` disables reporting.
+        ``True`` displays a tqdm progress bar. Install it with the ``progress``
+        extra. A callable receives ``(current, total)`` after each slice.
+        Two-dimensional processing ignores this option. Default: ``False``.
+    search_step : int | None, optional
+        Stride between candidate positions in the block-matching search.
+        ``None`` uses 1 (every position) in ``"generic"`` mode and
+        ``step_size`` in the other modes, including multiscale. Generic mode
+        used to search with ``step_size``; ``search_step=step_size`` restores
+        that output and speed. The default generic search takes 2 to 3 times
+        as long at the default ``search_window``, and more with a larger
+        window. Default: ``None``.
 
     Returns
     -------
     np.ndarray
-        Denoised data with same shape as input.
+        Denoised data with the input shape. Two-dimensional and multiscale
+        results use float32. Three-dimensional single-scale results use the
+        input dtype.
 
     Raises
     ------
+    TypeError
+        If mode is not a str.
     ValueError
-        If multiscale=True with mode other than "streak".
+        If multiscale=True with mode other than "streak", if step_size is 0
+        or exceeds patch_size, or if search_step is 0.
     """
+    if not isinstance(mode, str):
+        raise TypeError(f"mode must be a str, got {type(mode).__name__}")
+    # The 2D bindings parse the mode case-insensitively; use the same rule for
+    # every path, so 2D and 3D resolve the same mode and per-mode defaults.
+    mode_arg = mode
+    mode = mode.lower()
+
     # Validate multiscale + mode combination
     if multiscale and mode != "streak":
-        raise ValueError(f"multiscale=True only supports mode='streak', got mode='{mode}'")
+        raise ValueError(f"multiscale=True only supports mode='streak', got mode='{mode_arg}'")
 
 
 
@@ -158,6 +184,7 @@ def bm3d_ring_artifact_removal(
                 max_matches=max_matches,
                 sigma_random=float(sigma_random),
                 log_domain_input=log_domain_input,
+                search_step=search_step,
             )
         else:
             # Single-scale BM3D
@@ -175,6 +202,7 @@ def bm3d_ring_artifact_removal(
                 sigma_map_smoothing=sigma_map_smoothing,
                 streak_sigma_scale=streak_sigma_scale,
                 psd_width=psd_width,
+                search_step=search_step,
             )
 
     # =========================================================================
@@ -228,6 +256,7 @@ def bm3d_ring_artifact_removal(
                     max_matches=max_matches,
                     sigma_random=float(sigma_random),
                     log_domain_input=log_domain_input,
+                    search_step=search_step,
                 )
                 if _progress_bar is not None:
                     _progress_bar.update(1)
@@ -237,6 +266,11 @@ def bm3d_ring_artifact_removal(
             if _progress_bar is not None:
                 _progress_bar.close()
         return output_result
+
+    # The stack kernels do not know the mode; resolve the per-mode default
+    # here, as Bm3dConfig does for 2D input.
+    if search_step is None:
+        search_step = 1 if mode == "generic" else step_size
 
     # 1. Global Stats (Min/Max)
     d_min = float(sinogram.min())
@@ -327,6 +361,7 @@ def bm3d_ring_artifact_removal(
                 step_size,
                 search_window,
                 max_matches,
+                search_step=search_step,
             )
 
             # Build per-batch Rust progress callback for the Wiener pass
@@ -350,6 +385,7 @@ def bm3d_ring_artifact_removal(
                 search_window,
                 max_matches,
                 progress_callback=_rust_cb,
+                search_step=search_step,
             )
 
             # 5. Denormalize and Store

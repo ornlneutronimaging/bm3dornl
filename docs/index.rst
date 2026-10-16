@@ -1,20 +1,20 @@
 BM3D ORNL Documentation
 ========================
 
-A high-performance BM3D denoising library for neutron imaging, optimized for streak/ring artifact removal from sinograms.
+BM3DORNL removes streak and ring artifacts from neutron-imaging sinograms.
 
 Features
 --------
 
-- **Streak/Ring Artifact Removal**: Specialized mode for removing vertical streak artifacts common in neutron and X-ray imaging
-- **Stack Processing**: Efficient batched processing of 3D sinogram stacks
-- **High Performance**: Rust backend with optimized block matching and transforms
-- **GUI Application**: Interactive application for processing HDF5 tomography data
+- **Streak removal:** Streak mode removes vertical detector artifacts.
+- **Stack processing:** Batch three-dimensional sinogram stacks.
+- **Rust backend:** Accelerate block matching and transforms.
+- **GUI application:** Process HDF5 tomography data interactively.
 
 Installation
 ------------
 
-**Using pip**
+Use pip for published packages:
 
 .. code-block:: bash
 
@@ -23,6 +23,10 @@ Installation
 
     # With GUI application
     pip install bm3dornl[gui]
+
+For a clone, use Pixi. Follow the README's
+`How to install <https://github.com/ornlneutronimaging/bm3dornl#how-to-install>`_
+section.
 
 **Supported Platforms**
 
