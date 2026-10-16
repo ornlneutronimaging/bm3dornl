@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.12.0 - 2026-10-15
 
 ### Changed
 
@@ -81,6 +81,17 @@
   gives the C-order output exactly. In the Rust core, the fast paths take
   only standard-layout arrays; other layouts take the indexed path, which
   agrees with the standard-layout result to rounding.
+
+### Documentation
+
+- The README DOI badge now points at the Zenodo concept DOI (#162).
+
+### Internal
+
+- CI action updates raised `softprops/action-gh-release` from 3.0.2 to 3.0.3,
+  `prefix-dev/setup-pixi` from 0.10.2 to 0.11.0, `actions/download-artifact`
+  from 8.0.1 to 8.0.2 and `actions/upload-artifact` from 7.0.1 to 7.0.2
+  (#161, #170, #171, #172).
 
 ## 0.11.0 - 2026-09-03
 
