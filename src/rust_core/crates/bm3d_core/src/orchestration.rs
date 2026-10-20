@@ -1,3 +1,5 @@
+//! BM3D ring artifact removal pipeline for 2D sinograms.
+
 use ndarray::{Array1, Array2, ArrayView1, ArrayView2};
 use std::time::Instant;
 
@@ -46,10 +48,10 @@ const PROFILE_TIMING_ENV: &str = "BM3D_PROFILE_TIMING";
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum RingRemovalMode {
     /// Standard BM3D assuming white noise.
+    ///
     /// No streak pre-subtraction, uses scalar PSD.
     Generic,
     /// Streak pre-subtraction + anisotropic PSD.
-    /// Designed for ring artifact removal in sinograms.
     #[default]
     Streak,
     MultiscaleStreak,
@@ -72,6 +74,10 @@ pub struct Bm3dConfig<F: Bm3dFloat> {
     pub search_window: usize,
     /// Maximum similar patches per group. Default: 16
     pub max_matches: usize,
+    /// Stride between candidate positions in the block-matching search.
+    ///
+    /// `None` uses 1 (every position) in generic mode and `step_size` in the
+    /// other modes, including each scale of multiscale processing. Default: None
     pub search_step: Option<usize>,
     /// Hard thresholding coefficient. Default: 2.7
     pub threshold: F,
@@ -90,7 +96,8 @@ pub struct Bm3dConfig<F: Bm3dFloat> {
     pub fft_alpha: F,
     /// FFT-Guided SVD: Gaussian notch width. Default: 2.0
     pub notch_width: F,
-    /// Optional per-call override for 8x8 Hadamard fast path.
+    /// Per-call override for 8x8 Hadamard fast path.
+    ///
     /// `Some(true/false)` takes precedence over env/global defaults.
     pub use_hadamard_fast_path: Option<bool>,
 }
@@ -277,6 +284,7 @@ fn subtract_streak_profile<F: Bm3dFloat>(
     }
 }
 
+/// BM3D ring artifact removal with pre-computed FFT plans.
 pub fn bm3d_ring_artifact_removal_with_plans<F: Bm3dFloat>(
     sinogram: ArrayView2<F>,
     mode: RingRemovalMode,
@@ -465,6 +473,22 @@ pub(crate) fn bm3d_ring_artifact_removal_with_psd<F: Bm3dFloat>(
     Ok(output)
 }
 
+/// BM3D ring artifact removal for 2D sinograms.
+///
+/// # Returns
+///
+/// Denoised sinogram with same shape as input.
+///
+/// # Example
+///
+/// ```
+/// use bm3d_core::{bm3d_ring_artifact_removal, RingRemovalMode, Bm3dConfig};
+/// use ndarray::Array2;
+/// let sinogram = Array2::<f32>::zeros((64, 64));
+/// let config = Bm3dConfig::default();
+/// let result = bm3d_ring_artifact_removal(sinogram.view(), RingRemovalMode::Generic, &config);
+/// assert!(result.is_ok());
+/// ```
 pub fn bm3d_ring_artifact_removal<F: Bm3dFloat>(
     sinogram: ArrayView2<F>,
     mode: RingRemovalMode,

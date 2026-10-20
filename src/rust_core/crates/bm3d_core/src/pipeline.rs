@@ -42,8 +42,8 @@ const HADAMARD_PATCH_SIZE: usize = 8;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Bm3dMode {
     /// Hard thresholding: zeroes coefficients below threshold.
-    /// Used as the first pass to get an initial estimate.
     HardThreshold,
+    /// Wiener filtering: applies linear filter using pilot estimate.
     Wiener,
 }
 
@@ -57,10 +57,12 @@ pub struct Bm3dKernelConfig<F: Bm3dFloat> {
     pub step_size: usize,
     pub search_window: usize,
     pub max_matches: usize,
-    /// Stride between candidate positions in the block-matching search
-    /// window. 1 tests every position.
+    /// Stride between candidate positions in the block-matching search window.
+    ///
+    /// 1 tests every position.
     pub search_step: usize,
     /// Optional per-call override for 8x8 Hadamard fast path.
+    ///
     /// `Some(true/false)` takes precedence over env/global defaults.
     pub use_hadamard_fast_path: Option<bool>,
 }
@@ -74,6 +76,7 @@ fn reference_positions(extent: usize, patch_size: usize, step_size: usize) -> Ve
     positions
 }
 
+/// Refuse an image smaller than the patch in either dimension.
 pub fn check_image_size(rows: usize, cols: usize, patch_size: usize) -> Result<(), String> {
     if rows < patch_size || cols < patch_size {
         return Err(format!(
@@ -107,6 +110,7 @@ fn check_kernel_strides<F: Bm3dFloat>(config: &Bm3dKernelConfig<F>) -> Result<()
     Ok(())
 }
 
+/// Pre-computed FFT plans.
 pub struct Bm3dPlans<F: Bm3dFloat> {
     fft_2d_row: Arc<dyn Fft<F>>,
     fft_2d_col: Arc<dyn Fft<F>>,
@@ -2001,6 +2005,11 @@ pub fn run_bm3d_step<F: Bm3dFloat>(
     ))
 }
 
+/// Run BM3D step on a 3D stack of images.
+///
+/// An optional `progress_fn` callback is invoked after each slice with
+/// `(completed, total)` counts. If the callback returns `Err`, the loop
+/// aborts and the error is propagated.
 pub fn run_bm3d_step_stack<F: Bm3dFloat>(
     input_noisy: ArrayView3<F>,
     input_pilot: ArrayView3<F>,

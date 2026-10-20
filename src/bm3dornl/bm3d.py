@@ -57,12 +57,7 @@ def bm3d_ring_artifact_removal(
 ) -> np.ndarray:
     """Remove ring artifacts (streaks) from a sinogram or a stack of sinograms.
 
-    BM3D means block-matching and three-dimensional filtering. This function
-    supports a two-dimensional sinogram or a three-dimensional stack.
-
-    A two-dimensional input runs entirely in Rust. Python batches a
-    three-dimensional input across Rust kernels. Values are converted to
-    contiguous float32 before Rust processing.
+    Values are converted to contiguous float32 before Rust processing.
 
     Parameters
     ----------
@@ -77,8 +72,8 @@ def bm3d_ring_artifact_removal(
     patch_size : int, optional
         Patch size for block matching. Default: 8.
     step_size : int, optional
-        Stride between reference patches. It must not exceed ``patch_size``,
-        or pixels between the patches would stay unfiltered. Default: 4.
+        Stride between reference patches. It must not exceed ``patch_size``.
+        Default: 4.
     search_window : int, optional
         Block-matching search window. Default: 24.
     max_matches : int, optional
@@ -97,8 +92,8 @@ def bm3d_ring_artifact_removal(
     streak_sigma_scale : float, optional
         Multiplier for the streak noise estimate. Default: 1.1.
     psd_width : float, optional
-        Gaussian width for the power spectral density (PSD) model. PSD
-        describes noise power across frequencies. Default: 0.6.
+        Gaussian width for the power spectral density (PSD) model.
+        Default: 0.6.
     sigma_map : np.ndarray | None, optional
         Optional map of local noise estimates for stack processing. Default:
         ``None``.
@@ -119,7 +114,7 @@ def bm3d_ring_artifact_removal(
         Progress reporting for stack processing. ``False`` disables reporting.
         ``True`` displays a tqdm progress bar. Install it with the ``progress``
         extra. A callable receives ``(current, total)`` after each slice.
-        Two-dimensional processing ignores this option. Default: ``False``.
+        Default: ``False``.
     search_step : int | None, optional
         Stride between candidate positions in the block-matching search.
         ``None`` uses 1 (every position) in ``"generic"`` mode and

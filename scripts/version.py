@@ -2,13 +2,6 @@
 """Version management script for bm3dornl.
 
 Single source of truth: src/rust_core/Cargo.toml [workspace.package].version
-
-Usage:
-    python scripts/version.py show     # Display current version
-    python scripts/version.py sync     # Sync version to all Python files
-    python scripts/version.py patch    # Bump patch: 0.6.4 -> 0.6.5
-    python scripts/version.py minor    # Bump minor: 0.6.4 -> 0.7.0
-    python scripts/version.py major    # Bump major: 0.6.4 -> 1.0.0
 """
 
 import re

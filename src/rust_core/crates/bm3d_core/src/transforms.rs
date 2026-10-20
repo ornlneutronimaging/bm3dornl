@@ -25,6 +25,7 @@ fn transpose_square_copy<T: Copy>(src: &[T], dst: &mut [T], n: usize) {
 }
 
 /// Compute 2D FFT using pre-computed plans.
+///
 /// Returns unnormalized FFT.
 pub fn fft2d<F: Bm3dFloat>(
     input: ArrayView2<F>,
@@ -46,6 +47,11 @@ pub fn fft2d<F: Bm3dFloat>(
     output
 }
 
+/// Compute 2D FFT into pre-allocated buffers.
+///
+/// - `work_complex` must have shape `(rows, cols)` matching `input`.
+/// - `output` must have shape `(rows, cols)` matching `input`.
+/// - `scratch` length must be at least `max(rows, cols)`.
 pub fn fft2d_into<F: Bm3dFloat>(
     input: ArrayView2<F>,
     fft_row_plan: &Arc<dyn Fft<F>>,
@@ -193,6 +199,7 @@ pub fn fft2d_into_with_plan_scratch<F: Bm3dFloat>(
 }
 
 /// Compute 2D Inverse FFT using pre-computed plans.
+///
 /// Normalizes by 1/(rows*cols).
 pub fn ifft2d<F: Bm3dFloat>(
     input: &Array2<Complex<F>>,
@@ -203,6 +210,7 @@ pub fn ifft2d<F: Bm3dFloat>(
 }
 
 /// Compute 2D Inverse FFT from a complex view.
+///
 /// Normalizes by 1/(rows*cols).
 pub fn ifft2d_view<F: Bm3dFloat>(
     input: ArrayView2<Complex<F>>,
@@ -261,6 +269,11 @@ pub fn ifft2d_view<F: Bm3dFloat>(
     output
 }
 
+/// Compute 2D Inverse FFT into pre-allocated buffers.
+///
+/// - `work_complex` must have shape `(rows, cols)` matching `input`.
+/// - `output` must have shape `(rows, cols)` matching `input`.
+/// - `scratch` length must be at least `max(rows, cols)`.
 pub fn ifft2d_into<F: Bm3dFloat>(
     input: ArrayView2<Complex<F>>,
     ifft_row_plan: &Arc<dyn Fft<F>>,
@@ -413,6 +426,9 @@ pub fn ifft2d_into_with_plan_scratch<F: Bm3dFloat>(
     }
 }
 
+/// Compute 2D inverse FFT in-place on complex input, writing real output.
+///
+/// The complex input is overwritten.
 pub fn ifft2d_inplace_to_real_with_plan_scratch<F: Bm3dFloat>(
     mut input_output: ArrayViewMut2<Complex<F>>,
     ifft_row_plan: &Arc<dyn Fft<F>>,
@@ -566,7 +582,9 @@ fn fwht8<F: Bm3dFloat>(buf: &mut [F; 8]) {
     buf[3] = t3;
 }
 
-/// 2D WHT for 8x8 patch. Returns Complex (im=0).
+/// 2D WHT for 8x8 patch.
+///
+/// Returns Complex (im=0).
 pub fn wht2d_8x8_forward<F: Bm3dFloat>(input: ArrayView2<F>) -> Array2<Complex<F>> {
     let mut output = Array2::<Complex<F>>::zeros((8, 8));
     wht2d_8x8_forward_into_view(input, output.view_mut());

@@ -1,22 +1,5 @@
-"""Bias acceptance for the candidate-search stride in generic mode.
-
-BM3D (Dabov et al. 2007; Lebrun 2012) searches every position in the window
-and applies the step only to the reference patches.
-
-The acceptance bound: in generic mode, the default search at
-``step_size=4`` keeps at most 10% more bias than ``step_size=1`` (where the
-reference grid and the search are both dense).
-
-The bound is checked on both public paths. The 2D path filters each draw on
-its own and runs entirely in Rust. The 3D path filters all draws as one
-stack: Python normalises the stack and calls the hard-thresholding and the
-Wiener stack kernels, so each of those two calls must get the search stride.
-
-Bias is the noise-corrected estimate over independent noise draws:
-``sqrt(max(0, mean((m - truth)^2) - mean(var) / N))``, where ``m`` and
-``var`` are the per-pixel mean and variance over the ``N`` outputs. The
-subtraction removes the residual noise of the mean, so more draws do not
-change the expected value.
+"""In generic mode, the default search at ``step_size=4`` keeps at most 10%
+more bias than ``step_size=1``.
 """
 
 import numpy as np

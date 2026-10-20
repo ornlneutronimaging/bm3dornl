@@ -1,14 +1,7 @@
 """Input arrays in any memory layout give the C-order result.
 
-Every entry point must return, for the same values in any layout, exactly
-the output of a C-contiguous input: the bindings convert the input to
-standard layout, so the same Rust code runs on the same data. The outputs
-are compared bit for bit, within one process, so at the same thread count.
-
-Layouts: Fortran order, the transpose of a C array, a negative-stride view
-(``arr[..., ::-1]`` of a C array) and every second column of a wider array.
-For stacks also a one-slice Fortran-order stack and a two-slice stack whose
-slices are F-contiguous.
+The bindings convert the input to standard layout. The outputs are compared
+bit for bit within one process.
 """
 
 import numpy as np

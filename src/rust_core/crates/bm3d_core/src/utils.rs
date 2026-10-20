@@ -1,6 +1,7 @@
 use crate::float_trait::Bm3dFloat;
 use ndarray::ArrayView1;
 
+/// Compute 1D median filter with replication padding.
 pub fn compute_1d_median_filter<F: Bm3dFloat>(input: &[F], window_size: usize) -> Vec<F> {
     let n = input.len();
     let radius = window_size / 2;

@@ -18,14 +18,10 @@ def estimate_noise_sigma(sinogram: np.ndarray) -> float:
     """
     Estimate the amplitude of vertical streak noise in a sinogram.
 
-    The estimator first smooths vertically with a Gaussian width of ``height / 12``. This
-    preserves streaks while suppressing pixel noise. A Daubechies-3 high-pass
-    filter then isolates changes between columns.
-
-    The result is 1.4826 times the median absolute deviation (MAD). MAD is the
-    median distance from the filtered values' median. The result measures vertical
-    streak amplitude, not pixel-level standard deviation. Vertical smoothing
-    removes most independent pixel noise.
+    This implements the estimator from Mäkinen et al. (2021). It smooths
+    vertically with a Gaussian width of ``height / 12``. A Daubechies-3
+    high-pass filter then isolates changes between columns. The result is
+    1.4826 times the median absolute deviation (MAD).
 
     Parameters
     ----------

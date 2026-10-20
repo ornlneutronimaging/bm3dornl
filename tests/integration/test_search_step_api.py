@@ -1,12 +1,9 @@
 """The ``search_step`` keyword: per-mode default and validation.
 
-``step_size`` spaces the reference patches; ``search_step`` spaces the
-candidate positions that block matching tests around each reference.
 ``search_step=None`` resolves per mode: every position (1) in generic mode
-and ``step_size`` in streak, multiscale and Fourier-SVD mode. An explicit
-value is used as given. The low-level kernel bindings do not know the mode,
-so there ``None`` means ``step_size``. Every entry point rejects 0 with a
-ValueError.
+and ``step_size`` in streak, multiscale and Fourier-SVD mode. The low-level
+kernel bindings do not know the mode, so there ``None`` means ``step_size``.
+Every entry point rejects 0 with a ValueError.
 """
 
 import inspect

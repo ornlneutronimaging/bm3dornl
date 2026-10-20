@@ -3,13 +3,9 @@
 //! The same holds for the public module functions `transforms::fft2d_into`,
 //! `transforms::ifft2d_into`,
 //! `transforms::ifft2d_inplace_to_real_with_plan_scratch` and
-//! `block_matching::find_similar_patches_in_place_sum`.
-//!
-//! A non-standard input may take the indexed path instead of a slice fast
-//! path. The two paths add in a different order, so their results agree to
-//! rounding, not bit for bit. The check is max |got - want| <= tolerance *
-//! max |want|, with tolerance 1e-3 (f32) and 1e-12 (f64). In block matching
-//! the positions must be the same, and the distances agree to rounding.
+//! `block_matching::find_similar_patches_in_place_sum`. Results agree to
+//! rounding, not bit for bit. In block matching the positions must be the
+//! same.
 
 use std::fmt::Debug;
 

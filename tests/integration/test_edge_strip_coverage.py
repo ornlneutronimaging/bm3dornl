@@ -1,13 +1,4 @@
-"""Every output pixel is filtered.
-
-The impulse gain d(out)/d(in) at one pixel shows this directly. An
-unfiltered pixel passes an impulse through with gain 1.000. A filtered pixel
-spreads it over the patches of its groups and keeps a small part of it.
-
-The public API computes in float32. The float64 kernels are checked through
-the f64 bindings: ``bm3d_ring_artifact_removal_2d_f64`` for 2D, and the f64 stack
-kernels (hard thresholding, then Wiener on that pilot) for 3D.
-"""
+"""Every output pixel is filtered."""
 
 import numpy as np
 import pytest

@@ -229,6 +229,9 @@ fn blur_cols<F: Bm3dFloat>(input: ArrayView2<F>, sigma: F) -> Array2<F> {
     output
 }
 
+/// Apply 2D Gaussian blur with separate sigma for each axis.
+///
+/// sigma_y is applied along axis 0, sigma_x along axis 1.
 pub fn gaussian_blur_2d<F: Bm3dFloat>(input: ArrayView2<F>, sigma_y: F, sigma_x: F) -> Array2<F> {
     let blurred_x = blur_rows(input, sigma_x);
     blur_cols(blurred_x.view(), sigma_y)
@@ -287,6 +290,15 @@ pub fn median_axis0<F: Bm3dFloat>(input: ArrayView2<F>) -> Array1<F> {
     output
 }
 
+/// Estimate the static vertical streak profile.
+///
+/// # Arguments
+/// * `sinogram` - Input 2D sinogram (H x W)
+/// * `sigma_smooth` - Sigma for vertical smoothing
+/// * `iterations` - Number of refinement iterations
+///
+/// # Returns
+/// 1D streak profile of length W
 pub fn estimate_streak_profile_impl<F: Bm3dFloat>(
     sinogram: ArrayView2<F>,
     sigma_smooth: F,

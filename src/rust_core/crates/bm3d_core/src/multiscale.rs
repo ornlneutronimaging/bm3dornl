@@ -4,12 +4,7 @@
 //! Mäkinen, Y., Marchesini, S., Foi, A., 2021,
 //! "Ring artifact reduction via multiscale nonlocal collaborative filtering
 //! of spatially correlated noise"
-//! J. Synchrotron Rad. 28(3). DOI: http://doi.org/10.1107/S1600577521001910
-//!
-//! The algorithm works by:
-//! 1. Building a horizontal pyramid via sum-convolution binning
-//! 2. Processing coarse-to-fine, propagating denoised residuals
-//! 3. Using cubic spline interpolation for debinning
+//! J. Synchrotron Rad. 28(3). DOI: <http://doi.org/10.1107/S1600577521001910>
 
 use crate::utils::compute_1d_median_filter;
 use ndarray::{Array1, Array2, ArrayView1, ArrayView2, s};
@@ -40,6 +35,10 @@ pub struct MultiscaleConfig<F: Bm3dFloat> {
     pub threshold: F,
     /// Iterations for cubic spline debinning. Default: 30
     pub debin_iterations: usize,
+    /// The input is already log-transformed. Default: false.
+    ///
+    /// With this flag false the pipeline takes the logarithm itself — flooring
+    /// at the input's own smallest positive value — and exponentiates the result back.
     pub log_domain_input: bool,
     /// Inner BM3D config (patch_size, search_window, etc.)
     pub bm3d_config: Bm3dConfig<F>,
@@ -677,6 +676,28 @@ fn compute_mad_internal<F: Bm3dFloat>(data: ArrayView2<F>) -> F {
     }
 }
 
+/// Wraps single-scale BM3D in a coarse-to-fine pyramid for handling wide streaks.
+///
+/// # Arguments
+///
+/// * `sinogram` - Input 2D sinogram (H × W), linear transmission data. The
+///   pipeline log-transforms internally (see
+///   [`MultiscaleConfig::log_domain_input`] to pass pre-logged data instead).
+///
+/// # Returns
+///
+/// Denoised sinogram with same shape as input.
+///
+/// # Example
+///
+/// ```
+/// use bm3d_core::{multiscale_bm3d_streak_removal, MultiscaleConfig};
+/// use ndarray::Array2;
+/// let sinogram = Array2::<f32>::zeros((64, 128));
+/// let config = MultiscaleConfig::default();
+/// let result = multiscale_bm3d_streak_removal(sinogram.view(), &config);
+/// assert!(result.is_ok());
+/// ```
 pub fn multiscale_bm3d_streak_removal<F: Bm3dFloat>(
     sinogram: ArrayView2<F>,
     config: &MultiscaleConfig<F>,

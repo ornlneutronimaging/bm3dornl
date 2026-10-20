@@ -1,7 +1,7 @@
 //! Images smaller than `patch_size`.
 //!
 //! `bm3d_ring_artifact_removal` refuses such an image with "Image size
-//! (rows, cols) is smaller than patch_size p". The kernel entry points
+//! (rows, cols) is smaller than patch_size p".
 //! `run_bm3d_step` and `run_bm3d_step_stack` must return the same error.
 //! Multiscale processing must return it too. An image exactly `patch_size` in
 //! a dimension is valid.

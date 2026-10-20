@@ -1,21 +1,4 @@
-//! # Fourier-SVD Streak Removal
-//!
-//! A two-stage algorithm for removing vertical streak artifacts from sinograms:
-//!
-//! ## Stage 1: FFT-Guided Energy Detection
-//! - Apply FFT and isolate vertical frequencies (Fy ≈ 0) using Gaussian notch filter
-//! - Compute per-column energy profile from isolated streak spectrum
-//! - Use energy profile to spatially modulate removal threshold
-//!
-//! ## Stage 2: Rank-1 SVD with Magnitude Gating
-//! - Extract first principal component via power iteration
-//! - Median filter the v-vector to separate baseline from streak detail
-//! - Apply soft magnitude gating: `1 / (1 + (|v| / threshold)^exponent)`
-//! - Reconstruct streak as rank-1 outer product and subtract from input
-//!
-//! ## Parameters
-//! - `fft_alpha`: Controls FFT energy influence on threshold modulation (default: 1.0)
-//! - `notch_width`: Gaussian notch filter width in frequency domain (default: 2.0)
+//! Algorithm for removing vertical streak artifacts from sinograms.
 
 use crate::float_trait::Bm3dFloat;
 use crate::transforms;

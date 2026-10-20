@@ -35,8 +35,7 @@ def fourier_svd_removal(
         that energy influence the removal threshold more strongly. Set 0.0 to
         use fixed thresholds. Default: 1.0.
     notch_width : float, optional
-        Gaussian notch width in frequency bins. Larger values include more
-        frequencies away from the vertical axis. Default: 2.0.
+        Gaussian notch width in frequency bins. Default: 2.0.
 
     Returns
     -------

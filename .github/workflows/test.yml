@@ -64,6 +64,15 @@ jobs:
         working-directory: src/rust_core
         run: cargo clippy --workspace --all-targets -- -D warnings
 
+  doc-lint:
+    name: Doc Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Check doc comments, docstrings, and comments
+        run: python3 scripts/doc_lint.py
+
   python-test:
     name: Python Tests
     runs-on: ubuntu-latest

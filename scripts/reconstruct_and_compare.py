@@ -1,18 +1,5 @@
 #!/usr/bin/env python3
-"""Process sinograms with streak mode BM3D, reconstruct via FBP, and save images.
-
-Produces side-by-side comparison of:
-  - Raw (no ring removal) FBP reconstruction
-  - SVD ring removal FBP reconstruction
-  - Streak mode ring removal FBP reconstruction
-
-Output images are saved to output_recon/ for visual inspection.
-
-Usage:
-    pixi run python scripts/reconstruct_and_compare.py
-    pixi run python scripts/reconstruct_and_compare.py --slice 0140
-    pixi run python scripts/reconstruct_and_compare.py --center 2100 --angles 180
-"""
+"""Process sinograms with streak mode BM3D, reconstruct via FBP, and save images."""
 
 import argparse
 import sys

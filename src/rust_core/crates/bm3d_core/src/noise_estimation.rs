@@ -44,6 +44,9 @@ fn sample_columns_evenly<F: Bm3dFloat>(data: ArrayView2<F>, sample_cols: usize) 
     })
 }
 
+/// Estimate the standard deviation of vertical streak noise (MAD-based).
+///
+/// The result is the vertical-streak amplitude, not the pixel-level standard deviation.
 pub fn estimate_noise_sigma<F: Bm3dFloat>(sinogram: ArrayView2<F>) -> F {
     let (_rows, cols) = sinogram.dim();
     let sampled_storage = match resolve_sigma_est_max_columns() {
