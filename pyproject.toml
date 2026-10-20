@@ -20,10 +20,6 @@ documentation = "https://bm3dornl.readthedocs.io/en/latest/"
 issues = "https://github.com/ornlneutronimaging/bm3dornl/issues"
 
 [project.optional-dependencies]
-# The GUI is a separately published binary wheel (bm3dornl-gui, built from
-# src/rust_core/crates/bm3d_gui_egui on release tags). This extra installs that
-# released binary; it does not build the GUI in a source checkout. From a
-# checkout, run the GUI with `pixi run gui`.
 gui = ["bm3dornl-gui==0.12.0"]
 progress = ["tqdm"]
 
@@ -78,7 +74,8 @@ test-python = "pytest"
 test = { depends-on = ["test-rust", "test-python"] }
 lint-fmt = { cmd = "cargo fmt --all --check", cwd = "src/rust_core" }
 lint-clippy = { cmd = "cargo clippy --workspace --all-targets -- -D warnings", cwd = "src/rust_core" }
-lint = { depends-on = ["lint-fmt", "lint-clippy"] }
+lint-docs = "python scripts/doc_lint.py"
+lint = { depends-on = ["lint-fmt", "lint-clippy", "lint-docs"] }
 bench = "python benchmarks/measure_stack_speed.py"
 bench-rust = { cmd = "cargo bench -p bm3d_core", cwd = "src/rust_core" }
 clean = "cargo clean --manifest-path src/rust_core/Cargo.toml"

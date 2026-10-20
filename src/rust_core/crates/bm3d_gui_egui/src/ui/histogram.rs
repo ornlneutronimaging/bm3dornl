@@ -578,10 +578,9 @@ impl CompareViewHistogram {
             self.cached_roi = roi.copied();
         }
 
-        let plot_height = 120.0; // Increased to accommodate legend
+        let plot_height = 120.0;
         height_used += plot_height + 45.0; // Plot + stats
 
-        // Determine if we need twin axis display
         let show_main = self.show_original || self.show_processed;
         let show_diff = self.show_difference && self.cached_difference.is_some();
 

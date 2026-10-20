@@ -13,7 +13,7 @@ def estimate_streak_profile(sinogram, sigma_smooth=3.0, iterations=3):
     """
     Estimate the vertical streak profile iteratively.
 
-    This is a wrapper that calls the Rust implementation for performance.
+    This is a wrapper that calls the Rust implementation.
 
     Parameters
     ----------
@@ -81,8 +81,8 @@ def bm3d_ring_artifact_removal(
     patch_size : int, optional
         Patch size for block matching. Default: 8.
     step_size : int, optional
-        Stride between reference patches. It must not exceed ``patch_size``,
-        or pixels between the patches would stay unfiltered. Default: 4.
+        Stride between reference patches. It must not exceed ``patch_size``.
+        Default: 4.
     search_window : int, optional
         Block-matching search window. Default: 24.
     max_matches : int, optional
@@ -127,11 +127,8 @@ def bm3d_ring_artifact_removal(
     search_step : int | None, optional
         Stride between candidate positions in the block-matching search.
         ``None`` uses 1 (every position) in ``"generic"`` mode and
-        ``step_size`` in the other modes, including multiscale. Generic mode
-        used to search with ``step_size``; ``search_step=step_size`` restores
-        that output and speed. The default generic search takes 2 to 3 times
-        as long at the default ``search_window``, and more with a larger
-        window. Default: ``None``.
+        ``step_size`` in the other modes, including multiscale.
+        Default: ``None``.
 
     Returns
     -------
@@ -150,23 +147,21 @@ def bm3d_ring_artifact_removal(
     """
     if not isinstance(mode, str):
         raise TypeError(f"mode must be a str, got {type(mode).__name__}")
-    # The 2D bindings parse the mode case-insensitively; use the same rule for
-    # every path, so 2D and 3D resolve the same mode and per-mode defaults.
     mode_arg = mode
     mode = mode.lower()
 
     # Validate multiscale + mode combination
     if multiscale and mode != "streak":
-        raise ValueError(f"multiscale=True only supports mode='streak', got mode='{mode_arg}'")
-
-
+        raise ValueError(
+            f"multiscale=True only supports mode='streak', got mode='{mode_arg}'"
+        )
 
     # Check Dimension
     is_stack = sinogram.ndim == 3
 
     if not is_stack:
         # =====================================================================
-        # 2D Case: Use unified Rust implementation
+        # 2D Case: Rust implementation
         # =====================================================================
         sinogram_f32 = np.ascontiguousarray(sinogram, dtype=np.float32)
 
@@ -267,8 +262,6 @@ def bm3d_ring_artifact_removal(
                 _progress_bar.close()
         return output_result
 
-    # The stack kernels do not know the mode; resolve the per-mode default
-    # here, as Bm3dConfig does for 2D input.
     if search_step is None:
         search_step = 1 if mode == "generic" else step_size
 
@@ -278,7 +271,9 @@ def bm3d_ring_artifact_removal(
 
     # --- Spatially Adaptive BM3D Setup Helpers ---
     def compute_slice_map(slice_img):
-        streak_profile_rough = estimate_streak_profile(slice_img, sigma_smooth=5.0, iterations=1)
+        streak_profile_rough = estimate_streak_profile(
+            slice_img, sigma_smooth=5.0, iterations=1
+        )
         profile_smooth = gaussian_filter1d(streak_profile_rough, sigma_map_smoothing)
         streak_signal = streak_profile_rough - profile_smooth
         sigma_streak_1d = np.abs(streak_signal).astype(np.float32)
@@ -309,7 +304,7 @@ def bm3d_ring_artifact_removal(
         if sigma_map_full.ndim != 3:
             raise ValueError("sigma_map must be 3D for stack input")
 
-    # Create tqdm bar for batch path (after validation so bar is not leaked on error)
+    # Create tqdm bar for batch path (after validation)
     if _use_tqdm:
         _progress_bar = tqdm(total=n_slices, desc="BM3D", unit="slice")
 
@@ -367,11 +362,15 @@ def bm3d_ring_artifact_removal(
             # Build per-batch Rust progress callback for the Wiener pass
             _rust_cb = None
             if _progress_bar is not None:
+
                 def _rust_cb(current, total, _bar=_progress_bar):
                     _bar.update(1)
             elif _progress_cb is not None:
                 _batch_start = i
-                def _rust_cb(current, total, _cb=_progress_cb, _bs=_batch_start, _n=n_slices):
+
+                def _rust_cb(
+                    current, total, _cb=_progress_cb, _bs=_batch_start, _n=n_slices
+                ):
                     _cb(_bs + current, _n)
 
             yhat_final_chunk = bm3d_rust.bm3d_wiener_filtering_stack(
@@ -394,7 +393,7 @@ def bm3d_ring_artifact_removal(
 
             output_result[i:end] = yhat_final_chunk
 
-            # Clean up explicit large temps if Python GC is lazy
+            # Clean up large temps
             del z_chunk
             del chunk_map
             del yhat_ht

@@ -81,7 +81,7 @@ impl Colormap {
         }
     }
 
-    /// Generate a 256-entry lookup table for fast colormap application.
+    /// Generate a 256-entry lookup table for colormap application.
     pub fn generate_lut(&self) -> [[u8; 3]; 256] {
         let mut lut = [[0u8; 3]; 256];
         for (i, entry) in lut.iter_mut().enumerate() {

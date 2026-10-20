@@ -91,7 +91,7 @@ def generate_sinogram(
         input_img,
         theta=thetas_deg,
         circle=False,
-    ).T  # transpose to get the sinogram in the correct orientation for tomopy
+    ).T  # transpose to get the sinogram in the correct orientation
 
     # normalize sinogram to [0, 1]
     sinogram = (sinogram - sinogram.min()) / (sinogram.max() - sinogram.min()) + 1e-8

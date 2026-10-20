@@ -112,7 +112,7 @@ impl Volume3D {
         let slice_2d = self.data.index_axis(Axis(slice_axis), slice_index);
 
         // Determine the remaining axes after removing slice_axis
-        // We need to map original axes to the 2D slice axes
+        // Map original axes to the 2D slice axes
         let remaining_axes: Vec<usize> = (0..3).filter(|&a| a != slice_axis).collect();
 
         // Find where x_axis and y_axis are in the remaining axes
@@ -120,7 +120,7 @@ impl Volume3D {
         let y_pos = remaining_axes.iter().position(|&a| a == y_axis).unwrap();
 
         // slice_2d has shape corresponding to remaining_axes order
-        // We need output with shape (height=y_axis_size, width=x_axis_size)
+        // Output with shape (height=y_axis_size, width=x_axis_size)
         let slice_owned = slice_2d.to_owned();
 
         // If y_pos < x_pos, shape is already (y, x) - good

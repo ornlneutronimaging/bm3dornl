@@ -11,7 +11,7 @@ name = "bm3dornl-gui"
 path = "src/main.rs"
 
 # macOS app bundle configuration for cargo-bundle
-# Note: version is inherited from [package].version (which uses workspace inheritance)
+# Version is inherited from [package].version (which uses workspace inheritance)
 [package.metadata.bundle]
 name = "bm3dornl"
 identifier = "com.ornl.bm3dornl"

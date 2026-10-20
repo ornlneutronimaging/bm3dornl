@@ -1,4 +1,4 @@
-"""The ``search_step`` keyword: per-mode default and validation (issue #163).
+"""The ``search_step`` keyword: per-mode default and validation.
 
 ``step_size`` spaces the reference patches; ``search_step`` spaces the
 candidate positions that block matching tests around each reference.
@@ -33,7 +33,9 @@ def noisy_step_edges(shape, seed=7, dtype=np.float32):
 def run(image, **kwargs):
     # bm3dornl applies sigma_random to the min/max-normalised image.
     sigma_norm = SIGMA / float(image.max() - image.min())
-    return np.asarray(bm3d_ring_artifact_removal(image, sigma_random=sigma_norm, **kwargs))
+    return np.asarray(
+        bm3d_ring_artifact_removal(image, sigma_random=sigma_norm, **kwargs)
+    )
 
 
 SHAPES = {"2d": (64, 80), "3d": (2, 64, 80)}
@@ -68,7 +70,9 @@ def test_streak_default_searches_on_step_size(dim, step_size):
 def test_multiscale_default_searches_on_step_size(dim):
     image = noisy_step_edges(MULTISCALE_SHAPES[dim])
     default = run(image, mode="streak", multiscale=True)
-    assert np.array_equal(default, run(image, mode="streak", multiscale=True, search_step=4))
+    assert np.array_equal(
+        default, run(image, mode="streak", multiscale=True, search_step=4)
+    )
     assert not np.array_equal(
         default, run(image, mode="streak", multiscale=True, search_step=1)
     ), "multiscale default searches every position"
@@ -93,7 +97,8 @@ def test_streak_mode_ignores_case(dim):
 def test_multiscale_accepts_streak_mode_in_any_case(dim):
     image = noisy_step_edges(MULTISCALE_SHAPES[dim])
     assert np.array_equal(
-        run(image, mode="Streak", multiscale=True), run(image, mode="streak", multiscale=True)
+        run(image, mode="Streak", multiscale=True),
+        run(image, mode="streak", multiscale=True),
     )
 
 
@@ -124,9 +129,8 @@ def test_explicit_search_step_is_used(mode, dim):
 
 # --- 3D path: the stride each stack kernel gets ------------------------------
 #
-# The 3D path calls two stack kernels. If one call drops search_step, both
-# runs of an output comparison above use step_size in that call, so their
-# outputs stay equal. These tests read the stride of each call instead.
+# The 3D path calls two stack kernels. These tests read the stride of each
+# call.
 
 STACK_KERNELS = ("bm3d_hard_thresholding_stack", "bm3d_wiener_filtering_stack")
 
@@ -144,7 +148,9 @@ def record_stack_search_steps(monkeypatch):
         def spy(*args, _real=real, _name=name, **kwargs):
             bound = inspect.signature(_real).bind(*args, **kwargs).arguments
             search_step = bound.get("search_step")
-            seen[_name].append(bound["step_size"] if search_step is None else search_step)
+            seen[_name].append(
+                bound["step_size"] if search_step is None else search_step
+            )
             return _real(*args, **kwargs)
 
         monkeypatch.setattr(bm3d_rust, name, spy)
@@ -212,7 +218,7 @@ def test_non_positive_integer_search_step_raises(entry, bad):
 
 
 def kernel_call(name, dtype, step_size, **kwargs):
-    """Call a low-level kernel binding with positional arguments as before #163."""
+    """Call a low-level kernel binding with positional arguments."""
     fn = getattr(bm3d_rust, name)
     stack = "stack" in name
     image = noisy_step_edges((2, 64, 80) if stack else (64, 80), dtype=dtype)
@@ -237,18 +243,22 @@ KERNEL_BINDINGS = [
 ]
 
 
-@pytest.mark.parametrize("name,dtype", KERNEL_BINDINGS, ids=[b[0] for b in KERNEL_BINDINGS])
+@pytest.mark.parametrize(
+    "name,dtype", KERNEL_BINDINGS, ids=[b[0] for b in KERNEL_BINDINGS]
+)
 def test_kernel_binding_search_step_none_means_step_size(name, dtype):
-    # step_size 2 shows that None follows step_size rather than a fixed 4.
+    # step_size 2 shows that None follows step_size.
     positional = kernel_call(name, dtype, 2)
     assert np.array_equal(positional, kernel_call(name, dtype, 2, search_step=None))
     assert np.array_equal(positional, kernel_call(name, dtype, 2, search_step=2))
     assert not np.array_equal(positional, kernel_call(name, dtype, 2, search_step=1))
 
 
-@pytest.mark.parametrize("name,dtype", KERNEL_BINDINGS, ids=[b[0] for b in KERNEL_BINDINGS])
+@pytest.mark.parametrize(
+    "name,dtype", KERNEL_BINDINGS, ids=[b[0] for b in KERNEL_BINDINGS]
+)
 def test_kernel_binding_rejects_zero_search_step(name, dtype):
-    # A stride of 0 must not reach the search loop, where it would panic.
+    # A stride of 0 must not reach the search loop.
     with pytest.raises(ValueError, match="search_step"):
         kernel_call(name, dtype, 4, search_step=0)
 

@@ -1,15 +1,11 @@
-//! `Bm3dConfig::search_step`, the candidate-search stride (issue #163).
+//! `Bm3dConfig::search_step`, the candidate-search stride.
 //!
 //! `step_size` spaces the reference patches; `search_step` spaces the
 //! candidate positions that block matching tests around each reference.
 //! `None` resolves per mode: every position (1) in generic mode and
 //! `step_size` in streak mode, so also in multiscale mode, which runs streak
-//! mode at each scale. Fourier-SVD mode also keeps `step_size`, as the 3D
-//! path does for every mode other than generic. An explicit value is used as
-//! given.
-//!
-//! These tests use only the public API, so they live in an integration test
-//! target rather than in a unit-test module.
+//! mode at each scale. Fourier-SVD mode also keeps `step_size`. An explicit
+//! value is used as given.
 
 use bm3d_core::{
     Bm3dConfig, Bm3dFloat, MultiscaleConfig, RingRemovalMode, bm3d_ring_artifact_removal,

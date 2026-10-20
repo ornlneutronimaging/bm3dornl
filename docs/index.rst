@@ -8,7 +8,6 @@ Features
 
 - **Streak removal:** Streak mode removes vertical detector artifacts.
 - **Stack processing:** Batch three-dimensional sinogram stacks.
-- **Rust backend:** Accelerate block matching and transforms.
 - **GUI application:** Process HDF5 tomography data interactively.
 
 Installation

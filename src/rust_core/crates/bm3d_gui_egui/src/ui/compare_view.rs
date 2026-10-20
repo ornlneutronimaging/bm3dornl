@@ -217,7 +217,6 @@ impl CompareView {
             ));
         });
 
-        // Check if we need to update textures
         let wl_key = (window_level.min, window_level.max);
         let needs_update = self.cached_slice_index != Some(self.current_slice)
             || self.cached_colormap != Some(colormap)
@@ -245,10 +244,7 @@ impl CompareView {
             available_size.y - colorbar_height - label_height - status_bar_height - 3.0 * spacing;
 
         // Row 1: Labels, one cell per panel so each title sits centered over
-        // its image. allocate_ui only advances the cursor by the content's
-        // used size, which collapsed all three labels to the left. add_sized
-        // allocates the full cell and lays the label out in a centered-and-
-        // justified child layout, so the text lands at the cell's center.
+        // its image.
         ui.horizontal(|ui| {
             ui.add_sized(
                 egui::vec2(panel_width, label_height),
@@ -270,8 +266,6 @@ impl CompareView {
         // Clear cursor info before checking panels
         self.cursor_info.clear();
 
-        // We need to collect panel info first, then handle interactions outside the closure
-        // because handle_mouse_input needs &mut self
         let mut panel_data: Vec<(egui::Response, Option<egui::Rect>, egui::Painter)> = Vec::new();
 
         ui.horizontal(|ui| {
@@ -333,7 +327,7 @@ impl CompareView {
 
         // Handle ROI mouse interactions on the active panel
         if let (Some(response), Some(image_rect)) = (active_response, active_image_rect) {
-            // Clone the response to avoid borrow issues
+            // Clone the response
             let response_clone = response.clone();
             self.handle_mouse_input(&response_clone, image_rect, img_width, img_height);
         } else {
@@ -795,7 +789,6 @@ impl CompareView {
         // Check if Shift is held for ROI drawing mode
         let shift_held = response.ctx.input(|i| i.modifiers.shift);
 
-        // Determine if we should draw ROI: either roi_mode is ON or Shift is held
         let should_draw_roi = self.roi_mode || shift_held;
 
         // Update cursor_in_roi for visual feedback
@@ -821,7 +814,6 @@ impl CompareView {
                 && let Some((img_x, img_y)) =
                     self.screen_to_image(pointer_pos, image_rect, img_width, img_height)
             {
-                // Check if we're already in a dragging operation
                 if self.roi_state.drawing {
                     // Continue drawing ROI
                     self.roi_state.update_draw(img_x, img_y);
@@ -848,7 +840,6 @@ impl CompareView {
                         self.is_dragging = false;
                         self.last_drag_pos = None;
                     }
-                    // Note: No panning in compare view, just ignore non-ROI drags
                 }
             }
         } else {

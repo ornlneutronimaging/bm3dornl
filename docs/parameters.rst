@@ -46,7 +46,7 @@ Noise Parameters
 .. tip::
 
    Start with a low value and increase gradually. Check the difference image
-   (input - output) to ensure you're removing artifacts, not signal.
+   (input - output) to ensure you're removing artifacts.
 
 Block Matching Parameters
 -------------------------
@@ -60,12 +60,11 @@ Block Matching Parameters
      - Description
    * - ``patch_size``
      - ``8``
-     - Size of patches for block matching. Use 7 or 8 for best results.
+     - Size of patches for block matching. Use 7 or 8.
    * - ``step_size``
      - ``4``
      - Stride between reference patches. Lower values can improve quality but take longer.
-       It must not exceed ``patch_size``, or pixels between the patches would
-       stay unfiltered; a larger value raises ``ValueError``.
+       It must not exceed ``patch_size``; a larger value raises ``ValueError``.
    * - ``search_window``
      - ``24``
      - Maximum search distance for finding similar patches.
@@ -82,11 +81,7 @@ Block Matching Parameters
 
 - Faster processing: ``step_size=6-8``, ``max_matches=8``
 - Higher quality: ``step_size=2-3``, ``max_matches=32``
-- Generic mode searches every position by default. At the default
-  ``search_window`` this takes 2 to 3 times as long as a search with
-  ``step_size``, and more with a larger window (about 5 to 6 times at
-  ``search_window=64``). Generic mode used to search with ``step_size``;
-  ``search_step=step_size`` restores that output and speed.
+- Generic mode searches every position by default.
 
 Streak Mode Parameters
 ----------------------
@@ -144,8 +139,7 @@ Multiscale Mode (Experimental)
 
 .. warning::
 
-   Multiscale mode is experimental. It works well for wide ring artifacts
-   (>39 pixels) but may over-process regular sinograms.
+   Multiscale mode is experimental. It may over-process regular sinograms.
 
 .. list-table::
    :header-rows: 1

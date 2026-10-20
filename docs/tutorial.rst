@@ -183,7 +183,7 @@ Best Practices
 
 3. **Start with a low ``sigma_random``.** Increase it gradually.
 
-4. **Check the difference image.** Confirm that it contains artifacts, not signal.
+4. **Check the difference image.** Confirm that it contains artifacts.
 
 5. **Set ``batch_size``** to control memory for large stacks.
 

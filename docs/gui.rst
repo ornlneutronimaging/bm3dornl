@@ -110,8 +110,6 @@ Workflow
 Tips
 ----
 
-- **Start with defaults:** The defaults work well for most cases.
-
 - **Use streak mode:** Choose ``mode="streak"`` for ring artifacts.
 
 - **Check the histogram:** A narrower histogram can indicate less noise.

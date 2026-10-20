@@ -5,7 +5,7 @@
 use bm3d_core::RingRemovalMode;
 use eframe::egui;
 
-/// Base URL for source links (pinned to the `main` branch so links stay valid).
+/// Base URL for source links (pinned to the `main` branch).
 const SOURCE_BASE: &str = "https://github.com/ornlneutronimaging/bm3dornl/blob/main/";
 
 /// A literature reference shown as a clickable DOI link.

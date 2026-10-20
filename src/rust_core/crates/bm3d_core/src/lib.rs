@@ -6,8 +6,7 @@
 //! ## f32/f64 Support
 //!
 //! The library supports both f32 and f64 precision through the `Bm3dFloat` trait.
-//! All public functions are generic over this trait, allowing users to choose
-//! the precision that best fits their needs.
+//! All public functions are generic over this trait.
 
 pub mod block_matching;
 pub mod filtering;

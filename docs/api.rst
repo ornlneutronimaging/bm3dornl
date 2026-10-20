@@ -12,7 +12,7 @@ Main API
 Fourier-SVD Streak Removal
 --------------------------
 
-Fast FFT-guided SVD destriping algorithm using magnitude gating for structure preservation.
+FFT-guided SVD destriping algorithm using magnitude gating for structure preservation.
 
 .. automodule:: bm3dornl.fourier_svd
    :members:
@@ -32,7 +32,7 @@ Diagnostic and advanced functions for noise characterization.
 Phantom Generation
 ------------------
 
-Utilities for generating synthetic test data with realistic ring artifacts.
+Utilities for generating synthetic test data with ring artifacts.
 
 .. automodule:: bm3dornl.phantom
    :members:

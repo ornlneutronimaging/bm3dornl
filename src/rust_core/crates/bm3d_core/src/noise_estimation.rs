@@ -16,9 +16,6 @@ const DB3_DEC_HI: [f64; 6] = [
 ];
 
 /// Default cap for columns used in automatic sigma estimation.
-///
-/// For very wide sinograms, sampling evenly spaced columns preserves
-/// robust scale estimation while reducing runtime significantly.
 const DEFAULT_SIGMA_EST_MAX_COLUMNS: usize = 1024;
 const SIGMA_EST_MAX_COLUMNS_ENV: &str = "BM3D_SIGMA_EST_MAX_COLUMNS";
 
@@ -59,10 +56,8 @@ fn sample_columns_evenly<F: Bm3dFloat>(data: ArrayView2<F>, sample_cols: usize) 
 /// variation; the scaled MAD (1.4826) of the result is returned.
 ///
 /// The result is the vertical-streak amplitude — the sinogram signature of
-/// ring artifacts — not the pixel-level standard deviation: for purely i.i.d.
-/// pixel noise it lands far below the pixel sigma (roughly 8x smaller at 256
-/// rows). The pipeline uses it to fill in `sigma_random` when the caller
-/// sets it to 0.0 (the default is 0.1, not 0.0).
+/// ring artifacts. The pipeline uses it to fill in `sigma_random` when the
+/// caller sets it to 0.0 (the default is 0.1).
 pub fn estimate_noise_sigma<F: Bm3dFloat>(sinogram: ArrayView2<F>) -> F {
     let (_rows, cols) = sinogram.dim();
     let sampled_storage = match resolve_sigma_est_max_columns() {
@@ -78,9 +73,7 @@ pub fn estimate_noise_sigma<F: Bm3dFloat>(sinogram: ArrayView2<F>) -> F {
     // Step 1: Vertical Gaussian filter
     // Sigma = height / 12.0
     //
-    // Use a recursive IIR approximation (Young/van Vliet family coefficients)
-    // instead of wide FIR convolution. This preserves per-sinogram semantics
-    // while reducing complexity from O(rows*cols*kernel_width) to O(rows*cols).
+    // Use a recursive IIR approximation (Young/van Vliet family coefficients).
     let sigma_v = rows as f64 / 12.0;
     let smoothed = if let Some(sampled) = sampled_storage.as_ref() {
         gaussian_filter_1d_vertical_recursive(sampled.view(), sigma_v)
@@ -107,7 +100,7 @@ pub fn estimate_noise_sigma<F: Bm3dFloat>(sinogram: ArrayView2<F>) -> F {
 
 #[inline]
 fn recursive_gaussian_coefficients(sigma: f64) -> (f64, f64, f64, f64, f64) {
-    // Coefficients from a widely used recursive Gaussian approximation.
+    // Coefficients from a recursive Gaussian approximation.
     // q maps sigma to a stable coefficient domain.
     let sigma = sigma.max(0.5);
     let q = if sigma >= 2.5 {
@@ -144,7 +137,7 @@ pub(crate) fn gaussian_filter_1d_vertical_recursive<F: Bm3dFloat>(
     let mut forward = vec![F::zero(); rows];
 
     // `data` is the caller's array. The fast path indexes it as a row-major
-    // slice, so it needs standard layout (`as_slice`); `output` is ours.
+    // slice, so it needs standard layout (`as_slice`).
     if let (Some(data_slice), Some(output_slice)) =
         (data.as_slice(), output.as_slice_memory_order_mut())
     {
@@ -271,7 +264,7 @@ fn median_of_slice<F: Bm3dFloat>(data: &mut [F]) -> F {
         median
     } else {
         // Even number of elements: (mid + mid-1) / 2
-        // We need to find the element before mid.
+        // Find the element before mid.
         // select_nth_unstable partitioned the array so everything before mid is <= mid.
         let left_part = &data[..mid];
         let prev_median = left_part
@@ -282,8 +275,7 @@ fn median_of_slice<F: Bm3dFloat>(data: &mut [F]) -> F {
 }
 
 fn compute_mad<F: Bm3dFloat>(data: ArrayView2<F>) -> F {
-    // Flatten once and reuse the same buffer for absolute deviations to reduce
-    // transient memory and allocation overhead in the hot auto-sigma path.
+    // Flatten once and reuse the same buffer for absolute deviations.
     let mut values: Vec<F> = data.iter().copied().collect();
     let median = median_of_slice(&mut values);
     for v in &mut values {
@@ -395,7 +387,6 @@ mod tests {
 
         let sigma_est = estimate_noise_sigma(combined.view());
 
-        // It might overestimate slightly, but shouldn't be dominated by structure (1.0)
         assert!(
             sigma_est < 0.10,
             "Estimator heavily affected by horizontal structure. Got {}",
@@ -406,7 +397,6 @@ mod tests {
     #[test]
     fn test_f64_support() {
         // Verify f64 works
-        // Use larger size for stable estimation (same as f32 test)
         let (height, width) = (256, 1024);
         let sigma_true = 0.05f64;
 
