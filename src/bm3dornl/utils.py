@@ -27,9 +27,7 @@ def estimate_noise_sigma(sinogram: np.ndarray) -> float:
 
     The result is 1.4826 times the median absolute deviation (MAD). MAD is the
     median distance from the filtered values' median. The result measures vertical
-    streak amplitude, not pixel-level standard deviation. Vertical smoothing
-    removes most independent pixel noise. Its estimate is therefore much
-    smaller than that noise's standard deviation.
+    streak amplitude.
 
     The BM3D pipeline uses this estimator when ``sigma_random`` is at or
     below 1e-6, for example 0.0. Streak

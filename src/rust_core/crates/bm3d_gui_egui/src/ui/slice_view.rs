@@ -415,7 +415,6 @@ impl SliceViewer {
             }
         });
 
-        // Check if we need to update texture
         let wl_key = (window_level.min, window_level.max);
         let needs_update = self.cached_slice_index != Some(self.current_slice)
             || self.cached_axis_mapping != Some(axis_mapping)
@@ -708,7 +707,6 @@ impl SliceViewer {
         // Check if Shift is held for ROI drawing mode
         let shift_held = response.ctx.input(|i| i.modifiers.shift);
 
-        // Determine if we should draw ROI: either roi_mode is ON or Shift is held
         let should_draw_roi = self.roi_mode || shift_held;
 
         // Handle scroll wheel for zoom (always active)
@@ -750,7 +748,6 @@ impl SliceViewer {
                 if let Some((img_x, img_y)) =
                     self.screen_to_image(pointer_pos, image_rect, img_width, img_height)
                 {
-                    // Check if we're already in a dragging operation
                     if self.roi_state.drawing {
                         // Continue drawing ROI
                         self.roi_state.update_draw(img_x, img_y);

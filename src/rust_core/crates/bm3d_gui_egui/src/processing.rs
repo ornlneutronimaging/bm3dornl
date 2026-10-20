@@ -155,11 +155,8 @@ impl ProcessingManager {
     /// Request cancellation of current processing.
     ///
     /// Joins the worker, then drains its remaining progress messages so the
-    /// terminal outcome reaches the state machine: dropping the channel
-    /// unread left the state stuck at `Processing` forever, with the UI
-    /// showing a frozen progress bar and no way to process again. Draining
-    /// (rather than overwriting) also preserves a result from a worker that
-    /// finished just before the flag was seen.
+    /// terminal outcome reaches the state machine. Draining also preserves a
+    /// result from a worker that finished just before the flag was seen.
     pub fn cancel(&mut self) {
         self.cancel_flag.store(true, Ordering::SeqCst);
 
@@ -172,9 +169,6 @@ impl ProcessingManager {
             }
         }
 
-        // A worker that ended without a terminal message must not leave the
-        // UI stuck in Processing: a panic is surfaced as an error rather than
-        // disguised as a cancellation; anything else counts as cancelled.
         if join_result.is_some() && matches!(self.state, ProcessingState::Processing { .. }) {
             self.state = match join_result {
                 Some(Err(_)) => ProcessingState::Error(
@@ -232,7 +226,6 @@ impl ProcessingManager {
             }
         }
 
-        // Track if we need to clean up
         let mut should_cleanup = false;
 
         // Process collected messages
@@ -415,9 +408,7 @@ mod tests {
         config
     }
 
-    /// Cancelling mid-run must leave a state the UI can act on — never a
-    /// stuck `Processing`, which froze the progress bar and hid the Process
-    /// button until a new file was loaded.
+    /// Cancelling mid-run must leave a state the UI can act on.
     #[test]
     fn cancel_leaves_an_actionable_state() {
         let volume = Array3::<f32>::from_elem((64, 64, 65), 0.5);
@@ -436,14 +427,14 @@ mod tests {
     }
 
     /// A worker that finished before the cancel request must keep its result:
-    /// the drain applies the Finished message instead of discarding it.
+    /// the drain applies the Finished message.
     #[test]
     fn cancel_after_completion_keeps_the_result() {
         let volume = Array3::<f32>::from_elem((2, 32, 33), 0.5);
         let mut manager = ProcessingManager::new();
         manager.start_processing(volume, RingRemovalMode::Streak, test_config(), false, 0);
-        // Wait deterministically for the worker to finish before cancelling,
-        // so the drain (not the cancel flag) decides the outcome.
+        // Wait for the worker to finish before cancelling, so the drain
+        // decides the outcome.
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
         while manager
             .worker_handle
@@ -458,7 +449,7 @@ mod tests {
         assert!(manager.processed_result().is_some());
     }
 
-    /// The normal completion path through poll_progress still works.
+    /// The normal completion path through poll_progress works.
     #[test]
     fn poll_reaches_completed_and_delivers_result() {
         let volume = Array3::<f32>::from_elem((2, 32, 33), 0.5);

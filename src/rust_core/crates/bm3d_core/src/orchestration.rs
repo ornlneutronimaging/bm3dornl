@@ -1,7 +1,7 @@
 //! Unified BM3D Ring Artifact Removal Pipeline
 //!
-//! This module provides a complete BM3D denoising pipeline for 2D sinograms,
-//! eliminating the need for Python orchestration. It combines:
+//! This module provides a complete BM3D denoising pipeline for 2D sinograms.
+//! It combines:
 //! - Normalization / denormalization
 //! - Sigma map computation from streak profile
 //! - Optional streak pre-subtraction (streak mode)
@@ -62,10 +62,10 @@ const DEFAULT_PSD_WIDTH: f64 = 0.6;
 /// Default filter strength multiplier
 const DEFAULT_FILTER_STRENGTH: f64 = 1.0;
 
-/// Fixed sigma for streak profile estimation when computing sigma map
+/// Sigma for streak profile estimation when computing sigma map
 const SIGMA_MAP_STREAK_SIGMA: f64 = 5.0;
 
-/// Fixed iterations for streak profile estimation when computing sigma map
+/// Iterations for streak profile estimation when computing sigma map
 const SIGMA_MAP_STREAK_ITERATIONS: usize = 1;
 
 /// Default FFT alpha (trust factor). 0.0 = disabled, 1.0 = standard boost.
@@ -102,7 +102,6 @@ pub enum RingRemovalMode {
 
 /// Configuration for BM3D ring artifact removal.
 ///
-/// All parameters have sensible defaults matching the original Python implementation.
 /// Use `Default::default()` for standard settings.
 #[derive(Debug, Clone)]
 pub struct Bm3dConfig<F: Bm3dFloat> {
@@ -209,9 +208,7 @@ impl<F: Bm3dFloat> Bm3dConfig<F> {
     }
 
     /// Candidate-search stride for `mode`: `search_step` when set; otherwise
-    /// 1 in generic mode, as in BM3D, and `step_size` in the other modes. A
-    /// search of every position kept more stripe in streak and multiscale
-    /// mode (#163).
+    /// 1 in generic mode and `step_size` in the other modes.
     fn resolved_search_step(&self, mode: RingRemovalMode) -> usize {
         self.search_step.unwrap_or(match mode {
             RingRemovalMode::Generic => 1,
@@ -288,11 +285,10 @@ fn compute_sigma_map<F: Bm3dFloat>(
 /// `psd_x` is the horizontal noise power profile, sampled on the source
 /// image's frequency grid and resampled here onto the patch grid. `None`
 /// means horizontally white, which is Mäkinen et al.'s basic streak model
-/// (equation 2, Figure 1) and the right choice at the coarsest multiscale
-/// level. At finer levels the noise has been shaped by debinning and is no
-/// longer white in X, so equation 25 uses the residual kernel's spectrum
-/// instead; that profile is what [`crate::multiscale::generate_psd_shapes`]
-/// computes.
+/// (equation 2, Figure 1) at the coarsest multiscale level. At finer levels
+/// the noise has been shaped by debinning and is no longer white in X, so
+/// equation 25 uses the residual kernel's spectrum; that profile is what
+/// [`crate::multiscale::generate_psd_shapes`] computes.
 fn construct_psd<F: Bm3dFloat>(
     patch_size: usize,
     psd_width: F,
@@ -301,7 +297,7 @@ fn construct_psd<F: Bm3dFloat>(
     let mut sigma_psd = Array2::zeros((patch_size, patch_size));
 
     // Resample the horizontal profile onto the patch's frequency grid,
-    // normalised to unit mean so it shapes the PSD without rescaling it.
+    // normalised to unit mean.
     let x_gain: Vec<F> = match psd_x {
         None => vec![F::one(); patch_size],
         Some(profile) => {
@@ -309,14 +305,6 @@ fn construct_psd<F: Bm3dFloat>(
             if n == 0 {
                 vec![F::one(); patch_size]
             } else {
-                // The profile is a power spectrum (|FFT|^2, see
-                // generate_psd_shapes) and sigma_psd holds amplitudes that
-                // are squared back into a variance downstream. Normalize in
-                // the POWER domain — unit mean power, then square root —
-                // so the profile shapes the variance without rescaling its
-                // average level: normalizing the amplitudes instead would
-                // inflate mean variance by mean(P)/mean(sqrt(P))^2 for any
-                // non-flat profile (Jensen), moving every threshold.
                 let mut powers = Vec::with_capacity(patch_size);
                 for x in 0..patch_size {
                     // Circular frequency in cycles/pixel, mapped onto the
@@ -382,7 +370,6 @@ fn subtract_streak_profile<F: Bm3dFloat>(
 
 /// Unified BM3D ring artifact removal with pre-computed plans (Internal/Advanced).
 ///
-/// This is the core implementation that takes pre-computed FFT plans.
 /// See `bm3d_ring_artifact_removal` for the public API.
 pub fn bm3d_ring_artifact_removal_with_plans<F: Bm3dFloat>(
     sinogram: ArrayView2<F>,
@@ -397,8 +384,7 @@ pub fn bm3d_ring_artifact_removal_with_plans<F: Bm3dFloat>(
 /// horizontal noise power profile for streak mode.
 ///
 /// The multiscale pipeline uses this to give each pyramid level the PSD its
-/// own noise actually has (Mäkinen et al. 2021, equations 19 and 25) rather
-/// than reusing the horizontally-white model at every level.
+/// own noise has (Mäkinen et al. 2021, equations 19 and 25).
 pub(crate) fn bm3d_ring_artifact_removal_with_psd<F: Bm3dFloat>(
     sinogram: ArrayView2<F>,
     mode: RingRemovalMode,
@@ -696,7 +682,7 @@ mod tests {
         assert_eq!(config.step_size, 4);
         assert_eq!(config.search_window, 24);
         assert_eq!(config.max_matches, 16);
-        // None resolves per mode: 1 in generic mode, step_size otherwise (#163).
+        // None resolves per mode: 1 in generic mode, step_size otherwise.
         assert_eq!(config.search_step, None);
         assert!(approx_eq(config.threshold, 2.7, 1e-6));
         assert!(approx_eq(config.streak_sigma_smooth, 3.0, 1e-6));
@@ -1214,19 +1200,10 @@ mod tests {
         );
     }
 
-    // ==================== Edge Strip Coverage (issue #163) ====================
-    //
-    // Through the public 2D entry point an unfiltered strip is the input after
-    // the normalise/denormalise round trip, so exact equality with the input
-    // undercounts it. Its residual against the clean image stays at the input
-    // noise level, while a filtered edge row or column falls well below it.
-
     const STRIP_PATCH_SIZE: usize = 8;
     const STRIP_STEP_SIZE: usize = 4;
     const STRIP_NOISE_SIGMA: f64 = 0.05;
-    /// Bound on RMS(output - clean) / sigma over an edge strip. Unfiltered
-    /// strips of these images measure 0.85-1.08; filtered edges measure
-    /// 0.12-0.30 with the stepped or the dense candidate search.
+    /// Bound on RMS(output - clean) / sigma over an edge strip.
     const STRIP_MAX_RESIDUAL_RATIO: f64 = 0.6;
 
     /// Smooth horizontal bands plus Gaussian noise, with a fixed seed per shape.

@@ -3,13 +3,6 @@
 //! This module provides functions to estimate static vertical streak artifacts
 //! in sinograms using an iterative robust approach with Gaussian smoothing
 //! and median filtering.
-//!
-//! ## SIMD Optimization Notes
-//!
-//! The Gaussian blur operations are optimized for auto-vectorization:
-//! - Pre-padded arrays avoid branching in the hot loop
-//! - Contiguous memory access enables SIMD
-//! - Row-major layout for cache efficiency
 
 use ndarray::{Array1, Array2, ArrayView1, ArrayView2, Axis};
 use rayon::prelude::*;
@@ -21,19 +14,17 @@ use crate::float_trait::Bm3dFloat;
 // =============================================================================
 
 /// Horizontal sigma for 2D Gaussian blur in streak estimation.
-/// Controls smoothing along the column direction (sigma_x in scipy terms).
+/// Controls smoothing along the column direction (sigma_x).
 const STREAK_HORIZONTAL_SIGMA: f64 = 3.0;
 
 /// Sigma for smoothing the streak update profile.
-/// A small value preserves streak sharpness while removing noise.
 const STREAK_UPDATE_SIGMA: f64 = 1.0;
 
 /// Minimum row count for parallel processing in blur operations.
-/// Set high to avoid rayon overhead for smaller arrays.
 const PARALLEL_ROW_THRESHOLD: usize = 512;
 
 /// Compute 1D Gaussian kernel with given sigma.
-/// Kernel size is ceil(4 * sigma) * 2 + 1 to match scipy's default truncate=4.0
+/// Kernel size is ceil(4 * sigma) * 2 + 1
 fn gaussian_kernel_1d<F: Bm3dFloat>(sigma: F) -> Vec<F> {
     if sigma <= F::zero() {
         return vec![F::one()];
@@ -67,7 +58,7 @@ fn gaussian_kernel_1d<F: Bm3dFloat>(sigma: F) -> Vec<F> {
     kernel
 }
 
-/// Reflect index for boundary handling (scipy 'reflect' mode).
+/// Reflect index for boundary handling.
 /// For an array of length n, reflects indices outside [0, n-1].
 /// reflect(-1) = 0, reflect(-2) = 1, reflect(n) = n-1, reflect(n+1) = n-2
 #[inline(always)]
@@ -84,7 +75,6 @@ fn reflect_index(idx: isize, len: usize) -> usize {
 }
 
 /// Fill a pre-allocated padded buffer with reflected boundaries.
-/// This enables branchless convolution in the hot path without re-allocation.
 #[inline]
 fn fill_padded_row<F: Bm3dFloat>(input: &[F], radius: usize, padded: &mut Vec<F>) {
     let n = input.len();
@@ -94,9 +84,6 @@ fn fill_padded_row<F: Bm3dFloat>(input: &[F], radius: usize, padded: &mut Vec<F>
     if padded.len() != padded_len {
         padded.resize(padded_len, F::zero());
     }
-
-    // Since we are writing to specific indices, we don't strictly need to zero-fill,
-    // but resize does it for new elements.
 
     // Copy original data
     // padded[radius] is the start of valid data
@@ -116,7 +103,7 @@ fn fill_padded_row<F: Bm3dFloat>(input: &[F], radius: usize, padded: &mut Vec<F>
     }
 }
 
-/// Create a 1D padded buffer (wrapper around fill_padded_row for backward compat/convenience)
+/// Create a 1D padded buffer (wrapper around fill_padded_row)
 #[inline]
 fn create_padded_row<F: Bm3dFloat>(input: &[F], radius: usize) -> Vec<F> {
     let mut padded = Vec::with_capacity(input.len() + 2 * radius);
@@ -125,17 +112,13 @@ fn create_padded_row<F: Bm3dFloat>(input: &[F], radius: usize) -> Vec<F> {
 }
 
 /// Apply 1D convolution to a padded buffer (no bounds checking needed).
-/// This is the SIMD-friendly hot path.
 #[inline]
 fn convolve_1d_padded<F: Bm3dFloat>(padded: &[F], kernel: &[F], output: &mut [F]) {
     let n = output.len();
     let klen = kernel.len();
 
-    // Process in chunks for better cache utilization
-    // The compiler can auto-vectorize this inner loop
     for i in 0..n {
         let mut sum = F::zero();
-        // Unroll hint: kernel is typically small (e.g., 25 elements for sigma=3)
         for k in 0..klen {
             sum += padded[i + k] * kernel[k];
         }
@@ -144,7 +127,6 @@ fn convolve_1d_padded<F: Bm3dFloat>(padded: &[F], kernel: &[F], output: &mut [F]
 }
 
 /// Apply 1D Gaussian blur to a 1D array with reflect boundary.
-/// Matches scipy.ndimage.gaussian_filter1d behavior.
 pub fn gaussian_blur_1d<F: Bm3dFloat>(input: ArrayView1<F>, sigma: F) -> Array1<F> {
     let kernel = gaussian_kernel_1d(sigma);
     let radius = kernel.len() / 2;
@@ -180,7 +162,6 @@ pub fn gaussian_blur_1d<F: Bm3dFloat>(input: ArrayView1<F>, sigma: F) -> Array1<
 }
 
 /// Apply 1D Gaussian blur along rows of a 2D array.
-/// Optimized with pre-padding and parallelization for large arrays.
 fn blur_rows<F: Bm3dFloat>(input: ArrayView2<F>, sigma: F) -> Array2<F> {
     let (rows, cols) = input.dim();
     let kernel = gaussian_kernel_1d(sigma);
@@ -228,7 +209,6 @@ fn blur_rows<F: Bm3dFloat>(input: ArrayView2<F>, sigma: F) -> Array2<F> {
 }
 
 /// Apply 1D Gaussian blur along columns of a 2D array.
-/// Optimized with transposed processing for cache efficiency.
 fn blur_cols<F: Bm3dFloat>(input: ArrayView2<F>, sigma: F) -> Array2<F> {
     let (rows, cols) = input.dim();
     let kernel = gaussian_kernel_1d(sigma);
@@ -240,8 +220,7 @@ fn blur_cols<F: Bm3dFloat>(input: ArrayView2<F>, sigma: F) -> Array2<F> {
 
     let mut output = Array2::zeros((rows, cols));
 
-    // For column blur, we process column-by-column
-    // This is less cache-friendly but necessary for the separable filter
+    // Process column-by-column
 
     if cols >= PARALLEL_ROW_THRESHOLD && rows > radius * 4 {
         // Parallel column processing
@@ -290,7 +269,6 @@ fn blur_cols<F: Bm3dFloat>(input: ArrayView2<F>, sigma: F) -> Array2<F> {
 
 /// Apply 2D Gaussian blur with separate sigma for each axis.
 /// sigma_y is applied along rows (axis 0), sigma_x along columns (axis 1).
-/// This matches scipy.ndimage.gaussian_filter with (sigma_y, sigma_x).
 pub fn gaussian_blur_2d<F: Bm3dFloat>(input: ArrayView2<F>, sigma_y: F, sigma_x: F) -> Array2<F> {
     // Separable: first blur along rows (x direction), then along columns (y direction)
     let blurred_x = blur_rows(input, sigma_x);
@@ -388,7 +366,7 @@ pub fn estimate_streak_profile_impl<F: Bm3dFloat>(
     let update_sigma = F::from_f64_c(STREAK_UPDATE_SIGMA);
 
     for _ in 0..iterations {
-        // 1. Smooth to estimate object: gaussian_filter(z_clean, (sigma_smooth, STREAK_HORIZONTAL_SIGMA))
+        // 1. Smooth to estimate object
         let z_smooth = gaussian_blur_2d(z_clean.view(), sigma_smooth, horizontal_sigma);
 
         // 2. Compute residual
@@ -397,7 +375,7 @@ pub fn estimate_streak_profile_impl<F: Bm3dFloat>(
         // 3. Column-wise median for robust streak estimate
         let streak_update = median_axis0(residual.view());
 
-        // 4. Smooth the streak update: gaussian_filter1d(streak_update, STREAK_UPDATE_SIGMA)
+        // 4. Smooth the streak update
         let streak_update_smooth = gaussian_blur_1d(streak_update.view(), update_sigma);
 
         // 5. Accumulate

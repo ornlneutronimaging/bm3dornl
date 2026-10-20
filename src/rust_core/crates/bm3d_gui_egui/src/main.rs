@@ -1,4 +1,4 @@
-// Allow dead code and unused imports during GUI development
+// Allow dead code and unused imports
 #![allow(dead_code)]
 #![allow(unused_imports)]
 #![allow(unused_variables)]
@@ -18,7 +18,7 @@ use ui::{
     SliceViewer, WindowLevel, compute_difference, save_volume,
 };
 
-/// Load application icon from embedded PNG (256x256 for reasonable binary size)
+/// Load application icon from embedded PNG (256x256)
 fn load_icon() -> Option<egui::IconData> {
     let icon_bytes = include_bytes!("../../../../../resources/bm3dornl_icon_256.png");
     let image = image::load_from_memory(icon_bytes).ok()?.into_rgba8();
@@ -227,7 +227,7 @@ impl App {
         }
     }
 
-    /// Clear every piece of state tied to the previously loaded volume.
+    /// Clear every piece of state tied to the loaded volume.
     fn reset_for_load(&mut self) {
         self.error_message = None;
         self.volume = None;
@@ -382,9 +382,6 @@ impl App {
             let config = self.bm3d_params.to_multiscale_config();
             let use_multiscale = self.bm3d_params.uses_multiscale();
 
-            // Use the processing axis from parameters (configurable in Advanced).
-            // Default is axis 1 (Y) for standard tomography data [angles, Y, X].
-            // Each slice perpendicular to this axis is processed as a sinogram.
             let processing_axis = self.bm3d_params.processing_axis;
 
             self.processing_manager.start_processing(

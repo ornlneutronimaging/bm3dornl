@@ -35,22 +35,30 @@ def generate_synthetic_sinogram(size=(256, 256), snr_db=10):
 
 
 def test_streak_mode_improvement():
-    """Verifies that Streak Mode provides significant improvement over Generic BM3D on streaky data."""
+    """Verifies that Streak Mode provides improvement over Generic BM3D on streaky data."""
     clean, noisy, sigma = generate_synthetic_sinogram(size=(512, 512), snr_db=5)
 
-    # Generic (using canonical parameter name sigma_random)
-    denoised_generic = bm3d_ring_artifact_removal(noisy, mode="generic", sigma_random=sigma)
+    # Generic
+    denoised_generic = bm3d_ring_artifact_removal(
+        noisy, mode="generic", sigma_random=sigma
+    )
     psnr_generic = skimage.metrics.peak_signal_noise_ratio(clean, denoised_generic)
 
-    # Streak (using canonical parameter name sigma_random)
-    denoised_streak = bm3d_ring_artifact_removal(noisy, mode="streak", sigma_random=sigma)
+    # Streak
+    denoised_streak = bm3d_ring_artifact_removal(
+        noisy, mode="streak", sigma_random=sigma
+    )
     psnr_streak = skimage.metrics.peak_signal_noise_ratio(clean, denoised_streak)
 
     diff = psnr_streak - psnr_generic
-    print(f"Generic: {psnr_generic:.2f} dB, Streak: {psnr_streak:.2f} dB, Diff: {diff:.2f} dB")
+    print(
+        f"Generic: {psnr_generic:.2f} dB, Streak: {psnr_streak:.2f} dB, Diff: {diff:.2f} dB"
+    )
 
-    # Expect at least 3 dB improvement (based on successful fix)
-    assert diff > 3.0, f"Streak mode improvement ({diff:.2f} dB) is insufficient (< 3.0 dB)"
+    # Expect at least 3 dB improvement
+    assert diff > 3.0, (
+        f"Streak mode improvement ({diff:.2f} dB) is insufficient (< 3.0 dB)"
+    )
 
 
 if __name__ == "__main__":

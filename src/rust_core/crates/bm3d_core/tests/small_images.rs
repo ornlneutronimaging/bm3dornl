@@ -1,15 +1,10 @@
-//! Images smaller than `patch_size` (issue #165).
+//! Images smaller than `patch_size`.
 //!
 //! `bm3d_ring_artifact_removal` refuses such an image with "Image size
 //! (rows, cols) is smaller than patch_size p". The kernel entry points
-//! `run_bm3d_step` and `run_bm3d_step_stack` used to index past the image in
-//! block matching and panic; they must return the same error. Multiscale
-//! processing must return it too, also for an image that is only too short
-//! (7 x 200), which it used to pass through unfiltered. An image exactly
-//! `patch_size` in a dimension is valid.
-//!
-//! These tests use only the public API, so they live in an integration test
-//! target rather than in a unit-test module.
+//! `run_bm3d_step` and `run_bm3d_step_stack` must return the same error.
+//! Multiscale processing must return it too, also for an image that is only
+//! too short (7 x 200). An image exactly `patch_size` in a dimension is valid.
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
@@ -70,7 +65,7 @@ fn kernel_config<F: Bm3dFloat>(patch_size: usize) -> Bm3dKernelConfig<F> {
     }
 }
 
-/// Run `f` and fail with a clear message if it panics instead of returning.
+/// Run `f` and fail with a clear message if it panics.
 fn without_panic<T>(label: &str, f: impl FnOnce() -> T) -> T {
     catch_unwind(AssertUnwindSafe(f))
         .unwrap_or_else(|_| panic!("{label} panicked instead of returning a Result"))

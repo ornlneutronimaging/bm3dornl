@@ -1,18 +1,11 @@
-"""Images smaller than ``patch_size`` raise ValueError on every path (issue #165).
+"""Images smaller than ``patch_size`` raise ValueError on every path.
 
 The 2D path refuses such an image with "Image size (rows, cols) is smaller
-than patch_size p". The 3D stack path, the low-level kernel bindings and the
-block-matching debug bindings (``test_block_matching_rust``) used to index
-past the image in block matching and panic. A Rust panic reaches
-Python as ``pyo3_runtime.PanicException``, which derives from BaseException,
-not from Exception, so ``except Exception`` does not catch it. Every entry
-point must raise the same ValueError instead. Multiscale processing must
-raise it too, also for an image that is only too short (7 x 200), which it
-used to return without filtering. An image exactly ``patch_size`` in a
-dimension is valid.
+than patch_size p". Every entry point must raise the same ValueError.
+Multiscale processing must raise it too, also for an image that is only too
+short (7 x 200). An image exactly ``patch_size`` in a dimension is valid.
 
-``pytest.raises(ValueError)`` does not catch a PanicException, so a panic
-fails these tests; each test also checks that the type is exactly ValueError.
+Each test also checks that the type is exactly ValueError.
 """
 
 import re
@@ -170,7 +163,9 @@ def kernel_call(name, dtype, shape, patch_size=PATCH_SIZE):
 @pytest.mark.parametrize(
     "name,dtype", HIGH_LEVEL_BINDINGS, ids=binding_ids(HIGH_LEVEL_BINDINGS)
 )
-def test_high_level_binding_rejects_images_smaller_than_patch_size(name, dtype, mode, shape):
+def test_high_level_binding_rejects_images_smaller_than_patch_size(
+    name, dtype, mode, shape
+):
     image = noisy_image(shape, dtype=dtype)
     fn = getattr(bm3d_rust, name)
     assert_too_small(lambda: fn(image, mode, sigma_random=SIGMA), shape)
@@ -187,18 +182,26 @@ def test_multiscale_binding_rejects_images_smaller_than_patch_size(name, dtype, 
 
 
 @pytest.mark.parametrize("shape", TOO_SMALL, ids=shape_id)
-@pytest.mark.parametrize("name,dtype", KERNEL_BINDINGS, ids=binding_ids(KERNEL_BINDINGS))
+@pytest.mark.parametrize(
+    "name,dtype", KERNEL_BINDINGS, ids=binding_ids(KERNEL_BINDINGS)
+)
 def test_kernel_binding_rejects_images_smaller_than_patch_size(name, dtype, shape):
     assert_too_small(lambda: kernel_call(name, dtype, shape), shape)
 
 
-@pytest.mark.parametrize("name,dtype", KERNEL_BINDINGS, ids=binding_ids(KERNEL_BINDINGS))
+@pytest.mark.parametrize(
+    "name,dtype", KERNEL_BINDINGS, ids=binding_ids(KERNEL_BINDINGS)
+)
 def test_kernel_binding_check_uses_the_given_patch_size(name, dtype):
-    assert_too_small(lambda: kernel_call(name, dtype, (8, 64), patch_size=9), (8, 64), 9)
+    assert_too_small(
+        lambda: kernel_call(name, dtype, (8, 64), patch_size=9), (8, 64), 9
+    )
 
 
 @pytest.mark.parametrize("shape", AT_PATCH_SIZE, ids=shape_id)
-@pytest.mark.parametrize("name,dtype", KERNEL_BINDINGS, ids=binding_ids(KERNEL_BINDINGS))
+@pytest.mark.parametrize(
+    "name,dtype", KERNEL_BINDINGS, ids=binding_ids(KERNEL_BINDINGS)
+)
 def test_kernel_binding_accepts_images_exactly_patch_size(name, dtype, shape):
     image, out = kernel_call(name, dtype, shape)
     assert out.shape == image.shape
@@ -220,15 +223,21 @@ def block_matching_call(name, dtype, shape):
 
 @pytest.mark.parametrize("shape", TOO_SMALL, ids=shape_id)
 @pytest.mark.parametrize(
-    "name,dtype", DEBUG_BLOCK_MATCHING_BINDINGS, ids=binding_ids(DEBUG_BLOCK_MATCHING_BINDINGS)
+    "name,dtype",
+    DEBUG_BLOCK_MATCHING_BINDINGS,
+    ids=binding_ids(DEBUG_BLOCK_MATCHING_BINDINGS),
 )
-def test_block_matching_binding_rejects_images_smaller_than_patch_size(name, dtype, shape):
+def test_block_matching_binding_rejects_images_smaller_than_patch_size(
+    name, dtype, shape
+):
     assert_too_small(lambda: block_matching_call(name, dtype, shape), shape)
 
 
 @pytest.mark.parametrize("shape", AT_PATCH_SIZE, ids=shape_id)
 @pytest.mark.parametrize(
-    "name,dtype", DEBUG_BLOCK_MATCHING_BINDINGS, ids=binding_ids(DEBUG_BLOCK_MATCHING_BINDINGS)
+    "name,dtype",
+    DEBUG_BLOCK_MATCHING_BINDINGS,
+    ids=binding_ids(DEBUG_BLOCK_MATCHING_BINDINGS),
 )
 def test_block_matching_binding_accepts_images_exactly_patch_size(name, dtype, shape):
     matches = block_matching_call(name, dtype, shape)

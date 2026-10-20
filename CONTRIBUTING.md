@@ -36,8 +36,7 @@ By participating in this project, you agree to abide by the [Code of Conduct](CO
     ```
 
 4. **Use Pixi.** Contributors must use [Pixi](https://prefix.dev) for clone
-   builds and tests. `pip install -e .` is unsupported: Pixi pins every
-   dependency in `pixi.lock`, and pip resolves its own set. Pixi does not
+   builds and tests. `pip install -e .` is unsupported. Pixi does not
    supply Rust; install a stable Rust toolchain with rustup first.
 
    After cloning, run `pixi run build`, `pixi run test`, then `pixi run gui`.
@@ -133,7 +132,7 @@ Report bugs and feature requests on the
 Include reproduction steps for bugs.
 
 Start a [GitHub Discussion](https://github.com/ornlneutronimaging/bm3dornl/discussions)
-for usage questions. This keeps issues focused on defects and features.
+for usage questions.
 
 ## Contact
 

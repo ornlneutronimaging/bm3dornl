@@ -1,5 +1,5 @@
 # pre-commit.ci doesn't have Rust/cargo installed, so skip Rust hooks there.
-# Rust linting is covered by GitHub Actions CI instead.
+# Rust linting is covered by GitHub Actions CI.
 ci:
   skip: [fmt, clippy]
 
@@ -32,3 +32,10 @@ repos:
       args: [--manifest-path, src/rust_core/Cargo.toml, --all, --, --check]
     - id: clippy
       args: [--manifest-path, src/rust_core/Cargo.toml, --workspace, --, -D, warnings]
+- repo: local
+  hooks:
+    - id: doc-lint
+      name: doc lint
+      entry: python scripts/doc_lint.py
+      language: python
+      types_or: [rust, python]

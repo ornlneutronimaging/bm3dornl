@@ -35,12 +35,29 @@ def test_bm3d_ring_artifact_removal_defaults_are_documented_defaults():
     assert defaults["debin_iterations"] == 30
 
 
-# Parameter order before search_step existed (#163). Positional callers rely on it.
+# Parameter order before search_step. Positional callers rely on it.
 PUBLIC_PARAMETERS_BEFORE_SEARCH_STEP = [
-    "sinogram", "mode", "sigma_random", "patch_size", "step_size", "search_window",
-    "max_matches", "batch_size", "threshold", "streak_sigma_smooth", "streak_iterations",
-    "sigma_map_smoothing", "streak_sigma_scale", "psd_width", "sigma_map", "multiscale",
-    "num_scales", "filter_strength", "debin_iterations", "log_domain_input", "progress",
+    "sinogram",
+    "mode",
+    "sigma_random",
+    "patch_size",
+    "step_size",
+    "search_window",
+    "max_matches",
+    "batch_size",
+    "threshold",
+    "streak_sigma_smooth",
+    "streak_iterations",
+    "sigma_map_smoothing",
+    "streak_sigma_scale",
+    "psd_width",
+    "sigma_map",
+    "multiscale",
+    "num_scales",
+    "filter_strength",
+    "debin_iterations",
+    "log_domain_input",
+    "progress",
 ]
 
 
@@ -49,27 +66,57 @@ def test_search_step_default_is_none_and_keeps_existing_positions():
     assert "search_step" in parameters
     assert parameters["search_step"].default is None
     names = list(parameters)
-    assert names[: len(PUBLIC_PARAMETERS_BEFORE_SEARCH_STEP)] == PUBLIC_PARAMETERS_BEFORE_SEARCH_STEP
+    assert (
+        names[: len(PUBLIC_PARAMETERS_BEFORE_SEARCH_STEP)]
+        == PUBLIC_PARAMETERS_BEFORE_SEARCH_STEP
+    )
 
 
 _KERNEL_2D = ["input_noisy", "input_pilot", "sigma_psd", "sigma_map", "sigma_random"]
 _GEOMETRY = ["patch_size", "step_size", "search_window", "max_matches"]
 _SINGLE_SCALE_2D = [
-    "sinogram", "mode", "sigma_random", "patch_size", "step_size", "search_window",
-    "max_matches", "threshold", "streak_sigma_smooth", "streak_iterations",
-    "sigma_map_smoothing", "streak_sigma_scale", "psd_width", "fft_alpha", "notch_width",
+    "sinogram",
+    "mode",
+    "sigma_random",
+    "patch_size",
+    "step_size",
+    "search_window",
+    "max_matches",
+    "threshold",
+    "streak_sigma_smooth",
+    "streak_iterations",
+    "sigma_map_smoothing",
+    "streak_sigma_scale",
+    "psd_width",
+    "fft_alpha",
+    "notch_width",
 ]
 _MULTISCALE_2D = [
-    "sinogram", "num_scales", "filter_strength", "threshold", "debin_iterations",
-    "patch_size", "step_size", "search_window", "max_matches", "sigma_random",
-    "streak_sigma_smooth", "streak_iterations", "sigma_map_smoothing", "streak_sigma_scale",
-    "psd_width", "log_domain_input",
+    "sinogram",
+    "num_scales",
+    "filter_strength",
+    "threshold",
+    "debin_iterations",
+    "patch_size",
+    "step_size",
+    "search_window",
+    "max_matches",
+    "sigma_random",
+    "streak_sigma_smooth",
+    "streak_iterations",
+    "sigma_map_smoothing",
+    "streak_sigma_scale",
+    "psd_width",
+    "log_domain_input",
 ]
-# Binding parameter lists before search_step existed (#163), f32 and f64 alike.
+# Binding parameter lists before search_step, f32 and f64 alike.
 BINDING_PARAMETERS_BEFORE_SEARCH_STEP = {
     "bm3d_hard_thresholding": _KERNEL_2D + ["threshold"] + _GEOMETRY,
     "bm3d_wiener_filtering": _KERNEL_2D + _GEOMETRY,
-    "bm3d_hard_thresholding_stack": _KERNEL_2D + ["threshold"] + _GEOMETRY + ["progress_callback"],
+    "bm3d_hard_thresholding_stack": _KERNEL_2D
+    + ["threshold"]
+    + _GEOMETRY
+    + ["progress_callback"],
     "bm3d_wiener_filtering_stack": _KERNEL_2D + _GEOMETRY + ["progress_callback"],
     "bm3d_ring_artifact_removal_2d": _SINGLE_SCALE_2D,
     "multiscale_bm3d_streak_removal_2d": _MULTISCALE_2D,
@@ -79,7 +126,9 @@ BINDING_PARAMETERS_BEFORE_SEARCH_STEP = {
 def test_bindings_append_search_step_last_with_default_none():
     for base, before in BINDING_PARAMETERS_BEFORE_SEARCH_STEP.items():
         for name in (base, base + "_f64"):
-            parameters = inspect.signature(getattr(bm3d_module.bm3d_rust, name)).parameters
+            parameters = inspect.signature(
+                getattr(bm3d_module.bm3d_rust, name)
+            ).parameters
             assert list(parameters) == before + ["search_step"], name
             assert parameters["search_step"].default is None, name
 
@@ -122,7 +171,9 @@ def test_multiscale_threshold_default_delegates_to_multiscale_binding(monkeypatc
     assert calls["threshold"] is None
 
 
-def test_stack_single_scale_threshold_default_resolves_to_single_scale_default(monkeypatch):
+def test_stack_single_scale_threshold_default_resolves_to_single_scale_default(
+    monkeypatch,
+):
     calls = {}
 
     def fake_hard_thresholding_stack(
@@ -175,7 +226,9 @@ def test_stack_single_scale_threshold_default_resolves_to_single_scale_default(m
     assert calls["threshold"] == bm3d_module.DEFAULT_SINGLE_SCALE_THRESHOLD
 
 
-def test_stack_multiscale_threshold_default_delegates_to_multiscale_binding(monkeypatch):
+def test_stack_multiscale_threshold_default_delegates_to_multiscale_binding(
+    monkeypatch,
+):
     calls = []
 
     def fake_multiscale(sinogram, **kwargs):

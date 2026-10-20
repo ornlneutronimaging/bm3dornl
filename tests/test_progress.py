@@ -64,7 +64,7 @@ class TestProgress2DIgnored(unittest.TestCase):
     def test_2d_with_progress_callable(self):
         sinogram = _make_2d()
         # progress callable on 2D should not crash
-        # 2D skips progress handling entirely, so this should work regardless
+        # 2D skips progress handling entirely
         result = bm3d_ring_artifact_removal(sinogram, progress=lambda c, t: None)
         self.assertEqual(result.shape, sinogram.shape)
 
@@ -104,7 +104,9 @@ class TestProgressMultiscale(unittest.TestCase):
         stack = _make_stack(n=3)
         calls = []
         result = bm3d_ring_artifact_removal(
-            stack, mode="streak", multiscale=True,
+            stack,
+            mode="streak",
+            multiscale=True,
             progress=lambda c, t: calls.append((c, t)),
         )
         self.assertEqual(result.shape, stack.shape)

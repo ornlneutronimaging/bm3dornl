@@ -2,8 +2,6 @@ use crate::float_trait::Bm3dFloat;
 use ndarray::ArrayView1;
 
 /// Compute 1D median filter with padding.
-/// Mirrors `scipy.ndimage.median_filter` with mode='reflect' (or nearest).
-/// For simplicity, we use replication padding or mirror.
 pub fn compute_1d_median_filter<F: Bm3dFloat>(input: &[F], window_size: usize) -> Vec<F> {
     let n = input.len();
     let radius = window_size / 2;

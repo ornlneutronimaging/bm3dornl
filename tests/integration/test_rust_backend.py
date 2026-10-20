@@ -15,7 +15,7 @@ def test_rust_backend_execution(patch_size, is_stack):
     else:
         input_data = np.random.normal(0.5, 0.1, (H, W)).astype(np.float32)
 
-    # Run BM3D with flat parameters (canonical names)
+    # Run BM3D
     output = bm3d_ring_artifact_removal(
         input_data,
         mode="streak",
@@ -29,7 +29,6 @@ def test_rust_backend_execution(patch_size, is_stack):
     assert not np.isnan(output).any()
 
     # Check that output is not identical to input (denoising happened)
-    # Using small epsilon, but random noise should be smoothed.
     assert not np.allclose(output, input_data, atol=1e-6)
 
 

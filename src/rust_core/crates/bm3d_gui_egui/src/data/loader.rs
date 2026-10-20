@@ -39,7 +39,6 @@ fn natural_sort_key(s: &str) -> Vec<(bool, i64, String)> {
         }
     }
 
-    // Don't forget the last chunk
     if !current_chunk.is_empty() {
         if is_numeric {
             let num: i64 = current_chunk.parse().unwrap_or(0);
@@ -145,10 +144,7 @@ pub fn load_hdf5_dataset(path: &Path, dataset_path: &str) -> Result<Volume3D, Da
 /// type.
 ///
 /// Block starts are aligned to multiples of the dataset's chunk depth (the
-/// final block may be shorter when the slice count is not a multiple):
-/// compressed chunks span several slices, so a slice-by-slice read
-/// decompresses every chunk once per slice it covers, while chunk-aligned
-/// reads decompress each chunk exactly once and load at bulk-read speed.
+/// final block may be shorter when the slice count is not a multiple).
 fn load_hdf5_dataset_with_progress(
     path: &Path,
     dataset_path: &str,
@@ -170,8 +166,7 @@ fn load_hdf5_dataset_with_progress(
     let (n, h, w) = (*n, *h, *w);
     total.store(n, Ordering::Relaxed);
 
-    // Smallest multiple of the chunk depth that is at least 32 slices, so
-    // the loop also stays short for finely chunked or contiguous datasets.
+    // Smallest multiple of the chunk depth that is at least 32 slices.
     let chunk_depth = dataset
         .chunk()
         .and_then(|c| c.first().copied())
@@ -226,7 +221,7 @@ enum LoadSource {
 }
 
 /// A volume load running on a background thread, so the UI can show a
-/// progress bar instead of freezing. `progress()` is (slices done, total);
+/// progress bar. `progress()` is (slices done, total);
 /// total stays 0 while unknown (TIFF page counts, fallback readers).
 pub struct LoadingJob {
     rx: Receiver<Result<Volume3D, DataLoadError>>,
@@ -310,7 +305,7 @@ pub fn load_tiff_stack(path: &Path) -> Result<Volume3D, DataLoadError> {
             .colortype()
             .map_err(|e| DataLoadError::TiffError(e.to_string()))?;
 
-        // Only support grayscale for now
+        // Only support grayscale
         if !matches!(
             color_type,
             ColorType::Gray(8) | ColorType::Gray(16) | ColorType::Gray(32)
@@ -384,7 +379,7 @@ pub fn load_tiff_stack(path: &Path) -> Result<Volume3D, DataLoadError> {
 }
 
 /// Load a sequence of TIFF files from a folder as a 3D volume.
-/// Files are sorted using natural sort order (img_1, img_2, img_10, not img_1, img_10, img_2).
+/// Files are sorted using natural sort order (img_1, img_2, img_10).
 /// Only .tif and .tiff files are included; other files are silently ignored.
 /// Shape will be [num_files, height, width].
 pub fn load_tiff_sequence(folder: &Path) -> Result<Volume3D, DataLoadError> {
@@ -651,7 +646,6 @@ mod tests {
     /// slices, the layout the blocks are aligned to.
     #[test]
     fn progress_loader_matches_bulk_reader_on_chunked_file() {
-        // Unique per process so concurrent test runs cannot race on the file.
         let dir =
             std::env::temp_dir().join(format!("bm3d_loader_block_test_{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();

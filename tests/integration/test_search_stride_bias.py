@@ -1,14 +1,11 @@
-"""Bias acceptance for the candidate-search stride in generic mode (issue #163).
+"""Bias acceptance for the candidate-search stride in generic mode.
 
 BM3D (Dabov et al. 2007; Lebrun 2012) searches every position in the window
-and applies the step only to the reference patches. With the search stepped
-by ``step_size``, a step edge that does not sit on a multiple of the step
-finds no aligned match, and the estimate keeps a large bias at the edge.
+and applies the step only to the reference patches.
 
 The acceptance bound: in generic mode, the default search at
 ``step_size=4`` keeps at most 10% more bias than ``step_size=1`` (where the
-reference grid and the search are both dense). The stepped search fails
-it by about 3x on this image.
+reference grid and the search are both dense).
 
 The bound is checked on both public paths. The 2D path filters each draw on
 its own and runs entirely in Rust. The 3D path filters all draws as one
@@ -28,12 +25,8 @@ import pytest
 from bm3dornl import bm3d_ring_artifact_removal
 
 ROWS, COLS = 64, 80
-# Neither edge sits on a multiple of the default step (4), so grid
-# alignment cannot hide the search stride.
+# Neither edge sits on a multiple of the default step (4).
 EDGE_COL, EDGE_ROW = 41, 35
-# With a dense search the ratio is about 1.07 at sigma 0.1. Over seed sets its
-# spread is about 0.013 at 48 draws (one of nine sets measured 1.107) and
-# 0.006 at 96 draws, so 96 draws keep the result independent of seed luck.
 DRAWS = 96
 MAX_BIAS_RATIO = 1.10
 
@@ -45,7 +38,9 @@ def step_edge_truth() -> np.ndarray:
     return truth
 
 
-def filtered_draws(noisy: np.ndarray, sigma: float, step_size: int, dim: str) -> np.ndarray:
+def filtered_draws(
+    noisy: np.ndarray, sigma: float, step_size: int, dim: str
+) -> np.ndarray:
     """Generic-mode output for each draw in ``noisy`` (shape (DRAWS, ROWS, COLS))."""
     if dim == "2d":
         outs = np.empty(noisy.shape, dtype=np.float64)
@@ -69,9 +64,9 @@ def corrected_bias(sigma: float, step_size: int, dim: str = "2d") -> float:
     truth = step_edge_truth()
     noisy = np.stack(
         [
-            (truth + np.random.default_rng(1000 + d).normal(0.0, sigma, truth.shape)).astype(
-                np.float32
-            )
+            (
+                truth + np.random.default_rng(1000 + d).normal(0.0, sigma, truth.shape)
+            ).astype(np.float32)
             for d in range(DRAWS)
         ]
     )
@@ -86,7 +81,9 @@ def corrected_bias(sigma: float, step_size: int, dim: str = "2d") -> float:
 def test_default_search_bias_close_to_dense_reference_grid(sigma, dim):
     bias_step4 = corrected_bias(sigma, step_size=4, dim=dim)
     bias_step1 = corrected_bias(sigma, step_size=1, dim=dim)
-    assert bias_step1 > 0.0, f"{dim} sigma {sigma}: step_size=1 bias is below the noise floor"
+    assert bias_step1 > 0.0, (
+        f"{dim} sigma {sigma}: step_size=1 bias is below the noise floor"
+    )
     ratio = bias_step4 / bias_step1
     print(
         f"{dim} sigma {sigma}: bias step 4 {bias_step4:.5f}, step 1 {bias_step1:.5f}, "

@@ -1,7 +1,7 @@
 use crate::data::AxisMapping;
 use eframe::egui;
 
-/// Widget for configuring axis mapping with H5Web-style auto-swap.
+/// Widget for configuring axis mapping.
 /// When changing one axis to a value used by another, they automatically swap.
 pub struct AxisMappingWidget {
     mapping: AxisMapping,
@@ -103,7 +103,7 @@ impl AxisMappingWidget {
     }
 
     /// Apply an axis change with automatic swap to maintain valid mapping.
-    /// H5Web style: when X takes Y's value, Y gets X's old value (swap).
+    /// When X takes Y's value, Y gets X's old value (swap).
     fn apply_axis_change(&mut self, changed_role: AxisRole, new_value: usize, old_value: usize) {
         // Find which other axis has the new_value and swap it
         match changed_role {

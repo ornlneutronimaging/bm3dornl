@@ -26,7 +26,7 @@ const KEYBOARD_INTERRUPT_SENTINEL: &str = "KeyboardInterrupt:";
 /// Build a progress closure that bridges Python callbacks across the GIL boundary.
 ///
 /// KeyboardInterrupt is tagged with a sentinel prefix so it can be re-raised
-/// as `PyKeyboardInterrupt` instead of being swallowed into a generic `PyValueError`.
+/// as `PyKeyboardInterrupt`.
 fn make_progress_fn(cb: Py<PyAny>) -> ProgressFn {
     Box::new(move |current: usize, total: usize| -> Result<(), String> {
         Python::attach(|py| {
@@ -58,10 +58,7 @@ fn map_stack_error<T>(result: Result<T, String>) -> PyResult<T> {
 /// `array` in standard (row-major) layout: borrowed when it already is,
 /// copied otherwise.
 ///
-/// The bm3d_core fast paths read standard layout only. Any other layout
-/// (Fortran order, negative strides, a strided view) takes a slower indexed
-/// path that agrees only to rounding. Converting here runs the same code on
-/// the same data, so every layout gives the C-order output exactly (#164).
+/// The bm3d_core fast paths read standard layout only.
 fn standard_layout<A: Clone, D: Dimension>(array: ArrayView<'_, A, D>) -> CowArray<'_, A, D> {
     if array.is_standard_layout() {
         CowArray::from(array)
@@ -70,9 +67,8 @@ fn standard_layout<A: Clone, D: Dimension>(array: ArrayView<'_, A, D>) -> CowArr
     }
 }
 
-/// Candidate-search stride of a low-level kernel binding. These bindings do
-/// not know the ring-removal mode, so `None` keeps the reference stride
-/// `step_size`, as before `search_step` existed.
+/// Candidate-search stride of a low-level kernel binding. `None` keeps the reference stride
+/// `step_size`.
 fn kernel_search_step(step_size: usize, search_step: Option<usize>) -> Result<usize, String> {
     match search_step {
         Some(0) => Err("search_step must be > 0 (or None for step_size)".to_string()),
@@ -900,9 +896,7 @@ pub fn fourier_svd_removal_py_f64<'py>(
 /// scaled MAD (1.4826) of the result is returned.
 ///
 /// The returned value is the amplitude of vertical streaks — the sinogram
-/// signature of ring artifacts — not the pixel-level standard deviation of
-/// the image. For purely i.i.d. pixel noise it lands far below the pixel
-/// sigma (roughly 8x smaller for a 256-row image). The BM3D pipeline uses
+/// signature of ring artifacts. The BM3D pipeline uses
 /// this estimator to fill in `sigma_random` when it is set to 0.0.
 ///
 /// Parameters
@@ -940,7 +934,7 @@ pub fn estimate_noise_sigma_py_f64(sinogram: PyReadonlyArray2<'_, f64>) -> PyRes
 /// Multi-scale BM3D streak removal for 2D sinograms (f32 precision).
 ///
 /// This function wraps single-scale BM3D in a coarse-to-fine pyramid
-/// for handling wide streaks that single-scale cannot capture.
+/// for handling wide streaks.
 ///
 /// Parameters
 /// ----------
@@ -951,7 +945,7 @@ pub fn estimate_noise_sigma_py_f64(sinogram: PyReadonlyArray2<'_, f64>) -> PyRes
 /// filter_strength : float, optional
 ///     Multiplier for BM3D filtering intensity. Default: 1.0
 /// threshold : float, optional
-///     Hard threshold coefficient. Default: 3.5 (note: different from single-scale 2.7)
+///     Hard threshold coefficient. Default: 3.5
 /// debin_iterations : int, optional
 ///     Iterations for cubic spline debinning. Default: 30
 /// patch_size : int, optional
@@ -1167,7 +1161,7 @@ pub fn multiscale_bm3d_streak_removal_2d_f64<'py>(
     Ok(output.to_pyarray(py))
 }
 
-/// BM3D Rust accelerator module
+/// BM3D Rust module
 #[pymodule]
 fn bm3d_rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // f32 (single precision) functions
