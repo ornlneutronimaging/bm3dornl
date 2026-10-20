@@ -1,4 +1,3 @@
-// Allow dead code and unused imports during GUI development
 #![allow(dead_code)]
 #![allow(unused_imports)]
 #![allow(unused_variables)]
@@ -18,7 +17,6 @@ use ui::{
     SliceViewer, WindowLevel, compute_difference, save_volume,
 };
 
-/// Load application icon from embedded PNG (256x256 for reasonable binary size)
 fn load_icon() -> Option<egui::IconData> {
     let icon_bytes = include_bytes!("../../../../../resources/bm3dornl_icon_256.png");
     let image = image::load_from_memory(icon_bytes).ok()?.into_rgba8();
@@ -93,7 +91,6 @@ fn main() -> eframe::Result<()> {
     let (startup_file, startup_dataset, return_path) = parse_args();
     let mut viewport = egui::ViewportBuilder::default().with_inner_size([1400.0, 900.0]);
 
-    // Set application icon if available
     if let Some(icon) = load_icon() {
         viewport = viewport.with_icon(std::sync::Arc::new(icon));
     }
@@ -118,7 +115,6 @@ fn main() -> eframe::Result<()> {
     )
 }
 
-/// Which volume to display in single view mode
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 enum ViewMode {
     #[default]
@@ -126,7 +122,6 @@ enum ViewMode {
     Processed,
 }
 
-/// Display mode: single image or side-by-side comparison
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 enum DisplayMode {
     #[default]
@@ -135,42 +130,33 @@ enum DisplayMode {
 }
 
 struct App {
-    // Data state
     volume: Option<Volume3D>,
     processed_volume: Option<Volume3D>,
     file_path: Option<PathBuf>,
 
-    // HDF5 browsing state
     hdf5_tree: Option<Hdf5TreeBrowser>,
     pending_hdf5_path: Option<PathBuf>,
 
-    // UI components
     axis_mapping_widget: Option<AxisMappingWidget>,
     slice_viewer: SliceViewer,
     compare_view: CompareView,
     colormap_selector: ColormapSelector,
     window_level: WindowLevel,
 
-    // Histogram overlays
     single_histogram: SingleViewHistogram,
     compare_histogram: CompareViewHistogram,
 
-    // Processing
     bm3d_params: Bm3dParameters,
     processing_manager: ProcessingManager,
     view_mode: ViewMode,
     display_mode: DisplayMode,
 
-    // Save dialog
     save_dialog: SaveDialog,
 
-    // Display options
     keep_aspect_ratio: bool,
 
-    // Error handling
     error_message: Option<String>,
 
-    // A volume load in progress (background thread + progress bar).
     loading: Option<LoadingJob>,
 
     // Set when launched with --called-from-app: where the "Return data to
@@ -198,7 +184,7 @@ impl Default for App {
             view_mode: ViewMode::default(),
             display_mode: DisplayMode::default(),
             save_dialog: SaveDialog::default(),
-            keep_aspect_ratio: true, // Default to maintaining aspect ratio
+            keep_aspect_ratio: true,
             error_message: None,
             loading: None,
             return_path: None,
@@ -227,7 +213,6 @@ impl App {
         }
     }
 
-    /// Clear every piece of state tied to the previously loaded volume.
     fn reset_for_load(&mut self) {
         self.error_message = None;
         self.volume = None;
@@ -250,9 +235,6 @@ impl App {
         self.loading = Some(LoadingJob::start_tiff_sequence(folder));
     }
 
-    /// Open the file passed on the command line: TIFF stacks load directly;
-    /// an HDF5 file loads the requested dataset — or its only 3D dataset —
-    /// directly, and falls back to the dataset browser otherwise.
     fn open_startup_file(&mut self, path: PathBuf, dataset: Option<String>) {
         let extension = path
             .extension()
@@ -382,9 +364,6 @@ impl App {
             let config = self.bm3d_params.to_multiscale_config();
             let use_multiscale = self.bm3d_params.uses_multiscale();
 
-            // Use the processing axis from parameters (configurable in Advanced).
-            // Default is axis 1 (Y) for standard tomography data [angles, Y, X].
-            // Each slice perpendicular to this axis is processed as a sinogram.
             let processing_axis = self.bm3d_params.processing_axis;
 
             self.processing_manager.start_processing(
@@ -461,12 +440,10 @@ impl App {
         ui.heading("Processing");
         ui.separator();
 
-        // Parameters
         self.bm3d_params.show(ui);
 
         ui.add_space(10.0);
 
-        // Processing controls
         let state = self.processing_manager.state().clone();
 
         match &state {
@@ -544,12 +521,10 @@ impl App {
         ui.add_space(10.0);
         ui.separator();
 
-        // View controls
         ui.heading("View");
 
         let has_processed = self.processed_volume.is_some();
 
-        // Display mode toggle (Single / Compare)
         ui.horizontal(|ui| {
             ui.label("Display:")
                 .on_hover_text("Switch between single image and side-by-side comparison");
@@ -572,7 +547,6 @@ impl App {
             });
         });
 
-        // Single view: Original/Processed toggle
         if self.display_mode == DisplayMode::Single {
             ui.horizontal(|ui| {
                 ui.label("View:")
@@ -597,7 +571,6 @@ impl App {
             });
         }
 
-        // Reset view mode if no processed data
         if !has_processed {
             if self.view_mode == ViewMode::Processed {
                 self.view_mode = ViewMode::Original;
@@ -610,7 +583,6 @@ impl App {
         ui.add_space(10.0);
         ui.separator();
 
-        // Save button
         ui.heading("Export");
         if ui
             .button("💾 Save...")
@@ -620,8 +592,6 @@ impl App {
             self.save_dialog.open();
         }
 
-        // Launched by another application: one click sends the processed
-        // volume back and closes the tool.
         if let Some(return_path) = self.return_path.clone() {
             ui.add_space(6.0);
             let has_processed = self.processed_volume.is_some();
@@ -666,8 +636,6 @@ impl App {
 
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        // A volume load in progress: fold the result in when done, show a
-        // progress bar meanwhile.
         if let Some(job) = &mut self.loading {
             match job.poll() {
                 Some(Ok(volume)) => {
@@ -710,10 +678,8 @@ impl eframe::App for App {
             }
         }
 
-        // Poll processing progress
         self.processing_manager.poll_progress();
 
-        // Check if processing completed and store result
         if matches!(self.processing_manager.state(), ProcessingState::Completed)
             && let Some(result) = self.processing_manager.take_processed_result()
         {
@@ -729,24 +695,20 @@ impl eframe::App for App {
             self.update_window_level_for_slice();
         }
 
-        // Request repaint while processing
         if self.processing_manager.is_processing() {
             ctx.request_repaint();
         }
 
-        // Save dialog
         let has_processed = self.processed_volume.is_some();
         if let Some(request) = self.save_dialog.show(ctx, has_processed) {
             self.handle_save_request(&request);
         }
 
-        // Top panel
         egui::TopBottomPanel::top("top_panel").show(ctx, |ui| {
             ui.horizontal(|ui| {
                 ui.heading("bm3dornl");
                 ui.separator();
 
-                // Dropdown menu for file opening options
                 egui::menu::menu_button(ui, "📂 Open ▾", |ui| {
                     if ui
                         .button("Open File...")
@@ -782,7 +744,6 @@ impl eframe::App for App {
                     ui.label(format!("Shape: [{}, {}, {}]", shape[0], shape[1], shape[2]));
                 }
 
-                // Display mode indicator
                 ui.separator();
                 match self.display_mode {
                     DisplayMode::Single => match self.view_mode {
@@ -796,7 +757,6 @@ impl eframe::App for App {
                     }
                 };
 
-                // Version display (right-aligned)
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.label(format!("v{}", env!("CARGO_PKG_VERSION")))
                         .on_hover_text("bm3dornl version");
@@ -808,7 +768,6 @@ impl eframe::App for App {
             }
         });
 
-        // Left panel for HDF5 tree (if browsing)
         if self.hdf5_tree.is_some() {
             egui::SidePanel::left("hdf5_tree_panel")
                 .resizable(true)
@@ -852,7 +811,6 @@ impl eframe::App for App {
                 });
         }
 
-        // Right panel for processing controls (when volume loaded)
         if self.volume.is_some() {
             egui::SidePanel::right("processing_panel")
                 .resizable(true)
@@ -862,16 +820,13 @@ impl eframe::App for App {
                 });
         }
 
-        // Main central panel
         egui::CentralPanel::default().show(ctx, |ui| {
             if self.current_volume().is_some() {
-                // Axis mapping controls
                 let mut mapping_changed = false;
                 if let Some(widget) = &mut self.axis_mapping_widget {
                     mapping_changed = widget.show(ui);
                 }
 
-                // Apply mapping changes to both volumes
                 if mapping_changed {
                     if let Some(widget) = &self.axis_mapping_widget {
                         let mapping = widget.mapping();
@@ -882,13 +837,12 @@ impl eframe::App for App {
                             vol.set_axis_mapping(mapping);
                         }
                     }
-                    self.compare_view.reset(); // Reset compare view textures
+                    self.compare_view.reset();
                     self.update_window_level_for_slice();
                 }
 
                 ui.separator();
 
-                // Visualization controls row
                 ui.horizontal(|ui| {
                     self.colormap_selector.show(ui);
                     ui.separator();
@@ -900,10 +854,8 @@ impl eframe::App for App {
 
                 ui.separator();
 
-                // Display based on mode
                 match self.display_mode {
                     DisplayMode::Single => {
-                        // Single slice viewer
                         let vol_ref = match self.view_mode {
                             ViewMode::Original => self.volume.as_ref(),
                             ViewMode::Processed => {
@@ -915,13 +867,10 @@ impl eframe::App for App {
                             let colormap = self.colormap_selector.current();
                             let slice_index = self.slice_viewer.current_slice();
 
-                            // Get slice data for histogram and cursor tracking
                             let slice_data = vol.get_slice(slice_index);
 
-                            // Get ROI from slice viewer
                             let roi = self.slice_viewer.roi().copied();
 
-                            // Show histogram panel with ROI support
                             let mut clear_roi_clicked = false;
                             let cursor_in_roi = self.slice_viewer.is_cursor_in_roi();
                             self.single_histogram.show_with_roi(
@@ -934,12 +883,10 @@ impl eframe::App for App {
                                 cursor_in_roi,
                             );
 
-                            // Handle Clear ROI button click
                             if clear_roi_clicked {
                                 self.slice_viewer.clear_roi();
                             }
 
-                            // Show slice viewer with cursor tracking
                             let slice_changed = self.slice_viewer.show_with_slice_data(
                                 ui,
                                 vol,
@@ -955,19 +902,15 @@ impl eframe::App for App {
                         }
                     }
                     DisplayMode::Compare => {
-                        // Three-panel comparison view
                         if let (Some(orig), Some(proc)) = (&self.volume, &self.processed_volume) {
                             let colormap = self.colormap_selector.current();
                             let slice_index = self.compare_view.current_slice();
 
-                            // Get slice data for histograms and cursor tracking
                             let orig_slice = orig.get_slice(slice_index);
                             let proc_slice = proc.get_slice(slice_index);
 
-                            // Get ROI from compare view
                             let roi = self.compare_view.roi().copied();
 
-                            // Show histogram panel with ROI support
                             let mut clear_roi_clicked = false;
                             let cursor_in_roi = self.compare_view.is_cursor_in_roi();
                             self.compare_histogram.show_with_roi(
@@ -981,12 +924,10 @@ impl eframe::App for App {
                                 cursor_in_roi,
                             );
 
-                            // Handle Clear ROI button click
                             if clear_roi_clicked {
                                 self.compare_view.clear_roi();
                             }
 
-                            // Show compare view with cursor tracking
                             let slice_changed = self.compare_view.show_with_slice_data(
                                 ui,
                                 orig,

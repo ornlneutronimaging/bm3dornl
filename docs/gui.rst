@@ -46,7 +46,7 @@ Features
 **Visualization**
 
 - Interactive slice viewer with a slice slider and scroll-wheel zoom
-- Real-time histogram display
+- Histogram display
 - Adjustable window/level (contrast) controls
 - Side-by-side comparison of original and processed images
 
@@ -60,7 +60,6 @@ Features
 
 - Shift+drag to select a region of interest
 - Histogram updates to show ROI statistics
-- Useful for evaluating local noise characteristics
 
 **Export**
 
@@ -109,8 +108,6 @@ Workflow
 
 Tips
 ----
-
-- **Start with defaults:** The defaults work well for most cases.
 
 - **Use streak mode:** Choose ``mode="streak"`` for ring artifacts.
 

@@ -60,7 +60,7 @@ Block Matching Parameters
      - Description
    * - ``patch_size``
      - ``8``
-     - Size of patches for block matching. Use 7 or 8 for best results.
+     - Size of patches for block matching.
    * - ``step_size``
      - ``4``
      - Stride between reference patches. Lower values can improve quality but take longer.
@@ -85,8 +85,7 @@ Block Matching Parameters
 - Generic mode searches every position by default. At the default
   ``search_window`` this takes 2 to 3 times as long as a search with
   ``step_size``, and more with a larger window (about 5 to 6 times at
-  ``search_window=64``). Generic mode used to search with ``step_size``;
-  ``search_step=step_size`` restores that output and speed.
+  ``search_window=64``).
 
 Streak Mode Parameters
 ----------------------
@@ -105,7 +104,7 @@ These parameters only apply when ``mode="streak"``:
      - Sigma for Gaussian smoothing in streak profile estimation.
    * - ``streak_iterations``
      - ``2``
-     - Number of iterations for robust streak estimation.
+     - Number of iterations for streak estimation.
    * - ``sigma_map_smoothing``
      - ``20.0``
      - Smoothing width for the noise map. This map stores a local noise estimate

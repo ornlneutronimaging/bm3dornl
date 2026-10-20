@@ -4,8 +4,6 @@ use rayon::prelude::*;
 use std::env;
 
 /// Daubechies-3 wavelet high-pass decomposition filter coefficients.
-/// These coefficients correspond to the decomposition high-pass filter (dec_hi).
-/// L2 norm is 1.0.
 const DB3_DEC_HI: [f64; 6] = [
     -0.33267055,
     0.80689151,
@@ -15,10 +13,6 @@ const DB3_DEC_HI: [f64; 6] = [
     0.03522629,
 ];
 
-/// Default cap for columns used in automatic sigma estimation.
-///
-/// For very wide sinograms, sampling evenly spaced columns preserves
-/// robust scale estimation while reducing runtime significantly.
 const DEFAULT_SIGMA_EST_MAX_COLUMNS: usize = 1024;
 const SIGMA_EST_MAX_COLUMNS_ENV: &str = "BM3D_SIGMA_EST_MAX_COLUMNS";
 
@@ -50,19 +44,6 @@ fn sample_columns_evenly<F: Bm3dFloat>(data: ArrayView2<F>, sample_cols: usize) 
     })
 }
 
-/// Estimate the standard deviation of vertical streak noise (MAD-based).
-///
-/// This implements the sigma estimation from Mäkinen et al. (2021). The image
-/// is smoothed with a tall vertical Gaussian (sigma = rows / 12), which passes
-/// column-wise streak structure but suppresses pixel-level i.i.d. noise, then
-/// high-pass filtered horizontally (db3) to isolate column-to-column
-/// variation; the scaled MAD (1.4826) of the result is returned.
-///
-/// The result is the vertical-streak amplitude — the sinogram signature of
-/// ring artifacts — not the pixel-level standard deviation: for purely i.i.d.
-/// pixel noise it lands far below the pixel sigma (roughly 8x smaller at 256
-/// rows). The pipeline uses it to fill in `sigma_random` when the caller
-/// sets it to 0.0 (the default is 0.1, not 0.0).
 pub fn estimate_noise_sigma<F: Bm3dFloat>(sinogram: ArrayView2<F>) -> F {
     let (_rows, cols) = sinogram.dim();
     let sampled_storage = match resolve_sigma_est_max_columns() {
@@ -75,12 +56,6 @@ pub fn estimate_noise_sigma<F: Bm3dFloat>(sinogram: ArrayView2<F>) -> F {
         sinogram.dim()
     };
 
-    // Step 1: Vertical Gaussian filter
-    // Sigma = height / 12.0
-    //
-    // Use a recursive IIR approximation (Young/van Vliet family coefficients)
-    // instead of wide FIR convolution. This preserves per-sinogram semantics
-    // while reducing complexity from O(rows*cols*kernel_width) to O(rows*cols).
     let sigma_v = rows as f64 / 12.0;
     let smoothed = if let Some(sampled) = sampled_storage.as_ref() {
         gaussian_filter_1d_vertical_recursive(sampled.view(), sigma_v)
@@ -88,27 +63,16 @@ pub fn estimate_noise_sigma<F: Bm3dFloat>(sinogram: ArrayView2<F>) -> F {
         gaussian_filter_1d_vertical_recursive(sinogram, sigma_v)
     };
 
-    // Step 2: Horizontal High-Pass (db3)
-    // Convert DB3 coeffs to generic float
     let db3_kernel: Vec<F> = DB3_DEC_HI.iter().map(|&x| F::from_f64_c(x)).collect();
     let filtered = convolve_1d_horizontal(smoothed.view(), &db3_kernel);
 
-    // Step 3: Compute MAD
     let mad_val = compute_mad(filtered.view());
-
-    // Step 4: Scale to Sigma
-    // Filter gain for db3 high-pass is L2 norm = 1.0.
-    // Vertical filter gain for vertical streaks (constant signal) is L1 norm = 1.0.
-    // So Effective Gain = 1.0.
-    // sigma = 1.4826 * MAD
 
     mad_val * F::from_f64_c(1.4826)
 }
 
 #[inline]
 fn recursive_gaussian_coefficients(sigma: f64) -> (f64, f64, f64, f64, f64) {
-    // Coefficients from a widely used recursive Gaussian approximation.
-    // q maps sigma to a stable coefficient domain.
     let sigma = sigma.max(0.5);
     let q = if sigma >= 2.5 {
         0.98711 * sigma - 0.96330
@@ -143,8 +107,6 @@ pub(crate) fn gaussian_filter_1d_vertical_recursive<F: Bm3dFloat>(
     let mut output = Array2::zeros((rows, cols));
     let mut forward = vec![F::zero(); rows];
 
-    // `data` is the caller's array. The fast path indexes it as a row-major
-    // slice, so it needs standard layout (`as_slice`); `output` is ours.
     if let (Some(data_slice), Some(output_slice)) =
         (data.as_slice(), output.as_slice_memory_order_mut())
     {
@@ -264,15 +226,11 @@ fn median_of_slice<F: Bm3dFloat>(data: &mut [F]) -> F {
     }
     let mid = len / 2;
 
-    // select_nth_unstable finds the median in O(n)
     let (_, &mut median, _) = data.select_nth_unstable_by(mid, |a, b| a.partial_cmp(b).unwrap());
 
     if len % 2 == 1 {
         median
     } else {
-        // Even number of elements: (mid + mid-1) / 2
-        // We need to find the element before mid.
-        // select_nth_unstable partitioned the array so everything before mid is <= mid.
         let left_part = &data[..mid];
         let prev_median = left_part
             .iter()
@@ -282,8 +240,6 @@ fn median_of_slice<F: Bm3dFloat>(data: &mut [F]) -> F {
 }
 
 fn compute_mad<F: Bm3dFloat>(data: ArrayView2<F>) -> F {
-    // Flatten once and reuse the same buffer for absolute deviations to reduce
-    // transient memory and allocation overhead in the hot auto-sigma path.
     let mut values: Vec<F> = data.iter().copied().collect();
     let median = median_of_slice(&mut values);
     for v in &mut values {
@@ -308,13 +264,11 @@ mod tests {
         let mut rng = StdRng::seed_from_u64(seed);
         let normal = Normal::new(0.0, sigma).unwrap();
 
-        // Generate 1D profile
         let mut profile = Vec::with_capacity(width);
         for _ in 0..width {
             profile.push(normal.sample(&mut rng));
         }
 
-        // Broadcast to 2D
         let mut img = Array2::zeros((height, width));
         for r in 0..height {
             for c in 0..width {
@@ -334,7 +288,6 @@ mod tests {
 
         let error = (sigma_est - sigma_true).abs() / sigma_true;
 
-        // Expect < 10% error
         assert!(
             error < 0.10,
             "Error {:.2}% exceeds 10% tolerance",
@@ -360,7 +313,6 @@ mod tests {
             "High noise should yield higher sigma than low noise"
         );
 
-        // Safe division check
         if est_low > 1e-9 {
             let ratio = est_high / est_low;
             assert!(
@@ -375,19 +327,16 @@ mod tests {
     fn test_horizontal_structure_insensitivity() {
         let (height, width) = (256, 256);
 
-        // Strong horizontal structure: Y-varying signal (Sine wave down columns)
-        // Image(r, c) = sin(r * scale)
         let mut img = Array2::<f32>::zeros((height, width));
         let rows = height as f32;
 
         for r in 0..height {
-            let val = (r as f32 / rows * 10.0 * std::f32::consts::PI).sin(); // Amplitude 1.0
+            let val = (r as f32 / rows * 10.0 * std::f32::consts::PI).sin();
             for c in 0..width {
                 img[[r, c]] = val;
             }
         }
 
-        // Add weak vertical streaks
         let sigma_true = 0.02;
         let streaks = generate_vertical_streaks(height, width, sigma_true, 42);
 
@@ -395,7 +344,6 @@ mod tests {
 
         let sigma_est = estimate_noise_sigma(combined.view());
 
-        // It might overestimate slightly, but shouldn't be dominated by structure (1.0)
         assert!(
             sigma_est < 0.10,
             "Estimator heavily affected by horizontal structure. Got {}",
@@ -405,12 +353,9 @@ mod tests {
 
     #[test]
     fn test_f64_support() {
-        // Verify f64 works
-        // Use larger size for stable estimation (same as f32 test)
         let (height, width) = (256, 1024);
         let sigma_true = 0.05f64;
 
-        // Generate f64 data
         let mut rng = StdRng::seed_from_u64(999);
         let normal = Normal::new(0.0, sigma_true).unwrap();
         let mut img = Array2::<f64>::zeros((height, width));

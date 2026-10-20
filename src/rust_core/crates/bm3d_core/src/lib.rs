@@ -1,13 +1,7 @@
-//! BM3D Core Algorithm Library
-//!
-//! Pure Rust implementation of BM3D (Block-Matching and 3D filtering) algorithm
-//! for image denoising. This crate contains all algorithm logic without Python bindings.
-//!
-//! ## f32/f64 Support
+//! Rust implementation of BM3D (Block-Matching and 3D filtering) algorithm
+//! for image denoising.
 //!
 //! The library supports both f32 and f64 precision through the `Bm3dFloat` trait.
-//! All public functions are generic over this trait, allowing users to choose
-//! the precision that best fits their needs.
 
 pub mod block_matching;
 pub mod filtering;
@@ -21,7 +15,6 @@ pub mod streak;
 pub mod transforms;
 pub mod utils;
 
-// Re-export commonly used types at the crate root
 pub use block_matching::PatchMatch;
 pub use float_trait::Bm3dFloat;
 pub use multiscale::{

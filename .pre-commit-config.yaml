@@ -1,5 +1,4 @@
 # pre-commit.ci doesn't have Rust/cargo installed, so skip Rust hooks there.
-# Rust linting is covered by GitHub Actions CI instead.
 ci:
   skip: [fmt, clippy]
 

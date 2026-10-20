@@ -1,15 +1,10 @@
-//! Images smaller than `patch_size` (issue #165).
+//! Images smaller than `patch_size`.
 //!
 //! `bm3d_ring_artifact_removal` refuses such an image with "Image size
 //! (rows, cols) is smaller than patch_size p". The kernel entry points
-//! `run_bm3d_step` and `run_bm3d_step_stack` used to index past the image in
-//! block matching and panic; they must return the same error. Multiscale
-//! processing must return it too, also for an image that is only too short
-//! (7 x 200), which it used to pass through unfiltered. An image exactly
-//! `patch_size` in a dimension is valid.
-//!
-//! These tests use only the public API, so they live in an integration test
-//! target rather than in a unit-test module.
+//! `run_bm3d_step` and `run_bm3d_step_stack` must return the same error.
+//! Multiscale processing must return it too. An image exactly `patch_size` in
+//! a dimension is valid.
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
@@ -32,9 +27,6 @@ const RING_MODES: [RingRemovalMode; 3] = [
     RingRemovalMode::FourierSvd,
 ];
 
-/// Positive values around 0.5 plus uniform noise from a fixed-seed linear
-/// congruential generator. Positive, so multiscale accepts it as linear
-/// transmission data.
 fn noisy_image<F: Bm3dFloat>(rows: usize, cols: usize, seed: u64) -> Array2<F> {
     let mut state = seed;
     Array2::from_shape_fn((rows, cols), |(_, c)| {
@@ -70,7 +62,6 @@ fn kernel_config<F: Bm3dFloat>(patch_size: usize) -> Bm3dKernelConfig<F> {
     }
 }
 
-/// Run `f` and fail with a clear message if it panics instead of returning.
 fn without_panic<T>(label: &str, f: impl FnOnce() -> T) -> T {
     catch_unwind(AssertUnwindSafe(f))
         .unwrap_or_else(|_| panic!("{label} panicked instead of returning a Result"))
@@ -164,7 +155,6 @@ fn run_bm3d_step_stack_rejects_images_smaller_than_patch_size() {
 
 #[test]
 fn kernel_check_uses_the_configured_patch_size() {
-    // 8 x 64 is valid at patch_size 8 but too small at patch_size 9.
     for mode in KERNEL_MODES {
         let label = format!("run_bm3d_step f32 {mode:?} 8x64 at patch_size 9");
         let result = without_panic(&label, || step_2d::<f32>(8, 64, mode, 9));

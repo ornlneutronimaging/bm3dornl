@@ -1,15 +1,8 @@
-"""``step_size`` must not exceed ``patch_size`` (issue #166).
+"""``step_size`` must not exceed ``patch_size``.
 
 Reference patches sit ``step_size`` apart. With a step larger than the patch
-they leave gaps, and the pixels in the gaps came back unfiltered (64 x 80,
-patch 8, step 12: 2880 of 5120 pixels unchanged in the kernel). Every entry
-point now refuses such a step with ValueError "step_size (s) must not exceed
-patch_size (p)". A step equal to ``patch_size`` stays valid and filters every
-pixel. A ``step_size`` of 0 raises ValueError instead of a panic.
-
-A Rust panic reaches Python as ``pyo3_runtime.PanicException``, which
-derives from BaseException, so ``pytest.raises(ValueError)`` does not catch
-it; each test also checks that the type is exactly ValueError.
+they leave gaps. A step equal to ``patch_size`` filters every
+pixel. A ``step_size`` of 0 raises ValueError.
 """
 
 import re
@@ -22,9 +15,6 @@ from bm3dornl import bm3d_ring_artifact_removal, bm3d_rust
 SIGMA = 0.05
 # (patch_size, step_size) with the step larger than the patch.
 TOO_LARGE = [(8, 9), (8, 12), (7, 8)]
-# The public API and the kernel return an unfiltered pixel unchanged, up to
-# the normalisation round trip of the public API (below 1e-6 here). A
-# filtered pixel moves by about SIGMA.
 UNFILTERED_TOLERANCE = 1e-6
 
 
@@ -50,14 +40,14 @@ def assert_raises_exactly(call, pattern):
 
 
 def too_large_pattern(patch_size, step_size):
-    return re.escape(f"step_size ({step_size}) must not exceed patch_size ({patch_size})")
+    return re.escape(
+        f"step_size ({step_size}) must not exceed patch_size ({patch_size})"
+    )
 
 
 def public_call(image, **kwargs):
     return np.asarray(bm3d_ring_artifact_removal(image, sigma_random=SIGMA, **kwargs))
 
-
-# --- Public API ----------------------------------------------------------------
 
 # name -> (input shape, keyword arguments)
 PUBLIC = {
@@ -78,7 +68,9 @@ def test_public_api_refuses_step_size_above_patch_size(entry, case):
     patch_size, step_size = case
     image = noisy_step_edges(shape)
     assert_raises_exactly(
-        lambda: public_call(image, patch_size=patch_size, step_size=step_size, **kwargs),
+        lambda: public_call(
+            image, patch_size=patch_size, step_size=step_size, **kwargs
+        ),
         too_large_pattern(patch_size, step_size),
     )
 
@@ -95,7 +87,9 @@ def test_public_api_accepts_step_size_equal_to_patch_size(entry, patch_size):
 
 @pytest.mark.parametrize("patch_size", [8, 7])
 @pytest.mark.parametrize("entry", ["2d-generic", "3d-generic"])
-def test_public_generic_step_size_equal_to_patch_size_filters_every_pixel(entry, patch_size):
+def test_public_generic_step_size_equal_to_patch_size_filters_every_pixel(
+    entry, patch_size
+):
     # Generic mode has no streak pre-subtraction, so an unfiltered pixel
     # comes back as its input.
     shape, kwargs = PUBLIC[entry]
@@ -109,10 +103,10 @@ def test_public_generic_step_size_equal_to_patch_size_filters_every_pixel(entry,
 def test_public_api_rejects_zero_step_size(entry):
     shape, kwargs = PUBLIC[entry]
     image = noisy_step_edges(shape)
-    assert_raises_exactly(lambda: public_call(image, step_size=0, **kwargs), "step_size")
+    assert_raises_exactly(
+        lambda: public_call(image, step_size=0, **kwargs), "step_size"
+    )
 
-
-# --- Bindings --------------------------------------------------------------------
 
 HIGH_LEVEL_BINDINGS = [
     ("bm3d_ring_artifact_removal_2d", np.float32),
@@ -162,7 +156,9 @@ def test_high_level_binding_refuses_step_size_above_patch_size(name, dtype, mode
     image = noisy_step_edges((64, 80), dtype=dtype)
     fn = getattr(bm3d_rust, name)
     assert_raises_exactly(
-        lambda: fn(image, mode, sigma_random=SIGMA, patch_size=patch_size, step_size=step_size),
+        lambda: fn(
+            image, mode, sigma_random=SIGMA, patch_size=patch_size, step_size=step_size
+        ),
         too_large_pattern(patch_size, step_size),
     )
 
@@ -182,7 +178,9 @@ def test_multiscale_binding_refuses_step_size_above_patch_size(name, dtype, case
 
 
 @pytest.mark.parametrize("case", TOO_LARGE, ids=case_id)
-@pytest.mark.parametrize("name,dtype", KERNEL_BINDINGS, ids=binding_ids(KERNEL_BINDINGS))
+@pytest.mark.parametrize(
+    "name,dtype", KERNEL_BINDINGS, ids=binding_ids(KERNEL_BINDINGS)
+)
 def test_kernel_binding_refuses_step_size_above_patch_size(name, dtype, case):
     patch_size, step_size = case
     assert_raises_exactly(
@@ -192,7 +190,9 @@ def test_kernel_binding_refuses_step_size_above_patch_size(name, dtype, case):
 
 
 @pytest.mark.parametrize("patch_size", [8, 7])
-@pytest.mark.parametrize("name,dtype", KERNEL_BINDINGS, ids=binding_ids(KERNEL_BINDINGS))
+@pytest.mark.parametrize(
+    "name,dtype", KERNEL_BINDINGS, ids=binding_ids(KERNEL_BINDINGS)
+)
 def test_kernel_binding_step_size_equal_to_patch_size_filters_every_pixel(
     name, dtype, patch_size
 ):
@@ -203,7 +203,9 @@ def test_kernel_binding_step_size_equal_to_patch_size_filters_every_pixel(
     assert not unchanged.any(), f"{int(unchanged.sum())} pixels came back unfiltered"
 
 
-@pytest.mark.parametrize("name,dtype", KERNEL_BINDINGS, ids=binding_ids(KERNEL_BINDINGS))
+@pytest.mark.parametrize(
+    "name,dtype", KERNEL_BINDINGS, ids=binding_ids(KERNEL_BINDINGS)
+)
 def test_kernel_binding_rejects_zero_step_size(name, dtype):
     # A stride of 0 must not reach the reference grid, where it would panic.
     assert_raises_exactly(lambda: kernel_call(name, dtype, 8, 0), "step_size")

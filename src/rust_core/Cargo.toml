@@ -11,7 +11,6 @@ ndarray = "0.15"
 rayon = "1.8"
 rustfft = "6.2"
 
-# Release profile with maximum optimizations
 [profile.release]
 opt-level = 3
 lto = "thin"

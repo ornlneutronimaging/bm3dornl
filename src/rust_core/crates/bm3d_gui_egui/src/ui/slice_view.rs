@@ -18,7 +18,6 @@ pub struct ImageRoi {
 }
 
 impl ImageRoi {
-    /// Create a new ROI from two corner points, normalizing to ensure min <= max.
     pub fn from_corners(x1: usize, y1: usize, x2: usize, y2: usize) -> Self {
         Self {
             min_x: x1.min(x2),
@@ -28,39 +27,32 @@ impl ImageRoi {
         }
     }
 
-    /// Get the width of the ROI in pixels.
     pub fn width(&self) -> usize {
         self.max_x.saturating_sub(self.min_x) + 1
     }
 
-    /// Get the height of the ROI in pixels.
     pub fn height(&self) -> usize {
         self.max_y.saturating_sub(self.min_y) + 1
     }
 
-    /// Get the total number of pixels in the ROI.
     pub fn pixel_count(&self) -> usize {
         self.width() * self.height()
     }
 
-    /// Check if the ROI is valid (non-zero area).
     pub fn is_valid(&self) -> bool {
         self.width() > 1 && self.height() > 1
     }
 }
 
-/// State for ROI selection.
 #[derive(Clone, Default)]
 pub struct RoiState {
-    /// Current ROI in image coordinates (None = no ROI).
+    /// Current ROI in image coordinates.
     pub roi: Option<ImageRoi>,
-    /// Is user currently drawing an ROI?
     pub drawing: bool,
     /// Start point of current draw operation (image coords).
     draw_start: Option<(usize, usize)>,
     /// Current drag end point during drawing (image coords).
     draw_end: Option<(usize, usize)>,
-    /// Is user currently moving an existing ROI?
     pub moving: bool,
     /// Offset from cursor to ROI top-left when move started.
     move_offset: Option<(i32, i32)>,
@@ -80,15 +72,13 @@ impl RoiState {
         self.move_offset = None;
     }
 
-    /// Start drawing a new ROI at the given image coordinates.
     pub fn start_draw(&mut self, x: usize, y: usize) {
         self.drawing = true;
         self.draw_start = Some((x, y));
         self.draw_end = Some((x, y));
-        self.roi = None; // Clear existing ROI when starting new draw
+        self.roi = None;
     }
 
-    /// Update the draw end point.
     pub fn update_draw(&mut self, x: usize, y: usize) {
         if self.drawing {
             self.draw_end = Some((x, y));
@@ -110,7 +100,6 @@ impl RoiState {
         self.draw_end = None;
     }
 
-    /// Get the current drawing rectangle (for preview), if any.
     pub fn drawing_rect(&self) -> Option<ImageRoi> {
         if self.drawing
             && let (Some((x1, y1)), Some((x2, y2))) = (self.draw_start, self.draw_end)
@@ -120,7 +109,6 @@ impl RoiState {
         None
     }
 
-    /// Check if a point is inside the current ROI.
     pub fn cursor_inside_roi(&self, x: usize, y: usize) -> bool {
         if let Some(roi) = &self.roi {
             x >= roi.min_x && x <= roi.max_x && y >= roi.min_y && y <= roi.max_y
@@ -129,7 +117,6 @@ impl RoiState {
         }
     }
 
-    /// Start moving the ROI from the given cursor position.
     pub fn start_move(&mut self, cursor_x: usize, cursor_y: usize) {
         if let Some(roi) = &self.roi {
             self.moving = true;
@@ -154,11 +141,9 @@ impl RoiState {
             let width = roi.width();
             let height = roi.height();
 
-            // Calculate new top-left position
             let new_min_x = (cursor_x as i32 - off_x).max(0) as usize;
             let new_min_y = (cursor_y as i32 - off_y).max(0) as usize;
 
-            // Clamp to image bounds
             let new_min_x = new_min_x.min(img_width.saturating_sub(width));
             let new_min_y = new_min_y.min(img_height.saturating_sub(height));
 
@@ -171,21 +156,18 @@ impl RoiState {
         }
     }
 
-    /// Finish moving the ROI.
     pub fn finish_move(&mut self) {
         self.moving = false;
         self.move_offset = None;
     }
 }
 
-/// Cursor information for display.
 #[derive(Clone, Default)]
 pub struct CursorInfo {
     /// Image X coordinate (column)
     pub x: Option<usize>,
     /// Image Y coordinate (row)
     pub y: Option<usize>,
-    /// Intensity value at cursor position
     pub intensity: Option<f32>,
 }
 
@@ -201,12 +183,10 @@ impl CursorInfo {
     }
 }
 
-/// Pan/zoom state for image display.
 #[derive(Clone, Copy)]
 pub struct ViewTransform {
     /// Zoom level (1.0 = 100%)
     pub zoom: f32,
-    /// Pan offset in image coordinates
     pub pan: egui::Vec2,
 }
 
@@ -239,23 +219,17 @@ pub struct SliceViewer {
     cached_colormap: Option<Colormap>,
     cached_window_level: Option<(f32, f32)>,
 
-    // View transform for pan/zoom
     view_transform: ViewTransform,
-    // For drag detection
     is_dragging: bool,
     last_drag_pos: Option<egui::Pos2>,
 
-    // Cursor tracking
     cursor_info: CursorInfo,
-    // Cached image rect for cursor coordinate conversion
     cached_image_rect: Option<egui::Rect>,
     cached_image_dims: Option<(usize, usize)>,
 
-    // ROI selection
     roi_state: RoiState,
     /// ROI drawing mode active (drag draws ROI without Shift).
     pub roi_mode: bool,
-    /// Is cursor currently inside the ROI? (for visual feedback)
     cursor_in_roi: bool,
 }
 
@@ -309,17 +283,14 @@ impl SliceViewer {
         self.cursor_in_roi = false;
     }
 
-    /// Check if cursor is currently inside the ROI (for UI feedback).
     pub fn is_cursor_in_roi(&self) -> bool {
         self.cursor_in_roi
     }
 
-    /// Get the current ROI, if any.
     pub fn roi(&self) -> Option<&ImageRoi> {
         self.roi_state.roi.as_ref()
     }
 
-    /// Clear the current ROI.
     pub fn clear_roi(&mut self) {
         self.roi_state.clear();
     }
@@ -359,21 +330,17 @@ impl SliceViewer {
         let axis_mapping = volume.axis_mapping();
         let mut slice_changed = false;
 
-        // Clamp current slice to valid range
         if self.current_slice >= num_slices {
             self.current_slice = num_slices.saturating_sub(1);
         }
 
-        // Navigation controls
         ui.horizontal(|ui| {
-            // Step backward button
             if ui.button("◄").on_hover_text("Previous slice").clicked() && self.current_slice > 0
             {
                 self.current_slice -= 1;
                 slice_changed = true;
             }
 
-            // Slider
             let slider_response = ui
                 .add(
                     egui::Slider::new(&mut self.current_slice, 0..=num_slices.saturating_sub(1))
@@ -385,7 +352,6 @@ impl SliceViewer {
                 slice_changed = true;
             }
 
-            // Step forward button
             if ui.button("►").on_hover_text("Next slice").clicked()
                 && self.current_slice < num_slices - 1
             {
@@ -393,7 +359,6 @@ impl SliceViewer {
                 slice_changed = true;
             }
 
-            // Slice label
             ui.label(format!(
                 "Slice D{}: {} / {}",
                 axis_mapping.slice_axis,
@@ -403,7 +368,6 @@ impl SliceViewer {
 
             ui.separator();
 
-            // Zoom indicator and reset
             ui.label(format!("Zoom: {}%", self.view_transform.zoom_percent()))
                 .on_hover_text("Current zoom level. Scroll to zoom, drag to pan");
             if ui
@@ -415,7 +379,6 @@ impl SliceViewer {
             }
         });
 
-        // Check if we need to update texture
         let wl_key = (window_level.min, window_level.max);
         let needs_update = self.cached_slice_index != Some(self.current_slice)
             || self.cached_axis_mapping != Some(axis_mapping)
@@ -427,18 +390,15 @@ impl SliceViewer {
             self.update_texture(ui.ctx(), volume, colormap, window_level);
         }
 
-        // Layout constants
         let colorbar_height = 30.0;
         let status_bar_height = 20.0;
         let available_size = ui.available_size();
         let image_area_height = available_size.y - colorbar_height - status_bar_height - 10.0;
 
-        // Display image with pan/zoom
         if self.texture_handle.is_some() {
             let (img_width, img_height) = volume.display_dimensions();
             let img_aspect = img_width as f32 / img_height as f32;
 
-            // Create a clip rect for the image area
             let (response, painter) = ui.allocate_painter(
                 egui::vec2(available_size.x, image_area_height),
                 egui::Sense::click_and_drag(),
@@ -446,7 +406,6 @@ impl SliceViewer {
 
             let clip_rect = response.rect;
 
-            // Calculate image rect based on aspect ratio setting and zoom
             let base_size = if keep_aspect_ratio {
                 let panel_aspect = clip_rect.width() / clip_rect.height();
                 if img_aspect > panel_aspect {
@@ -458,18 +417,14 @@ impl SliceViewer {
                 egui::vec2(clip_rect.width(), clip_rect.height())
             };
 
-            // Apply zoom
             let display_size = base_size * self.view_transform.zoom;
 
-            // Calculate image position with pan offset
             let center = clip_rect.center() + self.view_transform.pan;
             let image_rect = egui::Rect::from_center_size(center, display_size);
 
-            // Cache image rect and dimensions for cursor tracking
             self.cached_image_rect = Some(image_rect);
             self.cached_image_dims = Some((img_width, img_height));
 
-            // Handle mouse interactions (pan/zoom and ROI)
             self.handle_mouse_input(
                 &response,
                 clip_rect.center(),
@@ -478,10 +433,8 @@ impl SliceViewer {
                 img_height,
             );
 
-            // Track cursor position and compute image coordinates
             self.update_cursor_info(&response, image_rect, img_width, img_height, slice_data);
 
-            // Draw image (clipped to available area)
             let clipped_painter = painter.with_clip_rect(clip_rect);
             if let Some(texture) = &self.texture_handle {
                 clipped_painter.image(
@@ -492,10 +445,8 @@ impl SliceViewer {
                 );
             }
 
-            // Draw ROI overlay (if any)
             self.draw_roi_overlay(&clipped_painter, image_rect, img_width, img_height);
 
-            // Draw border around clip area
             painter.rect_stroke(
                 clip_rect,
                 0.0,
@@ -503,10 +454,8 @@ impl SliceViewer {
             );
         }
 
-        // Cursor status bar
         self.draw_cursor_status_bar(ui, available_size.x, status_bar_height);
 
-        // Horizontal colorbar below image
         self.draw_horizontal_colorbar(
             ui,
             available_size.x,
@@ -518,7 +467,6 @@ impl SliceViewer {
         slice_changed
     }
 
-    /// Update cursor info based on hover position.
     fn update_cursor_info(
         &mut self,
         response: &egui::Response,
@@ -528,17 +476,13 @@ impl SliceViewer {
         slice_data: Option<&Array2<f32>>,
     ) {
         if let Some(hover_pos) = response.hover_pos() {
-            // Check if cursor is within the image bounds
             if image_rect.contains(hover_pos) {
-                // Convert screen position to normalized image coordinates [0, 1]
                 let norm_x = (hover_pos.x - image_rect.left()) / image_rect.width();
                 let norm_y = (hover_pos.y - image_rect.top()) / image_rect.height();
 
-                // Convert to pixel coordinates
                 let pixel_x = (norm_x * img_width as f32).floor() as i32;
                 let pixel_y = (norm_y * img_height as f32).floor() as i32;
 
-                // Bounds check
                 if pixel_x >= 0
                     && pixel_x < img_width as i32
                     && pixel_y >= 0
@@ -550,7 +494,6 @@ impl SliceViewer {
                     self.cursor_info.x = Some(x);
                     self.cursor_info.y = Some(y);
 
-                    // Look up intensity if slice data is available
                     if let Some(data) = slice_data {
                         if y < data.nrows() && x < data.ncols() {
                             self.cursor_info.intensity = Some(data[[y, x]]);
@@ -571,7 +514,6 @@ impl SliceViewer {
         }
     }
 
-    /// Draw cursor status bar showing coordinates and intensity.
     fn draw_cursor_status_bar(&self, ui: &mut egui::Ui, width: f32, height: f32) {
         ui.allocate_ui(egui::vec2(width, height), |ui| {
             ui.horizontal(|ui| {
@@ -608,7 +550,6 @@ impl SliceViewer {
         });
     }
 
-    /// Draw horizontal colorbar with gradient and labels.
     fn draw_horizontal_colorbar(
         &self,
         ui: &mut egui::Ui,
@@ -618,7 +559,6 @@ impl SliceViewer {
         window_level: &WindowLevel,
     ) {
         ui.vertical(|ui| {
-            // Colorbar gradient
             let (response, painter) =
                 ui.allocate_painter(egui::vec2(width, height - 15.0), egui::Sense::hover());
 
@@ -638,10 +578,8 @@ impl SliceViewer {
                 painter.rect_filled(step_rect, 0.0, color);
             }
 
-            // Border
             painter.rect_stroke(rect, 0.0, egui::Stroke::new(1.0_f32, egui::Color32::GRAY));
 
-            // Labels row
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new(format!("{:.2}", window_level.min)).small());
                 ui.add_space(width - 80.0);
@@ -650,7 +588,6 @@ impl SliceViewer {
         });
     }
 
-    /// Convert screen position to image pixel coordinates.
     fn screen_to_image(
         &self,
         screen_pos: egui::Pos2,
@@ -662,15 +599,12 @@ impl SliceViewer {
             return None;
         }
 
-        // Convert screen position to normalized image coordinates [0, 1]
         let norm_x = (screen_pos.x - image_rect.left()) / image_rect.width();
         let norm_y = (screen_pos.y - image_rect.top()) / image_rect.height();
 
-        // Convert to pixel coordinates
         let pixel_x = (norm_x * img_width as f32).floor() as i32;
         let pixel_y = (norm_y * img_height as f32).floor() as i32;
 
-        // Bounds check
         if pixel_x >= 0 && pixel_x < img_width as i32 && pixel_y >= 0 && pixel_y < img_height as i32
         {
             Some((pixel_x as usize, pixel_y as usize))
@@ -679,7 +613,6 @@ impl SliceViewer {
         }
     }
 
-    /// Convert image pixel coordinates to screen position.
     fn image_to_screen(
         &self,
         img_x: usize,
@@ -705,13 +638,10 @@ impl SliceViewer {
         img_width: usize,
         img_height: usize,
     ) {
-        // Check if Shift is held for ROI drawing mode
         let shift_held = response.ctx.input(|i| i.modifiers.shift);
 
-        // Determine if we should draw ROI: either roi_mode is ON or Shift is held
         let should_draw_roi = self.roi_mode || shift_held;
 
-        // Handle scroll wheel for zoom (always active)
         if response.hovered() {
             let scroll_delta = response.ctx.input(|i| i.raw_scroll_delta.y);
             if scroll_delta != 0.0 {
@@ -728,7 +658,6 @@ impl SliceViewer {
                 self.view_transform.zoom = new_zoom;
             }
 
-            // Update cursor_in_roi for visual feedback
             if let Some(pointer_pos) = response.hover_pos() {
                 if let Some((img_x, img_y)) =
                     self.screen_to_image(pointer_pos, image_rect, img_width, img_height)
@@ -744,40 +673,32 @@ impl SliceViewer {
             self.cursor_in_roi = false;
         }
 
-        // Handle drag
         if response.dragged() {
             if let Some(pointer_pos) = response.interact_pointer_pos() {
                 if let Some((img_x, img_y)) =
                     self.screen_to_image(pointer_pos, image_rect, img_width, img_height)
                 {
-                    // Check if we're already in a dragging operation
                     if self.roi_state.drawing {
-                        // Continue drawing ROI
                         self.roi_state.update_draw(img_x, img_y);
                         self.is_dragging = false;
                         self.last_drag_pos = None;
                     } else if self.roi_state.moving {
-                        // Continue moving ROI
                         self.roi_state
                             .update_move(img_x, img_y, img_width, img_height);
                         self.is_dragging = false;
                         self.last_drag_pos = None;
                     } else {
-                        // Starting a new drag - determine what to do
                         let inside_roi = self.roi_state.cursor_inside_roi(img_x, img_y);
 
                         if inside_roi {
-                            // Drag inside existing ROI → always move ROI (even in ROI mode)
                             self.roi_state.start_move(img_x, img_y);
                             self.is_dragging = false;
                             self.last_drag_pos = None;
                         } else if should_draw_roi {
-                            // ROI drawing mode (roi_mode ON or Shift held) outside ROI → draw new ROI
                             self.roi_state.start_draw(img_x, img_y);
                             self.is_dragging = false;
                             self.last_drag_pos = None;
                         } else {
-                            // Normal pan mode (no ROI mode, outside ROI)
                             if let Some(last_pos) = self.last_drag_pos {
                                 let delta = pointer_pos - last_pos;
                                 self.view_transform.pan += delta;
@@ -787,7 +708,6 @@ impl SliceViewer {
                         }
                     }
                 } else {
-                    // Outside image - allow panning
                     if !self.roi_state.drawing && !self.roi_state.moving {
                         if let Some(last_pos) = self.last_drag_pos {
                             let delta = pointer_pos - last_pos;
@@ -799,7 +719,6 @@ impl SliceViewer {
                 }
             }
         } else {
-            // Drag ended
             if self.roi_state.drawing {
                 self.roi_state.finish_draw();
             }
@@ -811,7 +730,6 @@ impl SliceViewer {
         }
     }
 
-    /// Draw ROI overlay on the image.
     fn draw_roi_overlay(
         &self,
         painter: &egui::Painter,
@@ -819,11 +737,9 @@ impl SliceViewer {
         img_width: usize,
         img_height: usize,
     ) {
-        // Get ROI to draw (either finalized or currently drawing)
         let roi_to_draw = self.roi_state.drawing_rect().or(self.roi_state.roi);
 
         if let Some(roi) = roi_to_draw {
-            // Convert image coordinates to screen coordinates
             let top_left =
                 self.image_to_screen(roi.min_x, roi.min_y, image_rect, img_width, img_height);
             let bottom_right = self.image_to_screen(
@@ -836,7 +752,6 @@ impl SliceViewer {
 
             let screen_rect = egui::Rect::from_min_max(top_left, bottom_right);
 
-            // Draw semi-transparent fill - brighter when cursor is inside (hover feedback)
             let fill_alpha = if self.cursor_in_roi && !self.roi_state.drawing {
                 60
             } else {
@@ -845,15 +760,14 @@ impl SliceViewer {
             let fill_color = egui::Color32::from_rgba_unmultiplied(255, 255, 0, fill_alpha);
             painter.rect_filled(screen_rect, 0.0, fill_color);
 
-            // Draw border - different colors for different states
             let stroke_color = if self.roi_state.drawing {
-                egui::Color32::from_rgb(0, 255, 255) // Cyan while drawing
+                egui::Color32::from_rgb(0, 255, 255)
             } else if self.roi_state.moving {
-                egui::Color32::from_rgb(0, 255, 0) // Green while moving
+                egui::Color32::from_rgb(0, 255, 0)
             } else if self.cursor_in_roi {
-                egui::Color32::from_rgb(255, 165, 0) // Orange when hovering inside (movable)
+                egui::Color32::from_rgb(255, 165, 0)
             } else {
-                egui::Color32::from_rgb(255, 255, 0) // Yellow when finalized
+                egui::Color32::from_rgb(255, 255, 0)
             };
             let stroke_width = if self.cursor_in_roi || self.roi_state.moving {
                 3.0_f32
@@ -878,10 +792,8 @@ impl SliceViewer {
         if let Some(slice) = volume.get_slice(self.current_slice) {
             let (height, width) = (slice.nrows(), slice.ncols());
 
-            // Generate LUT for colormap
             let lut = colormap.generate_lut();
 
-            // Convert to RGBA with window/level and colormap
             let rgba_pixels: Vec<u8> = slice
                 .iter()
                 .flat_map(|&val| {

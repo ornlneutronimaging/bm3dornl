@@ -1,7 +1,6 @@
 use eframe::egui;
 
 /// Window/Level (contrast/brightness) controls.
-/// Controls the display range for image visualization.
 pub struct WindowLevel {
     /// Minimum display value (values below are clipped to black)
     pub min: f32,
@@ -10,7 +9,6 @@ pub struct WindowLevel {
     /// Data range for slider bounds
     data_min: f32,
     data_max: f32,
-    /// Whether auto mode is active
     auto_mode: bool,
 }
 
@@ -64,7 +62,6 @@ impl WindowLevel {
             ui.label("Window/Level:")
                 .on_hover_text("Adjust display intensity range (contrast/brightness)");
 
-            // Min slider
             ui.label("Min:")
                 .on_hover_text("Minimum display value. Values below this appear black");
             let min_response = ui.add(
@@ -80,7 +77,6 @@ impl WindowLevel {
 
             ui.separator();
 
-            // Max slider
             ui.label("Max:")
                 .on_hover_text("Maximum display value. Values above this appear white");
             let max_response = ui.add(
@@ -96,7 +92,6 @@ impl WindowLevel {
 
             ui.separator();
 
-            // Auto button
             let auto_text = if self.auto_mode { "Auto ✓" } else { "Auto" };
             if ui
                 .button(auto_text)
@@ -108,7 +103,6 @@ impl WindowLevel {
             }
         });
 
-        // Show current range info
         ui.horizontal(|ui| {
             ui.label(
                 egui::RichText::new(format!(

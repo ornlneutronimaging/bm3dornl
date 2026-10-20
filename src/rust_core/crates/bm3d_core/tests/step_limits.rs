@@ -1,16 +1,7 @@
-//! `step_size` must not exceed `patch_size` (issue #166).
+//! `step_size` must not exceed `patch_size`.
 //!
 //! Reference patches sit `step_size` apart. With a step larger than the
-//! patch they leave gaps, and the pixels in the gaps came back unfiltered.
-//! Such a step is now refused with "step_size (s) must not exceed patch_size
-//! (p)": by `Bm3dConfig::validate`, so by every entry point that validates a
-//! config, and by the kernel entry points `run_bm3d_step` and
-//! `run_bm3d_step_stack`. A step equal to `patch_size` is valid and filters
-//! every pixel. The kernel entry points also return an error, not a panic,
-//! for a `step_size` or `search_step` of 0.
-//!
-//! These tests use only the public API, so they live in an integration test
-//! target rather than in a unit-test module.
+//! patch they leave gaps.
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
@@ -21,9 +12,7 @@ use bm3d_core::{
 };
 use ndarray::{Array2, Array3, Axis};
 
-/// (patch_size, step_size) pairs with the step larger than the patch.
 const TOO_LARGE: [(usize, usize); 4] = [(8, 9), (8, 12), (8, 16), (7, 8)];
-/// (patch_size, step_size) pairs that stay valid.
 const VALID: [(usize, usize); 4] = [(8, 1), (8, 4), (8, 8), (7, 7)];
 const KERNEL_MODES: [Bm3dMode; 2] = [Bm3dMode::HardThreshold, Bm3dMode::Wiener];
 const RING_MODES: [RingRemovalMode; 3] = [
@@ -84,7 +73,6 @@ fn ring_config<F: Bm3dFloat>(patch_size: usize, step_size: usize) -> Bm3dConfig<
     }
 }
 
-/// Run `f` and fail with a clear message if it panics instead of returning.
 fn without_panic<T>(label: &str, f: impl FnOnce() -> T) -> T {
     catch_unwind(AssertUnwindSafe(f))
         .unwrap_or_else(|_| panic!("{label} panicked instead of returning a Result"))
@@ -288,9 +276,6 @@ fn step_size_equal_to_patch_size_filters_every_pixel() {
 fn check_kernels_refuse_zero_strides<F: Bm3dFloat>(precision: &str) {
     let image = noisy_image::<F>(ROWS, COLS, 5);
     let stack = noisy_stack::<F>(2);
-    // (step_size, search_step, name the error must contain). With both 0 the
-    // error must name step_size: a kernel binding called with step_size 0
-    // and no search_step passes both as 0, and its caller set step_size.
     for (step_size, search_step, name) in [
         (0, 4, "step_size"),
         (4, 0, "search_step"),

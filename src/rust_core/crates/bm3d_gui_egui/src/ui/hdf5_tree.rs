@@ -2,14 +2,12 @@ use crate::data::Hdf5Entry;
 use eframe::egui;
 use std::collections::HashSet;
 
-/// Selection result from the HDF5 tree browser.
 #[derive(Debug, Clone)]
 pub struct Hdf5TreeSelection {
     pub dataset_path: String,
     pub shape: Vec<usize>,
 }
 
-/// HDF5 tree browser widget.
 pub struct Hdf5TreeBrowser {
     entries: Vec<Hdf5Entry>,
     expanded: HashSet<String>,
@@ -18,7 +16,6 @@ pub struct Hdf5TreeBrowser {
 
 impl Hdf5TreeBrowser {
     pub fn new(entries: Vec<Hdf5Entry>) -> Self {
-        // Auto-expand root level
         let mut expanded = HashSet::new();
         for entry in &entries {
             if let Hdf5Entry::Group { path, .. } = entry {
@@ -32,7 +29,6 @@ impl Hdf5TreeBrowser {
         }
     }
 
-    /// Show the tree browser and return selection if a 3D dataset is selected.
     pub fn show(&mut self, ui: &mut egui::Ui) -> Option<Hdf5TreeSelection> {
         let mut selection = None;
 
@@ -129,7 +125,6 @@ impl Hdf5TreeBrowser {
             }
         });
 
-        // Show children if expanded
         if let Hdf5Entry::Group { path, children, .. } = entry
             && self.expanded.contains(path)
         {

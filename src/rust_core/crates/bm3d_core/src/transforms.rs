@@ -4,13 +4,6 @@ use std::sync::Arc;
 
 use crate::float_trait::Bm3dFloat;
 
-// =============================================================================
-// Constants for Transform Operations
-// =============================================================================
-
-// Note: WHT normalization scale is now computed at runtime using F::usize_as(64)
-// to support both f32 and f64 precision.
-
 #[inline(always)]
 fn transpose_square_in_place<T>(data: &mut [T], n: usize) {
     for r in 0..n {
@@ -31,7 +24,7 @@ fn transpose_square_copy<T: Copy>(src: &[T], dst: &mut [T], n: usize) {
     }
 }
 
-/// Compute 2D FFT of a square patch using pre-computed plans.
+/// Compute 2D FFT using pre-computed plans.
 /// Returns unnormalized FFT.
 pub fn fft2d<F: Bm3dFloat>(
     input: ArrayView2<F>,
@@ -53,11 +46,6 @@ pub fn fft2d<F: Bm3dFloat>(
     output
 }
 
-/// Compute 2D FFT into pre-allocated buffers.
-///
-/// - `work_complex` must have shape `(rows, cols)` matching `input`.
-/// - `output` must have shape `(rows, cols)` matching `input`.
-/// - `scratch` length must be at least `max(rows, cols)`.
 pub fn fft2d_into<F: Bm3dFloat>(
     input: ArrayView2<F>,
     fft_row_plan: &Arc<dyn Fft<F>>,
@@ -111,15 +99,11 @@ pub fn fft2d_into_with_plan_scratch<F: Bm3dFloat>(
     let row_scratch_len = fft_row_plan.get_inplace_scratch_len();
     let col_scratch_len = fft_col_plan.get_inplace_scratch_len();
 
-    // The fast path indexes `input` and `output` as row-major slices, so it
-    // needs them in standard layout (`as_slice`). `work_complex` is scratch,
-    // written and read only through its slice, so any contiguous layout works.
     if let (Some(input_data), Some(work_data), Some(output_data)) = (
         input.as_slice(),
         work_complex.as_slice_memory_order_mut(),
         output.as_slice_mut(),
     ) {
-        // 1. Transform rows (batched across all rows in one call).
         for r in 0..rows {
             let row_base = r * cols;
             let row = &mut work_data[row_base..row_base + cols];
@@ -132,7 +116,6 @@ pub fn fft2d_into_with_plan_scratch<F: Bm3dFloat>(
         } else {
             fft_row_plan.process_with_scratch(work_data, row_fft_scratch);
         }
-        // 2. Transform columns
         if rows == cols {
             transpose_square_copy(work_data, output_data, rows);
             if col_scratch_len == 0 {
@@ -163,58 +146,44 @@ pub fn fft2d_into_with_plan_scratch<F: Bm3dFloat>(
             }
         }
     } else {
-        // 1. Transform rows
         if row_scratch_len == 0 {
             for r in 0..rows {
-                // Copy to buffer
                 for (c, &v) in input.row(r).iter().enumerate() {
                     scratch[c] = Complex::new(v, F::zero());
                 }
-                // FFT
                 fft_row_plan.process_with_scratch(&mut scratch[..cols], &mut []);
-                // Copy back
                 for c in 0..cols {
                     work_complex[[r, c]] = scratch[c];
                 }
             }
         } else {
             for r in 0..rows {
-                // Copy to buffer
                 for (c, &v) in input.row(r).iter().enumerate() {
                     scratch[c] = Complex::new(v, F::zero());
                 }
-                // FFT
                 fft_row_plan.process_with_scratch(&mut scratch[..cols], row_fft_scratch);
-                // Copy back
                 for c in 0..cols {
                     work_complex[[r, c]] = scratch[c];
                 }
             }
         }
 
-        // 2. Transform columns
         if col_scratch_len == 0 {
             for c in 0..cols {
-                // Extract column
                 for r in 0..rows {
                     scratch[r] = work_complex[[r, c]];
                 }
-                // FFT
                 fft_col_plan.process_with_scratch(&mut scratch[..rows], &mut []);
-                // Copy back
                 for r in 0..rows {
                     output[[r, c]] = scratch[r];
                 }
             }
         } else {
             for c in 0..cols {
-                // Extract column
                 for r in 0..rows {
                     scratch[r] = work_complex[[r, c]];
                 }
-                // FFT
                 fft_col_plan.process_with_scratch(&mut scratch[..rows], col_fft_scratch);
-                // Copy back
                 for r in 0..rows {
                     output[[r, c]] = scratch[r];
                 }
@@ -223,7 +192,7 @@ pub fn fft2d_into_with_plan_scratch<F: Bm3dFloat>(
     }
 }
 
-/// Compute 2D Inverse FFT of a square patch using pre-computed plans.
+/// Compute 2D Inverse FFT using pre-computed plans.
 /// Normalizes by 1/(rows*cols).
 pub fn ifft2d<F: Bm3dFloat>(
     input: &Array2<Complex<F>>,
@@ -254,7 +223,6 @@ pub fn ifft2d_view<F: Bm3dFloat>(
         Vec::new()
     };
 
-    // 1. Transform columns
     let mut intermediate = input.to_owned();
     let mut col_vec = vec![Complex::new(F::zero(), F::zero()); rows];
 
@@ -272,7 +240,6 @@ pub fn ifft2d_view<F: Bm3dFloat>(
         }
     }
 
-    // 2. Transform rows
     let mut output = Array2::<F>::zeros((rows, cols));
     let norm_factor = F::one() / F::usize_as(rows * cols);
     let mut row_vec = vec![Complex::new(F::zero(), F::zero()); cols];
@@ -294,11 +261,6 @@ pub fn ifft2d_view<F: Bm3dFloat>(
     output
 }
 
-/// Compute 2D Inverse FFT into pre-allocated buffers.
-///
-/// - `work_complex` must have shape `(rows, cols)` matching `input`.
-/// - `output` must have shape `(rows, cols)` matching `input`.
-/// - `scratch` length must be at least `max(rows, cols)`.
 pub fn ifft2d_into<F: Bm3dFloat>(
     input: ArrayView2<Complex<F>>,
     ifft_row_plan: &Arc<dyn Fft<F>>,
@@ -352,14 +314,13 @@ pub fn ifft2d_into_with_plan_scratch<F: Bm3dFloat>(
     let col_scratch_len = ifft_col_plan.get_inplace_scratch_len();
     let row_scratch_len = ifft_row_plan.get_inplace_scratch_len();
 
-    // As in `fft2d_into_with_plan_scratch`: `input` and `output` must be in
-    // standard layout for the fast path; the scratch `work_complex` need not.
+    // `input` and `output` must be in standard layout for the fast path;
+    // the scratch `work_complex` need not.
     if let (Some(input_data), Some(work_data), Some(output_data)) = (
         input.as_slice(),
         work_complex.as_slice_memory_order_mut(),
         output.as_slice_mut(),
     ) {
-        // 1. Transform columns in-place in complex workspace.
         work_data.copy_from_slice(input_data);
         if rows == cols {
             transpose_square_in_place(work_data, rows);
@@ -391,7 +352,6 @@ pub fn ifft2d_into_with_plan_scratch<F: Bm3dFloat>(
             }
         }
 
-        // 2. Transform rows into real output (batched across all rows).
         let norm_factor = F::one() / F::usize_as(rows * cols);
         if row_scratch_len == 0 {
             ifft_row_plan.process_with_scratch(work_data, &mut []);
@@ -405,7 +365,6 @@ pub fn ifft2d_into_with_plan_scratch<F: Bm3dFloat>(
             }
         }
     } else {
-        // 1. Transform columns in-place in complex workspace.
         work_complex.assign(&input);
         if col_scratch_len == 0 {
             for c in 0..cols {
@@ -429,7 +388,6 @@ pub fn ifft2d_into_with_plan_scratch<F: Bm3dFloat>(
             }
         }
 
-        // 2. Transform rows into real output.
         let norm_factor = F::one() / F::usize_as(rows * cols);
         if row_scratch_len == 0 {
             for r in 0..rows {
@@ -455,10 +413,6 @@ pub fn ifft2d_into_with_plan_scratch<F: Bm3dFloat>(
     }
 }
 
-/// Compute 2D inverse FFT in-place on complex input, writing real output.
-///
-/// Compared to `ifft2d_into_with_plan_scratch`, this avoids copying input into
-/// a separate complex workspace. The complex input is overwritten.
 pub fn ifft2d_inplace_to_real_with_plan_scratch<F: Bm3dFloat>(
     mut input_output: ArrayViewMut2<Complex<F>>,
     ifft_row_plan: &Arc<dyn Fft<F>>,
@@ -480,7 +434,6 @@ pub fn ifft2d_inplace_to_real_with_plan_scratch<F: Bm3dFloat>(
     // The fast path indexes both buffers as row-major slices, so it needs
     // them in standard layout (`as_slice_mut`).
     if let (Some(data), Some(output_data)) = (input_output.as_slice_mut(), output.as_slice_mut()) {
-        // 1. Transform columns in-place in complex input/output buffer.
         if rows == cols {
             transpose_square_in_place(data, rows);
             if col_scratch_len == 0 {
@@ -511,7 +464,6 @@ pub fn ifft2d_inplace_to_real_with_plan_scratch<F: Bm3dFloat>(
             }
         }
 
-        // 2. Transform rows into real output (batched across all rows).
         let norm_factor = F::one() / F::usize_as(rows * cols);
         if row_scratch_len == 0 {
             ifft_row_plan.process_with_scratch(data, &mut []);
@@ -525,7 +477,6 @@ pub fn ifft2d_inplace_to_real_with_plan_scratch<F: Bm3dFloat>(
             }
         }
     } else {
-        // 1. Transform columns in-place in complex input/output buffer.
         if col_scratch_len == 0 {
             for c in 0..cols {
                 for r in 0..rows {
@@ -548,7 +499,6 @@ pub fn ifft2d_inplace_to_real_with_plan_scratch<F: Bm3dFloat>(
             }
         }
 
-        // 2. Transform rows into real output.
         let norm_factor = F::one() / F::usize_as(rows * cols);
         if row_scratch_len == 0 {
             for r in 0..rows {
@@ -574,13 +524,8 @@ pub fn ifft2d_inplace_to_real_with_plan_scratch<F: Bm3dFloat>(
     }
 }
 
-/// In-place Fast Walsh-Hadamard Transform (Natural Order) for 8 elements.
-/// Uses a butterfly network with only additions and subtractions.
-/// Complexity: 8 log2(8) = 24 ops.
-/// This allows "multiplication-free" transform, drastically speeding up processing for 8x8 blocks.
 #[inline(always)]
 fn fwht8<F: Bm3dFloat>(buf: &mut [F; 8]) {
-    // Stage 1 (Stride 1)
     let t0 = buf[0] + buf[1];
     buf[1] = buf[0] - buf[1];
     buf[0] = t0;
@@ -594,7 +539,6 @@ fn fwht8<F: Bm3dFloat>(buf: &mut [F; 8]) {
     buf[7] = buf[6] - buf[7];
     buf[6] = t6;
 
-    // Stage 2 (Stride 2)
     let t0 = buf[0] + buf[2];
     buf[2] = buf[0] - buf[2];
     buf[0] = t0;
@@ -608,7 +552,6 @@ fn fwht8<F: Bm3dFloat>(buf: &mut [F; 8]) {
     buf[7] = buf[5] - buf[7];
     buf[5] = t5;
 
-    // Stage 3 (Stride 4)
     let t0 = buf[0] + buf[4];
     buf[4] = buf[0] - buf[4];
     buf[0] = t0;
@@ -623,7 +566,7 @@ fn fwht8<F: Bm3dFloat>(buf: &mut [F; 8]) {
     buf[3] = t3;
 }
 
-/// 2D WHT for 8x8 patch. Returns Complex (im=0) for compatibility.
+/// 2D WHT for 8x8 patch. Returns Complex (im=0).
 pub fn wht2d_8x8_forward<F: Bm3dFloat>(input: ArrayView2<F>) -> Array2<Complex<F>> {
     let mut output = Array2::<Complex<F>>::zeros((8, 8));
     wht2d_8x8_forward_into_view(input, output.view_mut());
@@ -730,8 +673,6 @@ mod tests {
     use rustfft::FftPlanner;
     use std::sync::Arc;
 
-    // Helper: Simple Linear Congruential Generator for deterministic "random" test data
-    // This avoids adding rand as a dependency while still providing varied test inputs
     struct SimpleLcg {
         state: u64,
     }
@@ -742,7 +683,6 @@ mod tests {
         }
 
         fn next_u64(&mut self) -> u64 {
-            // LCG parameters from Numerical Recipes
             self.state = self.state.wrapping_mul(6364136223846793005).wrapping_add(1);
             self.state
         }
@@ -760,7 +700,6 @@ mod tests {
         }
     }
 
-    // Helper: Create FFT plans for a given size
     type FftPlanQuad32 = (
         Arc<dyn Fft<f32>>,
         Arc<dyn Fft<f32>>,
@@ -793,7 +732,6 @@ mod tests {
         (fft_row, fft_col, ifft_row, ifft_col)
     }
 
-    // Helper: Check if two f32 arrays are approximately equal
     fn arrays_approx_equal_f32(a: &Array2<f32>, b: &Array2<f32>, epsilon: f32) -> bool {
         if a.dim() != b.dim() {
             return false;
@@ -808,7 +746,6 @@ mod tests {
         a.iter().zip(b.iter()).all(|(x, y)| (x - y).abs() < epsilon)
     }
 
-    // Helper: Generate deterministic "random" matrix
     fn random_matrix_f32(rows: usize, cols: usize, seed: u64) -> Array2<f32> {
         let mut rng = SimpleLcg::new(seed);
         Array2::from_shape_fn((rows, cols), |_| rng.next_f32())
@@ -818,8 +755,6 @@ mod tests {
         let mut rng = SimpleLcg::new(seed);
         Array2::from_shape_fn((rows, cols), |_| rng.next_f64())
     }
-
-    // ==================== FFT Round-Trip Tests (f32) ====================
 
     #[test]
     fn test_fft2d_roundtrip_8x8() {
@@ -869,9 +804,8 @@ mod tests {
 
     #[test]
     fn test_fft2d_roundtrip_multiple_seeds() {
-        // Test with 10 different random inputs to increase confidence
         for seed in 0..10u64 {
-            let input = random_matrix_f32(8, 8, seed * 7919); // Use prime multiplier for varied seeds
+            let input = random_matrix_f32(8, 8, seed * 7919);
             let (fft_row, fft_col, ifft_row, ifft_col) = create_fft_plans_f32(8, 8);
 
             let freq = fft2d(input.view(), &fft_row, &fft_col);
@@ -884,8 +818,6 @@ mod tests {
             );
         }
     }
-
-    // ==================== FFT f64 Round-Trip Tests ====================
 
     #[test]
     fn test_fft2d_roundtrip_8x8_f64() {
@@ -933,8 +865,6 @@ mod tests {
         }
     }
 
-    // ==================== FFT Known-Value Tests ====================
-
     #[test]
     fn test_fft2d_zeros() {
         let input = Array2::<f32>::zeros((8, 8));
@@ -942,7 +872,6 @@ mod tests {
 
         let output = fft2d(input.view(), &fft_row, &fft_col);
 
-        // All frequency components should be zero
         for val in output.iter() {
             assert!(
                 val.norm() < 1e-10,
@@ -954,13 +883,11 @@ mod tests {
 
     #[test]
     fn test_fft2d_constant() {
-        // All ones: DC component should be N*M, others should be ~0
         let input = Array2::<f32>::ones((8, 8));
         let (fft_row, fft_col, _, _) = create_fft_plans_f32(8, 8);
 
         let output = fft2d(input.view(), &fft_row, &fft_col);
 
-        // DC component (0,0) should equal sum of all inputs = 64
         let dc = output[[0, 0]];
         assert!(
             (dc.re - 64.0).abs() < 1e-5 && dc.im.abs() < 1e-5,
@@ -968,7 +895,6 @@ mod tests {
             dc
         );
 
-        // All other components should be ~0
         for r in 0..8 {
             for c in 0..8 {
                 if r != 0 || c != 0 {
@@ -987,15 +913,12 @@ mod tests {
 
     #[test]
     fn test_fft2d_impulse() {
-        // Single 1.0 at (0,0), rest zeros
-        // FFT of impulse should have constant magnitude across all bins
         let mut input = Array2::<f32>::zeros((8, 8));
         input[[0, 0]] = 1.0;
         let (fft_row, fft_col, _, _) = create_fft_plans_f32(8, 8);
 
         let output = fft2d(input.view(), &fft_row, &fft_col);
 
-        // All frequency bins should have magnitude 1 (unnormalized FFT)
         for r in 0..8 {
             for c in 0..8 {
                 let mag = output[[r, c]].norm();
@@ -1033,12 +956,10 @@ mod tests {
         );
     }
 
-    // ==================== FFT Edge Case Tests ====================
-
     #[test]
     fn test_fft2d_single_element() {
         let mut input = Array2::<f32>::zeros((1, 1));
-        input[[0, 0]] = 2.71; // Euler's number approximation (not PI to avoid clippy)
+        input[[0, 0]] = 2.71;
         let (fft_row, fft_col, ifft_row, ifft_col) = create_fft_plans_f32(1, 1);
 
         let freq = fft2d(input.view(), &fft_row, &fft_col);
@@ -1053,7 +974,6 @@ mod tests {
 
     #[test]
     fn test_fft2d_non_square() {
-        // Test non-square matrices
         let sizes = [(4, 8), (8, 4), (2, 16), (16, 2)];
 
         for (rows, cols) in sizes {
@@ -1074,7 +994,6 @@ mod tests {
 
     #[test]
     fn test_fft2d_large_values() {
-        // Test numerical stability with large values
         let mut input = Array2::<f32>::zeros((8, 8));
         for r in 0..8 {
             for c in 0..8 {
@@ -1086,7 +1005,6 @@ mod tests {
         let freq = fft2d(input.view(), &fft_row, &fft_col);
         let output = ifft2d(&freq, &ifft_row, &ifft_col);
 
-        // Use relative tolerance for large values
         for r in 0..8 {
             for c in 0..8 {
                 let diff = (input[[r, c]] - output[[r, c]]).abs();
@@ -1106,7 +1024,6 @@ mod tests {
 
     #[test]
     fn test_fft2d_small_values() {
-        // Test numerical stability with small values
         let mut input = Array2::<f32>::zeros((8, 8));
         for r in 0..8 {
             for c in 0..8 {
@@ -1123,8 +1040,6 @@ mod tests {
             "Small value roundtrip failed"
         );
     }
-
-    // ==================== WHT Round-Trip Tests (f32) ====================
 
     #[test]
     fn test_wht_8x8_roundtrip() {
@@ -1146,7 +1061,6 @@ mod tests {
 
     #[test]
     fn test_wht_8x8_roundtrip_multiple() {
-        // Test with 10 different random inputs
         for seed in 0..10u64 {
             let input = random_matrix_f32(8, 8, seed * 13331);
 
@@ -1167,8 +1081,6 @@ mod tests {
             );
         }
     }
-
-    // ==================== WHT f64 Round-Trip Tests ====================
 
     #[test]
     fn test_wht_8x8_roundtrip_f64() {
@@ -1211,8 +1123,6 @@ mod tests {
         }
     }
 
-    // ==================== WHT Known-Value Tests ====================
-
     #[test]
     fn test_wht_zeros() {
         let input = Array2::<f32>::zeros((8, 8));
@@ -1229,12 +1139,9 @@ mod tests {
 
     #[test]
     fn test_wht_constant() {
-        // All ones: First coefficient (DC) = 8*8 = 64, rest = 0
-        // (WHT of constant is impulse in first coefficient)
         let input = Array2::<f32>::ones((8, 8));
         let output = wht2d_8x8_forward(input.view());
 
-        // DC component should be 64 (sum of all 64 ones)
         let dc = output[[0, 0]];
         assert!(
             (dc.re - 64.0).abs() < 1e-6,
@@ -1242,7 +1149,6 @@ mod tests {
             dc.re
         );
 
-        // All other components should be 0
         for r in 0..8 {
             for c in 0..8 {
                 if r != 0 || c != 0 {
@@ -1261,14 +1167,11 @@ mod tests {
 
     #[test]
     fn test_wht_impulse() {
-        // Single 1.0 at (0,0), rest zeros
-        // WHT of impulse at origin should spread to all coefficients
         let mut input = Array2::<f32>::zeros((8, 8));
         input[[0, 0]] = 1.0;
 
         let output = wht2d_8x8_forward(input.view());
 
-        // All WHT coefficients should have the same value
         let expected = output[[0, 0]].re;
         for r in 0..8 {
             for c in 0..8 {
@@ -1285,12 +1188,9 @@ mod tests {
 
     #[test]
     fn test_wht_symmetry() {
-        // WHT is self-inverse (up to scaling)
-        // Applying it twice should give back scaled input
         let input = random_matrix_f32(8, 8, 99999);
 
         let once = wht2d_8x8_forward(input.view());
-        // Convert Complex output to f32 for second forward pass
         let mut once_real = Array2::<f32>::zeros((8, 8));
         for r in 0..8 {
             for c in 0..8 {
@@ -1299,7 +1199,6 @@ mod tests {
         }
         let twice = wht2d_8x8_forward(once_real.view());
 
-        // Should be 64 * input (WHT is self-inverse with scale N)
         for r in 0..8 {
             for c in 0..8 {
                 let expected = input[[r, c]] * 64.0;
@@ -1316,11 +1215,8 @@ mod tests {
         }
     }
 
-    // ==================== WHT Edge Case Tests ====================
-
     #[test]
     fn test_wht_near_zero() {
-        // Test numerical stability with very small values
         let mut input = Array2::<f32>::zeros((8, 8));
         let mut rng = SimpleLcg::new(11111);
         for r in 0..8 {
@@ -1340,7 +1236,6 @@ mod tests {
 
     #[test]
     fn test_wht_large_values() {
-        // Test numerical stability with large values
         let mut input = Array2::<f32>::zeros((8, 8));
         for r in 0..8 {
             for c in 0..8 {
@@ -1351,7 +1246,6 @@ mod tests {
         let freq = wht2d_8x8_forward(input.view());
         let output = wht2d_8x8_inverse(&freq);
 
-        // Use relative tolerance for large values
         for r in 0..8 {
             for c in 0..8 {
                 let diff = (input[[r, c]] - output[[r, c]]).abs();
@@ -1369,7 +1263,6 @@ mod tests {
 
     #[test]
     fn test_wht_alternating_pattern() {
-        // Test with checkerboard pattern (alternating +1, -1)
         let mut input = Array2::<f32>::zeros((8, 8));
         for r in 0..8 {
             for c in 0..8 {
@@ -1388,11 +1281,9 @@ mod tests {
 
     #[test]
     fn test_wht_imaginary_part_ignored() {
-        // Verify that inverse WHT only uses real part of input
         let input = random_matrix_f32(8, 8, 77777);
         let freq = wht2d_8x8_forward(input.view());
 
-        // Add imaginary components that should be ignored
         let mut freq_with_imag = freq.clone();
         for r in 0..8 {
             for c in 0..8 {

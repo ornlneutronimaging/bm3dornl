@@ -4,17 +4,14 @@ import numpy as np
 import logging
 
 try:
-    from .bm3d_rust import (
-        fourier_svd_removal_rust,
-        fourier_svd_removal_rust_f64
-    )
+    from .bm3d_rust import fourier_svd_removal_rust, fourier_svd_removal_rust_f64
 except ImportError:
-    # During development/test, might not be installed yet
     logging.warning("bm3d_rust module not found. Fourier-SVD will fail.")
     fourier_svd_removal_rust = None
     fourier_svd_removal_rust_f64 = None
 
 logger = logging.getLogger(__name__)
+
 
 def fourier_svd_removal(
     sinogram: np.ndarray,
@@ -52,13 +49,13 @@ def fourier_svd_removal(
 
     input_dtype = sinogram.dtype
 
-    # Check dimensions
     rows, cols = sinogram.shape
     if rows < 10 or cols < 10:
-        logger.warning("Image too small for Fourier-SVD streak removal. Returning input.")
+        logger.warning(
+            "Image too small for Fourier-SVD streak removal. Returning input."
+        )
         return sinogram.copy()
 
-    # Dispatch based on dtype
     if input_dtype == np.float32:
         if fourier_svd_removal_rust is None:
             raise ImportError("bm3d_rust backend not available")
@@ -70,7 +67,6 @@ def fourier_svd_removal(
         return fourier_svd_removal_rust_f64(sinogram, fft_alpha, notch_width)
 
     else:
-        # Auto-convert other types to float32
         logger.info(f"Converting input from {input_dtype} to float32 for processing")
         sino_f32 = sinogram.astype(np.float32)
         result = fourier_svd_removal_rust(sino_f32, fft_alpha, notch_width)

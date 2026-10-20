@@ -33,7 +33,6 @@ jobs:
       - name: Run Rust tests (excluding GUI)
         working-directory: src/rust_core
         run: |
-          # Test bm3d_core only (GUI requires HDF5, Python bindings require Python)
           cargo test -p bm3d_core --release
 
   rust-lint:
@@ -42,9 +41,6 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Lint on both x86_64 and aarch64 so the arch-gated SIMD paths are all
-        # covered: SSE2/AVX2 compile only on x86, NEON only on aarch64. A single-arch
-        # gate let the edition-2024 unsafe_op_in_unsafe_fn break hide on x86. See #109.
         os: [ubuntu-latest, ubuntu-24.04-arm]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -66,7 +62,6 @@ jobs:
 
       - name: Run clippy (entire workspace)
         working-directory: src/rust_core
-        # Lint every crate (bm3d_core, bm3d_python, bm3d_gui_egui), not just bm3d_core.
         run: cargo clippy --workspace --all-targets -- -D warnings
 
   python-test:

@@ -6,7 +6,6 @@ const TIFF_GRAY32_FLOAT_BYTES_PER_PIXEL: u64 = std::mem::size_of::<f32>() as u64
 const CLASSIC_TIFF_SAFETY_MARGIN_BYTES: u64 = 64 * 1024 * 1024;
 const CLASSIC_TIFF_MAX_SAFE_BYTES: u64 = u32::MAX as u64 - CLASSIC_TIFF_SAFETY_MARGIN_BYTES;
 
-/// What data to save
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SaveDataType {
     #[default]
@@ -25,7 +24,6 @@ impl SaveDataType {
     }
 }
 
-/// Output format
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SaveFormat {
     #[default]
@@ -49,7 +47,6 @@ impl SaveFormat {
     }
 }
 
-/// Save progress state
 #[derive(Debug, Clone, Default)]
 pub enum SaveState {
     #[default]
@@ -64,7 +61,6 @@ pub enum SaveState {
     Error(String),
 }
 
-/// Save dialog state and UI
 pub struct SaveDialog {
     pub is_open: bool,
     pub data_type: SaveDataType,
@@ -99,7 +95,7 @@ impl SaveDialog {
         self.is_open = false;
     }
 
-    /// Show save dialog. Returns Some(SaveRequest) if user confirms save.
+    /// Returns Some(SaveRequest) if user confirms save.
     pub fn show(&mut self, ctx: &egui::Context, has_processed: bool) -> Option<SaveRequest> {
         if !self.is_open {
             return None;
@@ -138,7 +134,6 @@ impl SaveDialog {
                         }
                     }
                     SaveState::Idle => {
-                        // Data type selection
                         ui.horizontal(|ui| {
                             ui.label("Data:")
                                 .on_hover_text("Select which data to save");
@@ -165,7 +160,6 @@ impl SaveDialog {
                                 });
                         });
 
-                        // Reset to Original if no processed data
                         if !has_processed
                             && (self.data_type == SaveDataType::Processed
                                 || self.data_type == SaveDataType::Difference)
@@ -175,7 +169,6 @@ impl SaveDialog {
 
                         ui.add_space(5.0);
 
-                        // Format selection
                         ui.horizontal(|ui| {
                             ui.label("Format:")
                                 .on_hover_text("Select output file format");
@@ -189,7 +182,6 @@ impl SaveDialog {
                                 });
                         });
 
-                        // HDF5-specific options
                         if self.format == SaveFormat::Hdf5 {
                             ui.add_space(5.0);
                             ui.horizontal(|ui| {
@@ -201,7 +193,6 @@ impl SaveDialog {
 
                         ui.add_space(15.0);
 
-                        // Action buttons
                         ui.horizontal(|ui| {
                             if ui.button("Cancel").clicked() {
                                 should_close = true;
@@ -212,7 +203,6 @@ impl SaveDialog {
                             if ui.button("Save...")
                                 .on_hover_text("Choose file location and save")
                                 .clicked() {
-                                // Open file dialog
                                 let filter_name = self.format.name();
                                 let filter_ext = self.format.extension();
 
@@ -242,7 +232,6 @@ impl SaveDialog {
     }
 }
 
-/// Request to save data
 #[derive(Debug, Clone)]
 pub struct SaveRequest {
     pub path: PathBuf,
@@ -251,7 +240,6 @@ pub struct SaveRequest {
     pub hdf5_dataset_path: String,
 }
 
-/// Save volume data to file
 pub fn save_volume(data: &Array3<f32>, request: &SaveRequest) -> Result<(), String> {
     match request.format {
         SaveFormat::Tiff => save_as_tiff(data, &request.path),
@@ -348,7 +336,6 @@ fn save_as_hdf5(data: &Array3<f32>, path: &PathBuf, dataset_path: &str) -> Resul
 
     let file = H5File::create(path).map_err(|e| format!("Failed to create HDF5 file: {}", e))?;
 
-    // Create parent groups if needed
     let parts: Vec<&str> = dataset_path.trim_start_matches('/').split('/').collect();
     if parts.len() > 1 {
         let mut current_path = String::new();
@@ -362,7 +349,6 @@ fn save_as_hdf5(data: &Array3<f32>, path: &PathBuf, dataset_path: &str) -> Resul
         }
     }
 
-    // Create dataset
     let builder = file.new_dataset_builder();
     builder
         .with_data(data)
@@ -372,7 +358,6 @@ fn save_as_hdf5(data: &Array3<f32>, path: &PathBuf, dataset_path: &str) -> Resul
     Ok(())
 }
 
-/// Compute difference array (Original - Processed)
 pub fn compute_difference(original: &Array3<f32>, processed: &Array3<f32>) -> Array3<f32> {
     original - processed
 }

@@ -1,30 +1,21 @@
-//! "About this method" panel: a short explanation of each ring-removal
-//! algorithm, with links to the implementing source file and to the
-//! literature it is based on.
-
 use bm3d_core::RingRemovalMode;
 use eframe::egui;
 
-/// Base URL for source links (pinned to the `main` branch so links stay valid).
 const SOURCE_BASE: &str = "https://github.com/ornlneutronimaging/bm3dornl/blob/main/";
 
 /// A literature reference shown as a clickable DOI link.
 struct Reference {
-    /// Short citation, e.g. "Dabov et al. 2007, IEEE TIP 16(8)"
     citation: &'static str,
-    /// Title of the paper
     title: &'static str,
     /// Resolvable URL (DOI preferred)
     url: &'static str,
 }
 
-/// Static description of one processing method.
 struct MethodInfo {
     /// One-line summary shown at the top of the panel
     summary: &'static str,
     /// Bullet points describing how the algorithm works
     steps: &'static [&'static str],
-    /// When to prefer this method
     use_when: &'static str,
     /// Source files implementing the method, relative to the repo root
     sources: &'static [&'static str],

@@ -25,25 +25,22 @@ fn resolve_reuse_volume_sigma() -> bool {
         .unwrap_or(false)
 }
 
-/// Progress update from processing thread.
 #[derive(Debug, Clone)]
 pub enum ProcessingProgress {
-    /// Processing started
-    Started { total_slices: usize },
-    /// Slice completed
+    Started {
+        total_slices: usize,
+    },
     SliceComplete {
         slice_index: usize,
         total_slices: usize,
     },
-    /// Processing finished successfully
-    Finished { result: Array3<f32> },
-    /// Processing was cancelled
+    Finished {
+        result: Array3<f32>,
+    },
     Cancelled,
-    /// Error occurred
     Error(String),
 }
 
-/// Processing state for UI.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub enum ProcessingState {
     #[default]
@@ -57,17 +54,11 @@ pub enum ProcessingState {
     Error(String),
 }
 
-/// Manager for background BM3D processing.
 pub struct ProcessingManager {
-    /// Current processing state
     state: ProcessingState,
-    /// Channel to receive progress updates
     progress_rx: Option<Receiver<ProcessingProgress>>,
-    /// Cancel flag shared with worker thread
     cancel_flag: Arc<AtomicBool>,
-    /// Handle to worker thread
     worker_handle: Option<JoinHandle<()>>,
-    /// Processed result
     processed_result: Option<Array3<f32>>,
 }
 
@@ -104,12 +95,6 @@ impl ProcessingManager {
         self.processed_result.take()
     }
 
-    /// Start processing the input volume.
-    ///
-    /// `slice_axis` specifies which axis to iterate over for processing.
-    /// Each 2D slice perpendicular to this axis will be processed as a sinogram.
-    /// For tomography data [angles, Y, X], use slice_axis=1 (Y) to process
-    /// each [angles, X] sinogram.
     pub fn start_processing(
         &mut self,
         input: Array3<f32>,
@@ -118,21 +103,16 @@ impl ProcessingManager {
         use_multiscale: bool,
         slice_axis: usize,
     ) {
-        // Cancel any existing processing
         self.cancel();
 
-        // Reset state
         self.cancel_flag = Arc::new(AtomicBool::new(false));
         self.processed_result = None;
 
-        // Create channel for progress updates
         let (tx, rx) = channel();
         self.progress_rx = Some(rx);
 
-        // Clone cancel flag for worker
         let cancel_flag = self.cancel_flag.clone();
 
-        // Spawn worker thread
         let handle = thread::spawn(move || {
             process_volume_worker(
                 input,
@@ -152,18 +132,9 @@ impl ProcessingManager {
         };
     }
 
-    /// Request cancellation of current processing.
-    ///
-    /// Joins the worker, then drains its remaining progress messages so the
-    /// terminal outcome reaches the state machine: dropping the channel
-    /// unread left the state stuck at `Processing` forever, with the UI
-    /// showing a frozen progress bar and no way to process again. Draining
-    /// (rather than overwriting) also preserves a result from a worker that
-    /// finished just before the flag was seen.
     pub fn cancel(&mut self) {
         self.cancel_flag.store(true, Ordering::SeqCst);
 
-        // Wait for worker to finish
         let join_result = self.worker_handle.take().map(|handle| handle.join());
 
         if let Some(rx) = self.progress_rx.take() {
@@ -172,9 +143,6 @@ impl ProcessingManager {
             }
         }
 
-        // A worker that ended without a terminal message must not leave the
-        // UI stuck in Processing: a panic is surfaced as an error rather than
-        // disguised as a cancellation; anything else counts as cancelled.
         if join_result.is_some() && matches!(self.state, ProcessingState::Processing { .. }) {
             self.state = match join_result {
                 Some(Err(_)) => ProcessingState::Error(
@@ -185,8 +153,7 @@ impl ProcessingManager {
         }
     }
 
-    /// Apply one progress message to the state machine. Returns true when the
-    /// message is terminal (worker finished, cancelled, or errored).
+    /// Returns true when the message is terminal (worker finished, cancelled, or errored).
     fn apply_progress(&mut self, progress: ProcessingProgress) -> bool {
         match progress {
             ProcessingProgress::Started { total_slices } => {
@@ -222,9 +189,8 @@ impl ProcessingManager {
         }
     }
 
-    /// Poll for progress updates. Call this each frame.
+    /// Call this each frame.
     pub fn poll_progress(&mut self) {
-        // Collect all pending messages first
         let mut messages = Vec::new();
         if let Some(rx) = &self.progress_rx {
             while let Ok(progress) = rx.try_recv() {
@@ -232,22 +198,18 @@ impl ProcessingManager {
             }
         }
 
-        // Track if we need to clean up
         let mut should_cleanup = false;
 
-        // Process collected messages
         for progress in messages {
             should_cleanup |= self.apply_progress(progress);
         }
 
-        // Clean up after processing all messages
         if should_cleanup {
             self.progress_rx = None;
             self.worker_handle = None;
         }
     }
 
-    /// Reset state to idle.
     pub fn reset(&mut self) {
         self.cancel();
         self.state = ProcessingState::Idle;
@@ -255,8 +217,6 @@ impl ProcessingManager {
     }
 }
 
-/// Worker function that runs in background thread.
-/// Processes the volume by iterating over `slice_axis` and applying BM3D to each 2D slice.
 fn process_volume_worker(
     input: Array3<f32>,
     mode: RingRemovalMode,
@@ -287,7 +247,6 @@ fn process_volume_worker(
         config.bm3d_config.sigma_random = estimated;
     }
 
-    // Send start message
     if tx
         .send(ProcessingProgress::Started {
             total_slices: num_slices,
@@ -297,7 +256,6 @@ fn process_volume_worker(
         return;
     }
 
-    // Allocate output with same shape as input
     let mut output = Array3::<f32>::zeros(input.raw_dim());
     let mut slice_buffer = if num_slices > 0 {
         let first_slice = input.index_axis(Axis(slice_axis), 0);
@@ -306,23 +264,18 @@ fn process_volume_worker(
         Array2::<f32>::zeros((0, 0))
     };
 
-    // Process slice by slice along the specified axis
     for slice_idx in 0..num_slices {
-        // Check for cancellation
         if cancel_flag.load(Ordering::SeqCst) {
             let _ = tx.send(ProcessingProgress::Cancelled);
             return;
         }
 
-        // Extract 2D slice along the slice_axis
         let slice_2d = input.index_axis(Axis(slice_axis), slice_idx);
 
         slice_buffer.assign(&slice_2d);
         let slice_view = slice_buffer.view();
 
-        // Process slice
         let result = match mode {
-            // Generic mode always uses standard BM3D
             RingRemovalMode::Generic => {
                 if let Some(plans) = shared_plans.as_ref() {
                     bm3d_ring_artifact_removal_with_plans(
@@ -335,7 +288,6 @@ fn process_volume_worker(
                     bm3d_ring_artifact_removal(slice_view, mode, &config.bm3d_config)
                 }
             }
-            // Streak mode can use Multiscale if enabled via use_multiscale flag
             RingRemovalMode::Streak => {
                 if use_multiscale {
                     if let Some(plans) = shared_plans.as_ref() {
@@ -354,7 +306,6 @@ fn process_volume_worker(
                     bm3d_ring_artifact_removal(slice_view, mode, &config.bm3d_config)
                 }
             }
-            // MultiscaleStreak mode always uses multiscale processing
             RingRemovalMode::MultiscaleStreak => {
                 if let Some(plans) = shared_plans.as_ref() {
                     multiscale_bm3d_streak_removal_with_plans(slice_view, &config, plans)
@@ -363,19 +314,16 @@ fn process_volume_worker(
                 }
             }
             RingRemovalMode::FourierSvd => {
-                // Fourier-SVD requires f64 for precision
                 let slice_f64 = slice_view.mapv(|x| x as f64);
                 let fft_alpha = config.bm3d_config.fft_alpha as f64;
                 let notch_width = config.bm3d_config.notch_width as f64;
                 let result_f64 = fourier_svd_removal(slice_f64.view(), fft_alpha, notch_width);
-                // Convert back to f32
                 Ok(result_f64.mapv(|x| x as f32))
             }
         };
 
         match result {
             Ok(processed) => {
-                // Copy result back to output at the correct position
                 let mut out_slice = output.index_axis_mut(Axis(slice_axis), slice_idx);
                 out_slice.assign(&processed);
             }
@@ -388,7 +336,6 @@ fn process_volume_worker(
             }
         }
 
-        // Send progress update
         if tx
             .send(ProcessingProgress::SliceComplete {
                 slice_index: slice_idx,
@@ -400,7 +347,6 @@ fn process_volume_worker(
         }
     }
 
-    // Send completion
     let _ = tx.send(ProcessingProgress::Finished { result: output });
 }
 
@@ -415,9 +361,6 @@ mod tests {
         config
     }
 
-    /// Cancelling mid-run must leave a state the UI can act on — never a
-    /// stuck `Processing`, which froze the progress bar and hid the Process
-    /// button until a new file was loaded.
     #[test]
     fn cancel_leaves_an_actionable_state() {
         let volume = Array3::<f32>::from_elem((64, 64, 65), 0.5);
@@ -435,14 +378,12 @@ mod tests {
         ));
     }
 
-    /// A worker that finished before the cancel request must keep its result:
-    /// the drain applies the Finished message instead of discarding it.
     #[test]
     fn cancel_after_completion_keeps_the_result() {
         let volume = Array3::<f32>::from_elem((2, 32, 33), 0.5);
         let mut manager = ProcessingManager::new();
         manager.start_processing(volume, RingRemovalMode::Streak, test_config(), false, 0);
-        // Wait deterministically for the worker to finish before cancelling,
+        // Wait for the worker to finish before cancelling,
         // so the drain (not the cancel flag) decides the outcome.
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
         while manager
@@ -458,7 +399,6 @@ mod tests {
         assert!(manager.processed_result().is_some());
     }
 
-    /// The normal completion path through poll_progress still works.
     #[test]
     fn poll_reaches_completed_and_delivers_result() {
         let volume = Array3::<f32>::from_elem((2, 32, 33), 0.5);

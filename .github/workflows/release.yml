@@ -39,7 +39,6 @@ jobs:
     name: Publish to crates.io
     needs: build
     runs-on: ubuntu-latest
-    # Only publish stable releases, skip pre-releases
     if: ${{ !contains(github.ref, 'rc') && !contains(github.ref, 'alpha') && !contains(github.ref, 'beta') }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

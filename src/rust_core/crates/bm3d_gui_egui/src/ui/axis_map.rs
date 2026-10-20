@@ -1,8 +1,6 @@
 use crate::data::AxisMapping;
 use eframe::egui;
 
-/// Widget for configuring axis mapping with H5Web-style auto-swap.
-/// When changing one axis to a value used by another, they automatically swap.
 pub struct AxisMappingWidget {
     mapping: AxisMapping,
     shape: [usize; 3],
@@ -26,7 +24,6 @@ impl AxisMappingWidget {
         let labels = AxisMapping::dimension_labels();
         let shape = self.shape;
 
-        // Store old values for swap detection
         let old_x = self.mapping.x_axis;
         let old_y = self.mapping.y_axis;
         let old_slice = self.mapping.slice_axis;
@@ -35,7 +32,6 @@ impl AxisMappingWidget {
             ui.label("Axis Mapping:")
                 .on_hover_text("Map data dimensions to display axes. Axes auto-swap when changed");
 
-            // X axis dropdown
             ui.label("X:")
                 .on_hover_text("Dimension to display horizontally");
             let mut new_x = self.mapping.x_axis;
@@ -47,7 +43,6 @@ impl AxisMappingWidget {
 
             ui.separator();
 
-            // Y axis dropdown
             ui.label("Y:")
                 .on_hover_text("Dimension to display vertically");
             let mut new_y = self.mapping.y_axis;
@@ -59,7 +54,6 @@ impl AxisMappingWidget {
 
             ui.separator();
 
-            // Slice axis dropdown
             ui.label("Slice:")
                 .on_hover_text("Dimension to slice through for viewing");
             let mut new_slice = self.mapping.slice_axis;
@@ -82,7 +76,6 @@ impl AxisMappingWidget {
             }
         });
 
-        // Show current dimension sizes and mapping
         ui.horizontal(|ui| {
             ui.label(
                 egui::RichText::new(format!(
@@ -103,9 +96,7 @@ impl AxisMappingWidget {
     }
 
     /// Apply an axis change with automatic swap to maintain valid mapping.
-    /// H5Web style: when X takes Y's value, Y gets X's old value (swap).
     fn apply_axis_change(&mut self, changed_role: AxisRole, new_value: usize, old_value: usize) {
-        // Find which other axis has the new_value and swap it
         match changed_role {
             AxisRole::X => {
                 if self.mapping.y_axis == new_value {

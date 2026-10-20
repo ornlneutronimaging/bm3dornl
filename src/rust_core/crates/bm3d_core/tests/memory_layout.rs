@@ -1,36 +1,15 @@
-//! Arrays in any memory layout give the result of standard layout (issue #164).
-//!
-//! The fast paths read pixel data as a row-major slice. They took that slice
-//! from `as_slice_memory_order()`, which also returns the data of a
-//! column-major (Fortran-order) or negative-stride array, so such an input
-//! was read with rows and columns, or the column order, mixed up. A view or
-//! array in any layout must give the result of the same values in standard
-//! (row-major) layout.
+//! Arrays in any memory layout give the result of standard layout.
 //!
 //! The same holds for the public module functions `transforms::fft2d_into`,
 //! `transforms::ifft2d_into`,
 //! `transforms::ifft2d_inplace_to_real_with_plan_scratch` and
-//! `block_matching::find_similar_patches_in_place_sum`. They are not
-//! re-exported at the crate root, but they take caller arrays: inputs, an
-//! integral image and output buffers. Their fast paths read and wrote these
-//! in memory order as if row-major, so a column-major or negative-stride
-//! buffer gave wrong values or wrong matches.
+//! `block_matching::find_similar_patches_in_place_sum`.
 //!
 //! A non-standard input may take the indexed path instead of a slice fast
 //! path. The two paths add in a different order, so their results agree to
 //! rounding, not bit for bit. The check is max |got - want| <= tolerance *
-//! max |want|, with tolerance 1e-3 (f32) and 1e-12 (f64). Measured with these
-//! inputs, relative to max |want|: the indexed path differs from standard
-//! layout by at most 4.5e-7 (f32) and 1.3e-15 (f64). In f32 the full pipeline
-//! with automatic noise estimation can amplify that rounding at a hard
-//! threshold: 3.6e-5 in Fourier-SVD mode. A misread layout differs by 1.4e-2
-//! (noise estimate), 2.0e-2 (FFT input), 1.5e-1 (inverse FFT input or output
-//! buffer), 2.0e-1 (FFT output buffer) and 1.1e-1 or more (filter outputs).
-//! In block matching it changes which patches match; the positions must be
-//! the same, and the distances agree to rounding as above.
-//!
-//! These tests use only the public API, so they live in an integration test
-//! target rather than in a unit-test module.
+//! max |want|, with tolerance 1e-3 (f32) and 1e-12 (f64). In block matching
+//! the positions must be the same, and the distances agree to rounding.
 
 use std::fmt::Debug;
 
@@ -62,7 +41,6 @@ enum Layout2 {
     ColumnMajor,
     /// Negative column stride: the reversed view of a reversed copy.
     ReversedColumns,
-    /// Negative row stride.
     ReversedRows,
     /// Every second column of a wider array (not contiguous).
     EverySecondColumn,
@@ -78,13 +56,10 @@ const LAYOUTS_2D: [Layout2; 4] = [
 /// Memory layouts of a 3D stack that hold the same values.
 #[derive(Debug, Clone, Copy)]
 enum Layout3 {
-    /// Column-major stack. With one slice the slice is column-major too
-    /// (the reported case); with more, the slices are not contiguous.
+    /// Column-major stack. With one slice the slice is column-major too;
+    /// with more, the slices are not contiguous.
     ColumnMajor,
-    /// Standard stack order with column-major slices, as
-    /// `transpose(0, 2, 1)` of a standard (n, cols, rows) array.
     ColumnMajorSlices,
-    /// Negative column stride.
     ReversedColumns,
     /// Every second column of a wider stack (not contiguous).
     EverySecondColumn,
@@ -97,8 +72,6 @@ const LAYOUTS_3D: [Layout3; 4] = [
     Layout3::EverySecondColumn,
 ];
 
-/// A copy of `values` in `layout`. The checks confirm that the copy really
-/// has that layout, so each test exercises the case it names.
 fn in_layout_2d<F: Bm3dFloat>(values: &Array2<F>, layout: Layout2) -> Array2<F> {
     in_layout(values, layout, F::nan())
 }
@@ -188,9 +161,6 @@ fn in_layout_3d<F: Bm3dFloat>(values: &Array3<F>, layout: Layout3) -> Array3<F> 
     out
 }
 
-/// Step edges off the patch grid, a ramp and uniform noise from a
-/// fixed-seed linear congruential generator. A misread layout moves the
-/// edges, so it changes the output by far more than rounding.
 fn noisy_image<F: Bm3dFloat>(rows: usize, cols: usize, seed: u64) -> Array2<F> {
     let mut state = seed;
     Array2::from_shape_fn((rows, cols), |(r, c)| {
@@ -209,9 +179,6 @@ fn noisy_stack<F: Bm3dFloat>(slices: usize) -> Array3<F> {
     stack
 }
 
-/// Anisotropic PSD of the streak form (varies along rows only) and a
-/// column-varying noise map, so a transposed read of either changes the
-/// result.
 fn streak_psd<F: Bm3dFloat>(patch_size: usize) -> Array2<F> {
     Array2::from_shape_fn((patch_size, patch_size), |(r, _)| {
         let d = r.min(patch_size - r) as f64 / 0.6;
@@ -267,7 +234,6 @@ fn kernel_config<F: Bm3dFloat>(patch_size: usize) -> Bm3dKernelConfig<F> {
     }
 }
 
-/// Inputs of one kernel call: noisy image, pilot, PSD and noise map.
 struct KernelInputs<F: Bm3dFloat> {
     noisy: Array2<F>,
     pilot: Array2<F>,
@@ -361,8 +327,6 @@ fn run_bm3d_step_gives_the_same_result_for_any_layout() {
 
 #[test]
 fn run_bm3d_kernel_gives_the_same_result_for_any_layout() {
-    // run_bm3d_kernel is public too; a layout fix only in run_bm3d_step
-    // would leave it misreading the input.
     check_kernel_entry::<f32>("run_bm3d_kernel", "f32", run_kernel);
     check_kernel_entry::<f64>("run_bm3d_kernel", "f64", run_kernel);
 }
@@ -539,7 +503,6 @@ fn fft_of<F: Bm3dFloat>(input: ArrayView2<F>) -> Array2<F> {
 }
 
 fn check_fft2d<F: Bm3dFloat>(precision: &str) {
-    // fft2d is documented for a square patch.
     let patch = noisy_image::<F>(ROWS, COLS, 19)
         .slice(s![3..11, 25..33])
         .to_owned();
@@ -556,11 +519,6 @@ fn fft2d_gives_the_same_result_for_any_layout() {
     check_fft2d::<f32>("f32");
     check_fft2d::<f64>("f64");
 }
-
-// --- Public module functions ------------------------------------------------
-//
-// Not re-exported at the crate root, but public API of the crate. Each takes
-// caller arrays that its fast path read or wrote in memory order.
 
 /// A square patch (in-place transpose branch) and a non-square patch (column
 /// loop branch) for the 2D transforms.
@@ -763,9 +721,6 @@ const MATCH_REFS: [(usize, usize); 3] = [(16, 24), (0, 0), (32, 48)];
 /// Standard layout (None) or column-major, for the argument a test holds.
 const STANDARD_OR_COLUMN_MAJOR: [Option<Layout2>; 2] = [None, Some(Layout2::ColumnMajor)];
 
-/// `find_similar_patches_in_place_sum` with a 16 x 16 search window, a
-/// search step of 1 and 16 matches, so the integral-sum bound prunes
-/// candidates once 16 are found.
 fn matches_of<F: Bm3dFloat>(
     image: ArrayView2<F>,
     integral_sum: &Array2<F>,
@@ -786,9 +741,6 @@ fn matches_of<F: Bm3dFloat>(
     matches
 }
 
-/// The same positions, and distances that agree to rounding. Compared in
-/// position order, because the indexed path adds in another order and may
-/// reorder near-equal distances.
 fn assert_same_matches<F: Bm3dFloat>(label: &str, got: &[PatchMatch<F>], want: &[PatchMatch<F>]) {
     let by_position = |matches: &[PatchMatch<F>]| {
         let mut sorted = matches.to_vec();

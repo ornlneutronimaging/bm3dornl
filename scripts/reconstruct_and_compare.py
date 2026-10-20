@@ -3,8 +3,8 @@
 
 Produces side-by-side comparison of:
   - Raw (no ring removal) FBP reconstruction
-  - SVD ring removal FBP reconstruction (reference)
-  - Streak mode ring removal FBP reconstruction (our fix)
+  - SVD ring removal FBP reconstruction
+  - Streak mode ring removal FBP reconstruction
 
 Output images are saved to output_recon/ for visual inspection.
 
@@ -37,8 +37,6 @@ def find_rotation_center(sinogram: np.ndarray, angle_range: float = 180.0) -> fl
     """Find center of rotation by cross-correlating proj_0 with flipped proj_180.
 
     Uses the central 50% of the detector to avoid edge effects.
-    For a 360-deg scan, the projection at 180 degrees is at index n_proj//2.
-    For a 180-deg scan, we use the first and last projections.
     """
     n_proj, n_cols = sinogram.shape
 
@@ -50,7 +48,6 @@ def find_rotation_center(sinogram: np.ndarray, angle_range: float = 180.0) -> fl
         proj_0 = sinogram[0, :]
         proj_180 = sinogram[-1, ::-1]
 
-    # Use central strip to avoid edge artifacts
     margin = n_cols // 4
     strip = slice(margin, n_cols - margin)
     corr = correlate(proj_0[strip], proj_180[strip], mode="full")
@@ -60,10 +57,7 @@ def find_rotation_center(sinogram: np.ndarray, angle_range: float = 180.0) -> fl
 
 
 def shift_sinogram_to_center(sinogram: np.ndarray, center: float) -> np.ndarray:
-    """Shift sinogram columns so rotation center aligns with detector midpoint.
-
-    Uses Fourier-based sub-pixel shift for accuracy.
-    """
+    """Shift sinogram columns so rotation center aligns with detector midpoint."""
     n_cols = sinogram.shape[1]
     midpoint = n_cols / 2.0
     pixel_shift = midpoint - center
@@ -78,11 +72,6 @@ def shift_sinogram_to_center(sinogram: np.ndarray, center: float) -> np.ndarray:
 
 
 def reconstruct_fbp(sinogram: np.ndarray, angle_range: float = 360.0) -> np.ndarray:
-    """FBP reconstruction from sinogram.
-
-    sinogram shape: (n_projections, n_detector_columns)
-    iradon expects: (n_detector_columns, n_projections)
-    """
     n_proj = sinogram.shape[0]
     theta = np.linspace(0, angle_range, n_proj, endpoint=False)
     recon = iradon(sinogram.T, theta=theta, filter_name="ramp", circle=True)
@@ -97,10 +86,24 @@ def to_uint8(img: np.ndarray, vmin: float, vmax: float) -> np.ndarray:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Reconstruct sinograms and compare ring removal methods")
-    parser.add_argument("--slice", type=str, default=None, help="Process only this slice ID (e.g. 0140)")
-    parser.add_argument("--center", type=float, default=None, help="Rotation center (pixel). Auto-detected if omitted.")
-    parser.add_argument("--angles", type=float, default=180.0, help="Angular range in degrees (default: 180)")
+    parser = argparse.ArgumentParser(
+        description="Reconstruct sinograms and compare ring removal methods"
+    )
+    parser.add_argument(
+        "--slice", type=str, default=None, help="Process only this slice ID (e.g. 0140)"
+    )
+    parser.add_argument(
+        "--center",
+        type=float,
+        default=None,
+        help="Rotation center (pixel). Auto-detected if omitted.",
+    )
+    parser.add_argument(
+        "--angles",
+        type=float,
+        default=180.0,
+        help="Angular range in degrees (default: 180)",
+    )
     args = parser.parse_args()
 
     if not DATA_DIR.exists():
@@ -126,22 +129,20 @@ def main():
         sinogram = load_tiff(pre_path)
         print(f"  Sinogram shape: {sinogram.shape}")
 
-        # Find or use provided rotation center
         if args.center is not None:
             center = args.center
         else:
             center = find_rotation_center(sinogram, args.angles)
         midpoint = sinogram.shape[1] / 2.0
-        print(f"  Rotation center: {center:.1f} (midpoint: {midpoint:.1f}, offset: {center - midpoint:.1f})")
+        print(
+            f"  Rotation center: {center:.1f} (midpoint: {midpoint:.1f}, offset: {center - midpoint:.1f})"
+        )
 
-        # Shift sinogram so center of rotation is at detector midpoint
         sinogram_centered = shift_sinogram_to_center(sinogram, center)
 
-        # 1. Raw FBP (no ring removal)
         print("  Reconstructing raw FBP...")
         recon_raw = reconstruct_fbp(sinogram_centered, args.angles)
 
-        # 2. SVD reference
         recon_svd = None
         if svd_path.exists():
             print("  Reconstructing SVD reference FBP...")
@@ -149,25 +150,27 @@ def main():
             sino_svd_centered = shift_sinogram_to_center(sino_svd, center)
             recon_svd = reconstruct_fbp(sino_svd_centered, args.angles)
 
-        # 3. Streak mode (our fix) — denoise original, then shift for recon
         print("  Running streak mode BM3D...")
         sino_streak = bm3d_ring_artifact_removal(sinogram, mode="streak")
         sino_streak_centered = shift_sinogram_to_center(sino_streak, center)
         print("  Reconstructing streak FBP...")
         recon_streak = reconstruct_fbp(sino_streak_centered, args.angles)
 
-        # Shared percentile bounds for fair comparison
         all_recons = [recon_raw, recon_streak]
         if recon_svd is not None:
             all_recons.append(recon_svd)
         combined = np.concatenate([r.ravel() for r in all_recons])
-        vmin, vmax = float(np.percentile(combined, 1)), float(np.percentile(combined, 99))
+        vmin, vmax = (
+            float(np.percentile(combined, 1)),
+            float(np.percentile(combined, 99)),
+        )
 
-        # Save individual images
         raw_img = to_uint8(recon_raw, vmin, vmax)
         streak_img = to_uint8(recon_streak, vmin, vmax)
         Image.fromarray(raw_img).save(OUTPUT_DIR / f"recon_raw_slice{slice_id}.png")
-        Image.fromarray(streak_img).save(OUTPUT_DIR / f"recon_streak_slice{slice_id}.png")
+        Image.fromarray(streak_img).save(
+            OUTPUT_DIR / f"recon_streak_slice{slice_id}.png"
+        )
 
         panels = [raw_img, streak_img]
         labels = ["Raw", "Streak"]
@@ -178,7 +181,6 @@ def main():
             panels.append(svd_img)
             labels.append("SVD")
 
-        # Side-by-side comparison
         max_h = max(p.shape[0] for p in panels)
         max_w = max(p.shape[1] for p in panels)
         gap = 4
@@ -189,19 +191,26 @@ def main():
         for i, panel in enumerate(panels):
             x_off = i * (max_w + gap)
             y_off = (max_h - panel.shape[0]) // 2
-            canvas[y_off : y_off + panel.shape[0], x_off : x_off + panel.shape[1]] = panel
+            canvas[y_off : y_off + panel.shape[0], x_off : x_off + panel.shape[1]] = (
+                panel
+            )
 
         comp_path = OUTPUT_DIR / f"comparison_slice{slice_id}.png"
         Image.fromarray(canvas).save(comp_path)
         print(f"  Saved: {comp_path}")
-        print(f"  Individual: recon_raw_slice{slice_id}.png, recon_streak_slice{slice_id}.png", end="")
+        print(
+            f"  Individual: recon_raw_slice{slice_id}.png, recon_streak_slice{slice_id}.png",
+            end="",
+        )
         if recon_svd is not None:
             print(f", recon_svd_slice{slice_id}.png")
         else:
             print()
 
     print(f"\nAll outputs in: {OUTPUT_DIR}/")
-    print("Compare Raw vs Streak vs SVD — look for center ring artifact in streak results.")
+    print(
+        "Compare Raw vs Streak vs SVD — look for center ring artifact in streak results."
+    )
 
 
 if __name__ == "__main__":

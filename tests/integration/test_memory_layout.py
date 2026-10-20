@@ -1,11 +1,4 @@
-"""Input arrays in any memory layout give the C-order result (issue #164).
-
-The Rust fast paths read pixel data as a row-major slice. They took that
-slice with ``as_slice_memory_order()``, which also accepts a Fortran-order or
-negative-stride array, so such an input was read with rows and columns, or
-the column order, mixed up (64 x 80 step image: RMSE 0.352 against the clean
-image instead of 0.006). The public 2D path was safe because it calls
-``np.ascontiguousarray`` first; the 3D path and the bindings were not.
+"""Input arrays in any memory layout give the C-order result.
 
 Every entry point must return, for the same values in any layout, exactly
 the output of a C-contiguous input: the bindings convert the input to
@@ -14,8 +7,8 @@ are compared bit for bit, within one process, so at the same thread count.
 
 Layouts: Fortran order, the transpose of a C array, a negative-stride view
 (``arr[..., ::-1]`` of a C array) and every second column of a wider array.
-For stacks also a one-slice Fortran-order stack (the reported case) and a
-two-slice stack whose slices are F-contiguous.
+For stacks also a one-slice Fortran-order stack and a two-slice stack whose
+slices are F-contiguous.
 """
 
 import numpy as np
@@ -101,8 +94,6 @@ def public_api(**kwargs):
     return run
 
 
-# --- Public API ----------------------------------------------------------------
-
 # name -> (input shape, keyword arguments). Multiscale width 160 gives two
 # binned scales.
 PUBLIC = {
@@ -125,8 +116,9 @@ def test_public_api_output_does_not_depend_on_layout(entry, layout):
 
 @pytest.mark.parametrize("mode", ["generic", "streak"])
 def test_one_slice_fortran_order_stack(mode):
-    # The reported case: np.asfortranarray of a one-slice stack.
-    assert_same_output(public_api(mode=mode), noisy_step_edges((1, ROWS, COLS)), "fortran")
+    assert_same_output(
+        public_api(mode=mode), noisy_step_edges((1, ROWS, COLS)), "fortran"
+    )
 
 
 @pytest.mark.parametrize("mode", ["generic", "streak"])
@@ -136,8 +128,6 @@ def test_two_slice_stack_with_f_contiguous_slices(mode):
         public_api(mode=mode), noisy_step_edges((2, ROWS, COLS)), "transposed"
     )
 
-
-# --- Bindings --------------------------------------------------------------------
 
 HIGH_LEVEL_BINDINGS = [
     ("bm3d_ring_artifact_removal_2d", np.float32),
@@ -200,7 +190,7 @@ STREAK_PROFILE_BINDINGS = [
     "name,dtype", STREAK_PROFILE_BINDINGS, ids=binding_ids(STREAK_PROFILE_BINDINGS)
 )
 def test_streak_profile_binding_output_does_not_depend_on_layout(name, dtype, layout):
-    # sigma_smooth 3.0 and 3 iterations, the estimate_streak_profile defaults.
+    # sigma_smooth 3.0 and 3 iterations.
     fn = getattr(bm3d_rust, name)
     assert_same_output(
         lambda x: fn(x, 3.0, 3), noisy_step_edges((ROWS, COLS), dtype=dtype), layout
@@ -208,7 +198,6 @@ def test_streak_profile_binding_output_does_not_depend_on_layout(name, dtype, la
 
 
 def streak_psd(patch_size, dtype):
-    """Anisotropic PSD of the form the 3D streak path builds (varies along rows)."""
     freq = np.arange(patch_size)
     profile = np.exp(-0.5 * (np.minimum(freq, patch_size - freq) / 0.6) ** 2)
     return np.tile(profile[:, None], (1, patch_size)).astype(dtype)
@@ -225,8 +214,12 @@ def kernel_runner(name, dtype, layout):
     shape = (2, ROWS, COLS) if stack else (ROWS, COLS)
     noisy = noisy_step_edges(shape, dtype=dtype)
     # The Wiener pass takes a pilot estimate; another noise draw will do.
-    pilot = noisy if "hard_thresholding" in name else noisy_step_edges(shape, dtype, seed=8)
-    sigma_map = np.broadcast_to(0.01 + 0.002 * (np.arange(COLS) % 7), shape).astype(dtype)
+    pilot = (
+        noisy if "hard_thresholding" in name else noisy_step_edges(shape, dtype, seed=8)
+    )
+    sigma_map = np.broadcast_to(0.01 + 0.002 * (np.arange(COLS) % 7), shape).astype(
+        dtype
+    )
     sigma_psd = streak_psd(8, dtype)
 
     def run(arrays):
@@ -241,7 +234,9 @@ def kernel_runner(name, dtype, layout):
 
 
 @pytest.mark.parametrize("layout", LAYOUTS)
-@pytest.mark.parametrize("name,dtype", KERNEL_BINDINGS, ids=binding_ids(KERNEL_BINDINGS))
+@pytest.mark.parametrize(
+    "name,dtype", KERNEL_BINDINGS, ids=binding_ids(KERNEL_BINDINGS)
+)
 def test_kernel_binding_output_does_not_depend_on_layout(name, dtype, layout):
     run, standard, other = kernel_runner(name, dtype, layout)
     for a, b in zip(standard, other):
@@ -254,9 +249,10 @@ def test_kernel_binding_output_does_not_depend_on_layout(name, dtype, layout):
     )
 
 
-@pytest.mark.parametrize("name,dtype", KERNEL_BINDINGS, ids=binding_ids(KERNEL_BINDINGS))
+@pytest.mark.parametrize(
+    "name,dtype", KERNEL_BINDINGS, ids=binding_ids(KERNEL_BINDINGS)
+)
 def test_kernel_binding_one_slice_fortran_order(name, dtype):
-    # The reported low-level case: a Fortran-order image (or one-slice stack).
     run, standard, _ = kernel_runner(name, dtype, "fortran")
     if "stack" in name:
         standard = [standard[0][:1], standard[1][:1], standard[2], standard[3][:1]]
@@ -276,7 +272,9 @@ DEBUG_BLOCK_MATCHING_BINDINGS = [
 
 @pytest.mark.parametrize("layout", LAYOUTS)
 @pytest.mark.parametrize(
-    "name,dtype", DEBUG_BLOCK_MATCHING_BINDINGS, ids=binding_ids(DEBUG_BLOCK_MATCHING_BINDINGS)
+    "name,dtype",
+    DEBUG_BLOCK_MATCHING_BINDINGS,
+    ids=binding_ids(DEBUG_BLOCK_MATCHING_BINDINGS),
 )
 def test_block_matching_binding_matches_do_not_depend_on_layout(name, dtype, layout):
     # Reference patch at (16, 24), patch 8, search window 16, 16 matches.
@@ -286,13 +284,9 @@ def test_block_matching_binding_matches_do_not_depend_on_layout(name, dtype, lay
     other = LAYOUTS[layout](image)
     assert np.array_equal(other, image)
     got = fn(other, 16, 24, 8, 16, 16)
-    assert got == expected, f"{layout}: matches {got[:4]}... instead of {expected[:4]}..."
-
-
-# --- Other array entry points --------------------------------------------------
-#
-# These wrappers pass the array to their binding as given, so they read the
-# same Rust code paths (FFT, noise estimator) with the caller's layout.
+    assert got == expected, (
+        f"{layout}: matches {got[:4]}... instead of {expected[:4]}..."
+    )
 
 
 @pytest.mark.parametrize("layout", LAYOUTS)
@@ -306,4 +300,6 @@ def test_noise_estimate_does_not_depend_on_layout(dtype, layout):
 @pytest.mark.parametrize("layout", LAYOUTS)
 @pytest.mark.parametrize("dtype", [np.float32, np.float64])
 def test_fourier_svd_removal_output_does_not_depend_on_layout(dtype, layout):
-    assert_same_output(fourier_svd_removal, noisy_step_edges((ROWS, COLS), dtype=dtype), layout)
+    assert_same_output(
+        fourier_svd_removal, noisy_step_edges((ROWS, COLS), dtype=dtype), layout
+    )

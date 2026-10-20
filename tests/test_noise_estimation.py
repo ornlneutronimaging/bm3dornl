@@ -1,12 +1,4 @@
-"""Contract tests for estimate_noise_sigma (issue #134).
-
-The estimator measures the amplitude of vertical streaks — the sinogram
-signature of ring artifacts — not pixel-level i.i.d. noise: its vertical
-Gaussian pre-filter deliberately suppresses pixel-level noise before the
-horizontal high-pass isolates column-to-column variation. Issue #134 fed it
-i.i.d. noise expecting the pixel sigma back; these tests pin both sides of
-the actual contract so the docstring and the behaviour cannot drift apart.
-"""
+"""Contract tests for estimate_noise_sigma."""
 
 import numpy as np
 import pytest
@@ -31,9 +23,6 @@ def test_recovers_vertical_streak_sigma():
 
 
 def test_iid_pixel_noise_is_suppressed_by_design():
-    # The exact construction from issue #134. The vertical pre-filter
-    # suppresses i.i.d. pixel noise, so the result must land far below the
-    # pixel-level sigma of 0.1 (measured: ~0.013 on this input).
     np.random.seed(100)
     sinogram = np.random.randn(256, 512).astype(np.float32) * 0.1
     sigma = estimate_noise_sigma(sinogram)

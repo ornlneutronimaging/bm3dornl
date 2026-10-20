@@ -1,25 +1,17 @@
 //! Criterion benchmarks for BM3D core operations.
 //!
 //! Run with: cargo bench -p bm3d_core
-//! Run specific: cargo bench -p bm3d_core -- bench_fft2d
-//!
-//! This benchmark imports from bm3d_core - no code duplication.
 
 use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
 use ndarray::Array2;
 use rand::prelude::*;
 use rustfft::FftPlanner;
 
-// Import from bm3d_core - the whole point of this restructure!
 use bm3d_core::block_matching::{compute_integral_images, find_similar_patches};
 use bm3d_core::{
     Bm3dKernelConfig, Bm3dMode, Bm3dPlans, estimate_streak_profile_impl, fft2d, ifft2d,
     run_bm3d_kernel, wht2d_8x8_forward, wht2d_8x8_inverse,
 };
-
-// =============================================================================
-// Helper Functions for Test Data Generation
-// =============================================================================
 
 fn random_matrix_f32(rows: usize, cols: usize, seed: u64) -> Array2<f32> {
     let mut rng = StdRng::seed_from_u64(seed);
@@ -66,10 +58,6 @@ fn run_bm3d_kernel_compat<F: bm3d_core::Bm3dFloat>(
     )
 }
 
-// =============================================================================
-// FFT Benchmarks
-// =============================================================================
-
 fn bench_fft2d(c: &mut Criterion) {
     let mut group = c.benchmark_group("fft2d");
 
@@ -103,10 +91,6 @@ fn bench_fft2d(c: &mut Criterion) {
     group.finish();
 }
 
-// =============================================================================
-// WHT Benchmarks
-// =============================================================================
-
 fn bench_wht_8x8(c: &mut Criterion) {
     let mut group = c.benchmark_group("wht_8x8");
     let input = random_matrix_f32(8, 8, 123);
@@ -131,10 +115,6 @@ fn bench_wht_8x8(c: &mut Criterion) {
 
     group.finish();
 }
-
-// =============================================================================
-// Block Matching Benchmarks
-// =============================================================================
 
 fn bench_block_matching(c: &mut Criterion) {
     let mut group = c.benchmark_group("block_matching");
@@ -191,10 +171,6 @@ fn bench_block_matching(c: &mut Criterion) {
     group.finish();
 }
 
-// =============================================================================
-// Streak Profile Benchmarks
-// =============================================================================
-
 fn bench_streak_profile(c: &mut Criterion) {
     let mut group = c.benchmark_group("streak_profile");
     group.sample_size(20);
@@ -205,7 +181,6 @@ fn bench_streak_profile(c: &mut Criterion) {
 
         group.throughput(Throughput::Elements((rows * cols) as u64));
 
-        // f32 benchmarks
         group.bench_with_input(
             BenchmarkId::new("f32/iter1", format!("{}x{}", rows, cols)),
             &(rows, cols),
@@ -222,7 +197,6 @@ fn bench_streak_profile(c: &mut Criterion) {
             },
         );
 
-        // f64 benchmarks
         group.bench_with_input(
             BenchmarkId::new("f64/iter1", format!("{}x{}", rows, cols)),
             &(rows, cols),
@@ -242,10 +216,6 @@ fn bench_streak_profile(c: &mut Criterion) {
 
     group.finish();
 }
-
-// =============================================================================
-// Full BM3D Pipeline Benchmarks
-// =============================================================================
 
 fn bench_bm3d_full(c: &mut Criterion) {
     let mut group = c.benchmark_group("bm3d_full");
@@ -349,15 +319,10 @@ fn bench_bm3d_full(c: &mut Criterion) {
     group.finish();
 }
 
-// =============================================================================
-// f32 vs f64 Precision Comparison Benchmarks
-// =============================================================================
-
 fn bench_precision_comparison(c: &mut Criterion) {
     let mut group = c.benchmark_group("f32_vs_f64");
     group.sample_size(10);
 
-    // Benchmark full BM3D pipeline for both precisions
     let size = 128;
     let image_f32 = random_matrix_f32(size, size, 42);
     let image_f64 = random_matrix_f64(size, size, 42);
@@ -370,7 +335,6 @@ fn bench_precision_comparison(c: &mut Criterion) {
 
     group.throughput(Throughput::Elements((size * size) as u64));
 
-    // f32 full 2-pass pipeline
     group.bench_function("bm3d_128_f32", |b| {
         b.iter(|| {
             let ht_result = run_bm3d_kernel_compat(
@@ -404,7 +368,6 @@ fn bench_precision_comparison(c: &mut Criterion) {
         })
     });
 
-    // f64 full 2-pass pipeline
     group.bench_function("bm3d_128_f64", |b| {
         b.iter(|| {
             let ht_result = run_bm3d_kernel_compat(
@@ -440,10 +403,6 @@ fn bench_precision_comparison(c: &mut Criterion) {
 
     group.finish();
 }
-
-// =============================================================================
-// Criterion Configuration
-// =============================================================================
 
 criterion_group!(
     benches,

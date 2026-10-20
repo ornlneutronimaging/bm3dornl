@@ -127,8 +127,7 @@
   noise-bearing synthetic cases. Of 540 measured sinograms, 533 remain
   byte-identical.
 - Seven CG-1D sinograms with zero median absolute deviation now return
-  unchanged. This is closer to the reference than the former standard-deviation
-  fallback. A median filter can make most details exactly zero on a smooth
+  unchanged. A median filter can make most details exactly zero on a smooth
   profile, leaving no scale to estimate.
 - The GUI now processes logged attenuation sinograms correctly in multiscale
   mode. The Multiscale Streak panel adds an "Input is already log-transformed
@@ -223,11 +222,10 @@
   and the crate README now describe this behavior. Runtime behavior is
   unchanged.
 - Optional test-data documentation now records the measured data's provenance
-  (#140). `tomostack_small.h5` comes from CG-1D acquisition IPTS-30610, raw file
+  (#140). `tomostack_small.h5` comes from a CG-1D acquisition, raw file
   `2023_08_11_1D_redo`.
-- `clean_tomostack` is the same acquisition denoised by the closed-source
-  reference, not ground truth or a second measurement (#140). `sino.npy` is a
-  simulated Shepp-Logan sinogram.
+- `clean_tomostack` is the same acquisition denoised, not ground truth or a
+  second measurement (#140). `sino.npy` is a simulated Shepp-Logan sinogram.
 - Every notebook now names its extra prerequisites (#139, #144). The tutorial
   adds `matplotlib`; real-data notebooks add `matplotlib`, `h5py`, and commands
   to fetch optional test data.
@@ -256,9 +254,9 @@
 ### Internal
 
 - Source clones now require Pixi 0.68 or newer because `pixi.lock` uses format
-  7. The lock preserves prior package URLs and changes only file layout, matching
-  other Neutron Data Project repositories. Continuous integration moved from
-  Pixi 0.62.2 to 0.78.0, which generated the lock.
+  7. The lock preserves prior package URLs and changes only file layout.
+  Continuous integration moved from Pixi 0.62.2 to 0.78.0, which generated
+  the lock.
 - GUI maintenance keeps builds clean on newer stable Rust versions (#122, #127).
   Nine ambiguous floats now use explicit `f32` literals, avoiding future compiler
   errors. The command-line loading code now follows rustfmt and Clippy without

@@ -1,7 +1,3 @@
-"""
-Contains the entry point for the application
-"""
-
 from importlib.metadata import version, PackageNotFoundError
 
 try:

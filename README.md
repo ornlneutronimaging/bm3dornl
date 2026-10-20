@@ -1,5 +1,3 @@
-<!-- Badges -->
-
 [![Build Status](https://github.com/ornlneutronimaging/bm3dornl/actions/workflows/test.yml/badge.svg?branch=next)](https://github.com/ornlneutronimaging/bm3dornl/actions/workflows/test.yml?query=branch?next)
 [![OpenSSF Best Practices](https://www.bestpractices.dev/projects/11811/badge)](https://www.bestpractices.dev/projects/11811)
 [![Documentation Status](https://readthedocs.org/projects/bm3dornl/badge/?version=latest)](https://bm3dornl.readthedocs.io/en/latest/?badge=latest)
@@ -7,7 +5,6 @@
 [![Crates.io](https://img.shields.io/crates/v/bm3d_core)](https://crates.io/crates/bm3d_core)
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.18226145.svg)](https://doi.org/10.5281/zenodo.18226145)
 
-<!-- End Badges -->
 BM3D ORNL
 =========
 
@@ -16,7 +13,7 @@ BM3D means block-matching and three-dimensional filtering.
 
 The BM3D algorithm was originally proposed by K. Dabov, A. Foi, V. Katkovnik, and K. Egiazarian in the paper "Image Denoising by Sparse 3D Transform-Domain Collaborative Filtering" (2007).
 
-The library provides a Python API backed by Rust. Key features include:
+The library provides a Python API backed by Rust. Features include:
 
 - **Streak removal** targets vertical detector artifacts.
 - **Multiscale processing** handles streaks wider than one scale can capture.
@@ -77,7 +74,7 @@ denoised = bm3d_ring_artifact_removal(sinogram, mode="generic", sigma_random=0.1
 # Streak artifact removal (recommended for ring artifacts)
 denoised = bm3d_ring_artifact_removal(sinogram, mode="streak", sigma_random=0.1)
 
-# With custom parameters (all parameters are flat, no dict wrapping)
+# With custom parameters
 denoised = bm3d_ring_artifact_removal(
     sinogram,
     mode="streak",
@@ -89,7 +86,7 @@ denoised = bm3d_ring_artifact_removal(
     batch_size=32,          # Batch size for stack processing
 )
 
-# Multi-scale BM3D for wide streaks (v0.7.0+)
+# Multi-scale BM3D for wide streaks
 denoised = bm3d_ring_artifact_removal(
     sinogram,
     mode="streak",
@@ -99,7 +96,7 @@ denoised = bm3d_ring_artifact_removal(
 )
 ```
 
-### Fourier-SVD Method (v0.7.0+)
+### Fourier-SVD Method
 
 For an alternative streak-removal method:
 
@@ -124,15 +121,15 @@ Processing time for one 720×725 sinogram, mean of 100 runs (measured
 |--------|------------------------------------|---------------------|
 | bm3dornl, streak mode | 0.094 s | 0.20 s |
 | bm3dornl, Fourier-SVD | 0.017 s | 0.022 s |
-| bm3d-streak-removal (reference, x86_64 only) | 31.8 s | not available |
+| bm3d-streak-removal (x86_64 only) | 31.8 s | not available |
 
 The Rust backend runs in parallel across cores with Rayon. The benchmark study
 behind these numbers, including the TomoPy comparison, lives on the
 `feature/joss-paper` branch under `study/`. A smaller comparison notebook is
 `notebooks/evaluation_performance.ipynb`.
 
-Key optimizations:
-- Integral image pre-screening for fast block matching
+Optimizations:
+- Integral image pre-screening for block matching
 - Early termination in distance calculations
 - Pre-computed FFT plans
 - Fast Walsh-Hadamard transform for 8×8 patches
@@ -174,7 +171,7 @@ minutes; later runs start immediately.
 
 ### Optional: test-data submodule
 
-`tests/bm3dornl-data` is a Git submodule with notebook reference data. It is
+`tests/bm3dornl-data` is a Git submodule with notebook data. It is
 not required to build the package or run tests. The clone command above is
 enough for `pixi run build` and `pixi run test`.
 
@@ -252,7 +249,7 @@ Parameter Reference
 | `step_size` | `4` | Stride between reference patches. It must not exceed `patch_size`, or pixels between the patches would stay unfiltered |
 | `search_window` | `24` | Maximum search distance for similar patches |
 | `max_matches` | `16` | Maximum similar patches per 3D group |
-| `search_step` | `None` | Stride between candidate positions in the block-matching search. `None` uses 1 (every position) in generic mode and `step_size` in streak and multiscale modes. Generic mode used to search with `step_size`; `search_step=step_size` restores that output and speed. The default generic search takes 2 to 3 times as long at the default `search_window`, and more with a larger window |
+| `search_step` | `None` | Stride between candidate positions in the block-matching search. `None` uses 1 (every position) in generic mode and `step_size` in streak and multiscale modes. The default generic search takes 2 to 3 times as long at the default `search_window`, and more with a larger window |
 | `batch_size` | `32` | Batch size for stack processing |
 | `streak_sigma_smooth` | `3.0` | Smoothing for streak mode (streak mode only) |
 | `multiscale` | `False` | Enable multi-scale processing for wide streaks |

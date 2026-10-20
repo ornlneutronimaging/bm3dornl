@@ -16,18 +16,14 @@ extensions = [
 
 html_theme = "sphinx_rtd_theme"
 
-# Napoleon settings for Google-style docstrings
 napoleon_google_docstring = True
 napoleon_numpy_docstring = True
 
-# Autodoc settings
 autodoc_member_order = "bysource"
 autodoc_typehints = "description"
 
-# Mock imports for ReadTheDocs (Rust extension won't be available)
 autodoc_mock_imports = ["bm3dornl.bm3d_rust"]
 
-# Intersphinx mapping
 intersphinx_mapping = {
     "python": ("https://docs.python.org/3", None),
     "numpy": ("https://numpy.org/doc/stable/", None),

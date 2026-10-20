@@ -1,9 +1,4 @@
 #!/usr/bin/env python3
-"""Diagnostic script to verify the PSD symmetry fix for streak mode.
-
-Loads sinograms from sinogram_extract/, processes with streak mode,
-and compares column variance / center bias against SVD reference.
-"""
 
 import sys
 from pathlib import Path
@@ -46,7 +41,6 @@ def load_tiff(path: Path) -> np.ndarray:
 
 
 def column_variance(sinogram: np.ndarray) -> np.ndarray:
-    """Variance along projection axis (axis=0) for each column."""
     return np.var(sinogram, axis=0)
 
 
@@ -70,7 +64,9 @@ def center_bias_metric(col_var: np.ndarray, margin_frac: float = 0.25) -> float:
 def main():
     if not DATA_DIR.exists():
         print(f"Data directory not found: {DATA_DIR}")
-        print("Place sinogram TIFF files in sinogram_extract/ to run this verification.")
+        print(
+            "Place sinogram TIFF files in sinogram_extract/ to run this verification."
+        )
         sys.exit(1)
 
     pre_files = sorted(DATA_DIR.glob("sino_pre_ring_slice*.tiff"))
@@ -92,9 +88,10 @@ def main():
         print(f"\nSlice {slice_id}:")
 
         sinogram = load_tiff(pre_path)
-        print(f"  Input shape: {sinogram.shape}, range: [{sinogram.min():.4f}, {sinogram.max():.4f}]")
+        print(
+            f"  Input shape: {sinogram.shape}, range: [{sinogram.min():.4f}, {sinogram.max():.4f}]"
+        )
 
-        # Process with streak mode
         streak_result = bm3d_ring_artifact_removal(sinogram, mode="streak")
 
         streak_col_var = column_variance(streak_result)
@@ -109,15 +106,15 @@ def main():
             ratio = streak_bias / svd_bias if svd_bias > 0 else float("inf")
             print(f"  Streak/SVD bias ratio: {ratio:.4f}")
 
-            # Pass if streak bias is within 2x of SVD bias
             if ratio > 2.0:
-                print(f"  ** WARN: streak bias ratio {ratio:.2f}x exceeds 2.0x threshold **")
+                print(
+                    f"  ** WARN: streak bias ratio {ratio:.2f}x exceeds 2.0x threshold **"
+                )
                 all_pass = False
             else:
                 print("  OK")
         else:
             print("  (no SVD reference available)")
-            # Without reference, just check bias isn't extreme
             if streak_bias > 3.0:
                 print(f"  ** WARN: streak center bias {streak_bias:.2f} seems high **")
                 all_pass = False

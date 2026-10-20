@@ -1,11 +1,6 @@
 //! PyO3 Python bindings for BM3D denoising.
 //!
-//! This crate provides thin Python bindings for the bm3d_core library.
-//! All algorithm logic is in bm3d_core; this crate only handles
-//! Python/NumPy type conversions.
-//!
-//! Both f32 and f64 precision are supported. Functions with `_f64` suffix
-//! accept and return float64 numpy arrays.
+//! Both f32 and f64 precision are supported.
 
 use ndarray::{Array2, Array3, ArrayView, ArrayView2, ArrayView3, CowArray, Dimension};
 use numpy::{PyArray1, PyArray2, PyArray3, PyReadonlyArray2, PyReadonlyArray3, ToPyArray};
@@ -17,16 +12,11 @@ use bm3d_core::{Bm3dFloat, Bm3dKernelConfig, Bm3dPlans};
 use bm3d_core::{Bm3dMode, run_bm3d_step, run_bm3d_step_stack};
 use bm3d_core::{MultiscaleConfig, multiscale_bm3d_streak_removal};
 
-/// Boxed progress callback: `(current, total) -> Result<(), String>`.
 type ProgressFn = Box<dyn Fn(usize, usize) -> Result<(), String>>;
 
 /// Sentinel prefix for KeyboardInterrupt errors propagated from Python callbacks.
 const KEYBOARD_INTERRUPT_SENTINEL: &str = "KeyboardInterrupt:";
 
-/// Build a progress closure that bridges Python callbacks across the GIL boundary.
-///
-/// KeyboardInterrupt is tagged with a sentinel prefix so it can be re-raised
-/// as `PyKeyboardInterrupt` instead of being swallowed into a generic `PyValueError`.
 fn make_progress_fn(cb: Py<PyAny>) -> ProgressFn {
     Box::new(move |current: usize, total: usize| -> Result<(), String> {
         Python::attach(|py| {
@@ -43,8 +33,6 @@ fn make_progress_fn(cb: Py<PyAny>) -> ProgressFn {
     })
 }
 
-/// Convert a `Result<Array, String>` from Rust into a `PyResult`, preserving
-/// `KeyboardInterrupt` when the error originated from a progress callback.
 fn map_stack_error<T>(result: Result<T, String>) -> PyResult<T> {
     result.map_err(|e| {
         if e.starts_with(KEYBOARD_INTERRUPT_SENTINEL) {
@@ -55,13 +43,6 @@ fn map_stack_error<T>(result: Result<T, String>) -> PyResult<T> {
     })
 }
 
-/// `array` in standard (row-major) layout: borrowed when it already is,
-/// copied otherwise.
-///
-/// The bm3d_core fast paths read standard layout only. Any other layout
-/// (Fortran order, negative strides, a strided view) takes a slower indexed
-/// path that agrees only to rounding. Converting here runs the same code on
-/// the same data, so every layout gives the C-order output exactly (#164).
 fn standard_layout<A: Clone, D: Dimension>(array: ArrayView<'_, A, D>) -> CowArray<'_, A, D> {
     if array.is_standard_layout() {
         CowArray::from(array)
@@ -70,9 +51,6 @@ fn standard_layout<A: Clone, D: Dimension>(array: ArrayView<'_, A, D>) -> CowArr
     }
 }
 
-/// Candidate-search stride of a low-level kernel binding. These bindings do
-/// not know the ring-removal mode, so `None` keeps the reference stride
-/// `step_size`, as before `search_step` existed.
 fn kernel_search_step(step_size: usize, search_step: Option<usize>) -> Result<usize, String> {
     match search_step {
         Some(0) => Err("search_step must be > 0 (or None for step_size)".to_string()),
@@ -327,7 +305,6 @@ pub fn bm3d_wiener_filtering_stack<'py>(
     Ok(output.to_pyarray(py))
 }
 
-/// Test function for block matching (used for debugging/validation).
 #[pyfunction]
 pub fn test_block_matching_rust(
     input: PyReadonlyArray2<'_, f32>,
@@ -350,7 +327,7 @@ pub fn test_block_matching_rust(
     Ok(result)
 }
 
-/// Estimate the static vertical streak profile using an iterative robust approach.
+/// Estimate the static vertical streak profile.
 #[pyfunction]
 #[pyo3(name = "estimate_streak_profile_rust")]
 pub fn estimate_streak_profile_py<'py>(
@@ -364,10 +341,6 @@ pub fn estimate_streak_profile_py<'py>(
         bm3d_core::estimate_streak_profile_impl(sinogram_view.view(), sigma_smooth, iterations);
     Ok(result.to_pyarray(py))
 }
-
-// ============================================================================
-// f64 (double precision) variants
-// ============================================================================
 
 /// Hard thresholding step of BM3D for a single 2D image (f64 precision).
 ///
@@ -541,7 +514,6 @@ pub fn bm3d_wiener_filtering_stack_f64<'py>(
     Ok(output.to_pyarray(py))
 }
 
-/// Test function for block matching (f64 precision).
 #[pyfunction]
 pub fn test_block_matching_rust_f64(
     input: PyReadonlyArray2<'_, f64>,
@@ -579,59 +551,6 @@ pub fn estimate_streak_profile_py_f64<'py>(
     Ok(result.to_pyarray(py))
 }
 
-// ============================================================================
-// Unified BM3D Ring Artifact Removal (complete pipeline)
-// ============================================================================
-
-/// Unified BM3D ring artifact removal for 2D sinograms (f32 precision).
-///
-/// This function performs the complete BM3D denoising pipeline:
-/// 1. Normalizes input to [0, 1] range
-/// 2. Computes spatially adaptive sigma map
-/// 3. (Streak mode) Subtracts estimated streak profile
-/// 4. Runs two-pass BM3D: Hard Threshold → Wiener
-/// 5. Denormalizes output to original range
-///
-/// Parameters
-/// ----------
-/// sinogram : numpy.ndarray
-///     Input 2D sinogram (H × W), dtype float32.
-/// mode : str
-///     Processing mode: "generic", "streak", "multiscale_streak", or "fourier_svd".
-/// sigma_random : float, optional
-///     Random noise std dev. Default: 0.0 (auto-estimate)
-/// patch_size : int, optional
-///     Block matching patch size. Default: 8
-/// step_size : int, optional
-///     Stride between reference patches, at most patch_size. Default: 4
-/// search_window : int, optional
-///     Search window size for block matching. Default: 24
-/// max_matches : int, optional
-///     Maximum similar patches per group. Default: 16
-/// threshold : float, optional
-///     Hard thresholding coefficient. Default: 2.7
-/// streak_sigma_smooth : float, optional
-///     Sigma for streak estimation smoothing (Streak Mode). Default: 3.0
-/// streak_iterations : int, optional
-///     Number of streak estimation iterations (Streak Mode). Default: 2
-/// sigma_map_smoothing : float, optional
-///     Sigma for sigma map profile smoothing. Default: 20.0
-/// streak_sigma_scale : float, optional
-///     Sigma map scaling factor. Default: 1.1
-/// psd_width : float, optional
-///     PSD Gaussian width for streak mode. Default: 0.6
-/// fft_alpha : float, optional
-///     FFT-Guided SVD Trust Factor. Default: 1.0 (Fourier-SVD mode only)
-/// notch_width : float, optional
-///     FFT-Guided SVD Notch Width. Default: 2.0 (Fourier-SVD mode only)
-/// search_step : int, optional
-///     Stride between candidate positions in the block-matching search.
-///     Default: None (1 in generic mode, step_size in the other modes)
-///
-/// Returns
-/// -------
-/// numpy.ndarray
-///     Denoised sinogram with same shape as input.
 #[pyfunction]
 #[pyo3(signature = (
     sinogram,
@@ -670,7 +589,6 @@ pub fn bm3d_ring_artifact_removal_2d<'py>(
     notch_width: Option<f32>,
     search_step: Option<usize>,
 ) -> PyResult<Bound<'py, PyArray2<f32>>> {
-    // Parse mode
     let ring_mode = match mode.to_lowercase().as_str() {
         "generic" => RingRemovalMode::Generic,
         "streak" => RingRemovalMode::Streak,
@@ -684,7 +602,6 @@ pub fn bm3d_ring_artifact_removal_2d<'py>(
         }
     };
 
-    // Build config with defaults
     let mut config: Bm3dConfig<f32> = Bm3dConfig::default();
 
     if let Some(v) = sigma_random {
@@ -729,7 +646,6 @@ pub fn bm3d_ring_artifact_removal_2d<'py>(
     // None keeps the per-mode default of Bm3dConfig.
     config.search_step = search_step;
 
-    // Call Rust implementation
     let output = bm3d_ring_artifact_removal(
         standard_layout(sinogram.as_array()).view(),
         ring_mode,
@@ -741,8 +657,6 @@ pub fn bm3d_ring_artifact_removal_2d<'py>(
 }
 
 /// Unified BM3D ring artifact removal for 2D sinograms (f64 precision).
-///
-/// See `bm3d_ring_artifact_removal_2d` for full documentation.
 #[pyfunction]
 #[pyo3(signature = (
     sinogram,
@@ -781,7 +695,6 @@ pub fn bm3d_ring_artifact_removal_2d_f64<'py>(
     notch_width: Option<f64>,
     search_step: Option<usize>,
 ) -> PyResult<Bound<'py, PyArray2<f64>>> {
-    // Parse mode
     let ring_mode = match mode.to_lowercase().as_str() {
         "generic" => RingRemovalMode::Generic,
         "streak" => RingRemovalMode::Streak,
@@ -795,7 +708,6 @@ pub fn bm3d_ring_artifact_removal_2d_f64<'py>(
         }
     };
 
-    // Build config with defaults
     let mut config: Bm3dConfig<f64> = Bm3dConfig::default();
 
     if let Some(v) = sigma_random {
@@ -840,7 +752,6 @@ pub fn bm3d_ring_artifact_removal_2d_f64<'py>(
     // None keeps the per-mode default of Bm3dConfig.
     config.search_step = search_step;
 
-    // Call Rust implementation
     let output = bm3d_ring_artifact_removal(
         standard_layout(sinogram.as_array()).view(),
         ring_mode,
@@ -851,7 +762,6 @@ pub fn bm3d_ring_artifact_removal_2d_f64<'py>(
     Ok(output.to_pyarray(py))
 }
 
-/// Fourier-SVD Streak Removal (Standalone) - f32
 #[pyfunction]
 #[pyo3(name = "fourier_svd_removal_rust")]
 #[pyo3(signature = (sinogram, fft_alpha=1.0, notch_width=2.0))]
@@ -869,7 +779,6 @@ pub fn fourier_svd_removal_py<'py>(
     Ok(output.to_pyarray(py))
 }
 
-/// Fourier-SVD Streak Removal (Standalone) - f64
 #[pyfunction]
 #[pyo3(name = "fourier_svd_removal_rust_f64")]
 #[pyo3(signature = (sinogram, fft_alpha=1.0, notch_width=2.0))]
@@ -887,33 +796,6 @@ pub fn fourier_svd_removal_py_f64<'py>(
     Ok(output.to_pyarray(py))
 }
 
-// ============================================================================
-// Noise Estimation
-// ============================================================================
-
-/// Estimate the standard deviation of vertical streak noise (f32).
-///
-/// This implements the sigma estimation from Mäkinen et al. (2021). The image
-/// is smoothed with a tall vertical Gaussian (sigma = height / 12), which
-/// passes column-wise (vertical streak) structure but suppresses pixel-level
-/// random noise, then high-pass filtered horizontally (Daubechies-3); the
-/// scaled MAD (1.4826) of the result is returned.
-///
-/// The returned value is the amplitude of vertical streaks — the sinogram
-/// signature of ring artifacts — not the pixel-level standard deviation of
-/// the image. For purely i.i.d. pixel noise it lands far below the pixel
-/// sigma (roughly 8x smaller for a 256-row image). The BM3D pipeline uses
-/// this estimator to fill in `sigma_random` when it is set to 0.0.
-///
-/// Parameters
-/// ----------
-/// sinogram : numpy.ndarray
-///     Input 2D sinogram (H × W), dtype float32.
-///
-/// Returns
-/// -------
-/// float
-///     Estimated standard deviation of the vertical streak noise.
 #[pyfunction]
 #[pyo3(name = "estimate_noise_sigma_rust")]
 pub fn estimate_noise_sigma_py(sinogram: PyReadonlyArray2<'_, f32>) -> PyResult<f32> {
@@ -923,8 +805,6 @@ pub fn estimate_noise_sigma_py(sinogram: PyReadonlyArray2<'_, f32>) -> PyResult<
 }
 
 /// Estimate noise standard deviation using MAD-based robust estimation (f64).
-///
-/// See `estimate_noise_sigma_rust` for full documentation.
 #[pyfunction]
 #[pyo3(name = "estimate_noise_sigma_rust_f64")]
 pub fn estimate_noise_sigma_py_f64(sinogram: PyReadonlyArray2<'_, f64>) -> PyResult<f64> {
@@ -933,43 +813,6 @@ pub fn estimate_noise_sigma_py_f64(sinogram: PyReadonlyArray2<'_, f64>) -> PyRes
     ))
 }
 
-// ============================================================================
-// Multi-Scale BM3D Streak Removal
-// ============================================================================
-
-/// Multi-scale BM3D streak removal for 2D sinograms (f32 precision).
-///
-/// This function wraps single-scale BM3D in a coarse-to-fine pyramid
-/// for handling wide streaks that single-scale cannot capture.
-///
-/// Parameters
-/// ----------
-/// sinogram : numpy.ndarray
-///     Input 2D sinogram (H × W), dtype float32. Assumes log-transformed data.
-/// num_scales : int, optional
-///     Override automatic scale calculation. If None, uses floor(log2(width/40)).
-/// filter_strength : float, optional
-///     Multiplier for BM3D filtering intensity. Default: 1.0
-/// threshold : float, optional
-///     Hard threshold coefficient. Default: 3.5 (note: different from single-scale 2.7)
-/// debin_iterations : int, optional
-///     Iterations for cubic spline debinning. Default: 30
-/// patch_size : int, optional
-///     Block matching patch size. Default: 8
-/// step_size : int, optional
-///     Stride between reference patches, at most patch_size. Default: 4
-/// search_window : int, optional
-///     Search window size for block matching. Default: 24
-/// max_matches : int, optional
-///     Maximum similar patches per group. Default: 16
-/// search_step : int, optional
-///     Stride between candidate positions in the block-matching search.
-///     Default: None (step_size at every scale)
-///
-/// Returns
-/// -------
-/// numpy.ndarray
-///     Denoised sinogram with same shape as input.
 #[pyfunction]
 #[pyo3(signature = (
     sinogram,
@@ -1010,7 +853,6 @@ pub fn multiscale_bm3d_streak_removal_2d<'py>(
     log_domain_input: Option<bool>,
     search_step: Option<usize>,
 ) -> PyResult<Bound<'py, PyArray2<f32>>> {
-    // Build config with defaults, using struct init syntax
     let default = MultiscaleConfig::<f32>::default();
     let mut config = MultiscaleConfig {
         num_scales,
@@ -1021,12 +863,10 @@ pub fn multiscale_bm3d_streak_removal_2d<'py>(
         bm3d_config: default.bm3d_config,
     };
 
-    // Also set inner BM3D threshold if provided
     if let Some(v) = threshold {
         config.bm3d_config.threshold = v;
     }
 
-    // Propagate standard BM3D config
     if let Some(v) = patch_size {
         config.bm3d_config.patch_size = v;
     }
@@ -1060,7 +900,6 @@ pub fn multiscale_bm3d_streak_removal_2d<'py>(
     // None keeps the per-mode default of Bm3dConfig.
     config.bm3d_config.search_step = search_step;
 
-    // Call Rust implementation
     let output =
         multiscale_bm3d_streak_removal(standard_layout(sinogram.as_array()).view(), &config)
             .map_err(pyo3::exceptions::PyValueError::new_err)?;
@@ -1069,8 +908,6 @@ pub fn multiscale_bm3d_streak_removal_2d<'py>(
 }
 
 /// Multi-scale BM3D streak removal for 2D sinograms (f64 precision).
-///
-/// See `multiscale_bm3d_streak_removal_2d` for full documentation.
 #[pyfunction]
 #[pyo3(signature = (
     sinogram,
@@ -1111,7 +948,6 @@ pub fn multiscale_bm3d_streak_removal_2d_f64<'py>(
     log_domain_input: Option<bool>,
     search_step: Option<usize>,
 ) -> PyResult<Bound<'py, PyArray2<f64>>> {
-    // Build config with defaults, using struct init syntax
     let default = MultiscaleConfig::<f64>::default();
     let mut config = MultiscaleConfig {
         num_scales,
@@ -1122,7 +958,6 @@ pub fn multiscale_bm3d_streak_removal_2d_f64<'py>(
         bm3d_config: default.bm3d_config,
     };
 
-    // Also set inner BM3D threshold if provided
     if let Some(v) = threshold {
         config.bm3d_config.threshold = v;
     }
@@ -1159,7 +994,6 @@ pub fn multiscale_bm3d_streak_removal_2d_f64<'py>(
     // None keeps the per-mode default of Bm3dConfig.
     config.bm3d_config.search_step = search_step;
 
-    // Call Rust implementation
     let output =
         multiscale_bm3d_streak_removal(standard_layout(sinogram.as_array()).view(), &config)
             .map_err(pyo3::exceptions::PyValueError::new_err)?;
@@ -1167,10 +1001,8 @@ pub fn multiscale_bm3d_streak_removal_2d_f64<'py>(
     Ok(output.to_pyarray(py))
 }
 
-/// BM3D Rust accelerator module
 #[pymodule]
 fn bm3d_rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    // f32 (single precision) functions
     m.add_function(wrap_pyfunction!(bm3d_hard_thresholding, m)?)?;
     m.add_function(wrap_pyfunction!(bm3d_wiener_filtering, m)?)?;
     m.add_function(wrap_pyfunction!(bm3d_hard_thresholding_stack, m)?)?;
@@ -1182,7 +1014,6 @@ fn bm3d_rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(fourier_svd_removal_py, m)?)?;
     m.add_function(wrap_pyfunction!(estimate_noise_sigma_py, m)?)?;
 
-    // f64 (double precision) functions
     m.add_function(wrap_pyfunction!(bm3d_hard_thresholding_f64, m)?)?;
     m.add_function(wrap_pyfunction!(bm3d_wiener_filtering_f64, m)?)?;
     m.add_function(wrap_pyfunction!(bm3d_hard_thresholding_stack_f64, m)?)?;

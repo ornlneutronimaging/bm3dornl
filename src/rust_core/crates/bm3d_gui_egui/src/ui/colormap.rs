@@ -1,6 +1,5 @@
 use eframe::egui;
 
-/// Available colormaps for visualization.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Colormap {
     #[default]
@@ -16,33 +15,27 @@ pub struct DivergingColormap;
 
 impl DivergingColormap {
     /// Map a value in range [-1, 1] to RGB color using RdBu colormap.
-    /// Negative values -> Blue, Zero -> White, Positive values -> Red
     pub fn rdbu(t: f32) -> [u8; 3] {
         let t = t.clamp(-1.0, 1.0);
 
         if t < 0.0 {
-            // Blue side: interpolate from Blue to White
-            let s = 1.0 + t; // s goes from 0 (t=-1) to 1 (t=0)
-            let r = (33.0 + s * (255.0 - 33.0)) as u8; // 33 -> 255
-            let g = (102.0 + s * (255.0 - 102.0)) as u8; // 102 -> 255
-            let b = (172.0 + s * (255.0 - 172.0)) as u8; // 172 -> 255
+            let s = 1.0 + t;
+            let r = (33.0 + s * (255.0 - 33.0)) as u8;
+            let g = (102.0 + s * (255.0 - 102.0)) as u8;
+            let b = (172.0 + s * (255.0 - 172.0)) as u8;
             [r, g, b]
         } else {
-            // Red side: interpolate from White to Red
-            let s = t; // s goes from 0 (t=0) to 1 (t=1)
-            let r = 255; // 255 -> 255
-            let g = (255.0 - s * (255.0 - 58.0)) as u8; // 255 -> 58
-            let b = (255.0 - s * (255.0 - 56.0)) as u8; // 255 -> 56
+            let s = t;
+            let r = 255;
+            let g = (255.0 - s * (255.0 - 58.0)) as u8;
+            let b = (255.0 - s * (255.0 - 56.0)) as u8;
             [r, g, b]
         }
     }
 
-    /// Generate a 256-entry lookup table for RdBu colormap.
-    /// Index 0 = -1 (blue), Index 127/128 = 0 (white), Index 255 = +1 (red)
     pub fn generate_lut() -> [[u8; 3]; 256] {
         let mut lut = [[0u8; 3]; 256];
         for (i, entry) in lut.iter_mut().enumerate() {
-            // Map [0, 255] to [-1, 1]
             let t = (i as f32 / 255.0) * 2.0 - 1.0;
             *entry = Self::rdbu(t);
         }
@@ -81,7 +74,6 @@ impl Colormap {
         }
     }
 
-    /// Generate a 256-entry lookup table for fast colormap application.
     pub fn generate_lut(&self) -> [[u8; 3]; 256] {
         let mut lut = [[0u8; 3]; 256];
         for (i, entry) in lut.iter_mut().enumerate() {
@@ -90,9 +82,7 @@ impl Colormap {
         lut
     }
 
-    // Viridis colormap (perceptually uniform, colorblind-friendly)
     fn viridis(t: f32) -> [u8; 3] {
-        // Simplified Viridis approximation using key points
         let (r, g, b) = if t < 0.25 {
             let s = t / 0.25;
             (
@@ -125,7 +115,6 @@ impl Colormap {
         [r as u8, g as u8, b as u8]
     }
 
-    // Inferno colormap (perceptually uniform, black to yellow through red)
     fn inferno(t: f32) -> [u8; 3] {
         let (r, g, b) = if t < 0.25 {
             let s = t / 0.25;
@@ -155,7 +144,6 @@ impl Colormap {
         [r as u8, g as u8, b as u8]
     }
 
-    // Plasma colormap (perceptually uniform, blue to yellow through magenta)
     fn plasma(t: f32) -> [u8; 3] {
         let (r, g, b) = if t < 0.25 {
             let s = t / 0.25;
@@ -190,7 +178,6 @@ impl Colormap {
     }
 }
 
-/// Widget for selecting colormap.
 pub struct ColormapSelector {
     current: Colormap,
 }
@@ -212,7 +199,7 @@ impl ColormapSelector {
         self.current
     }
 
-    /// Show colormap selector. Returns true if selection changed.
+    /// Returns true if selection changed.
     pub fn show(&mut self, ui: &mut egui::Ui) -> bool {
         let mut changed = false;
 

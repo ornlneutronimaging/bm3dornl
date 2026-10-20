@@ -94,8 +94,6 @@ horizontal angular information.
         sigma_random=0.05,
     )
 
-    # Compare the modes on your data
-
 Parameter Tuning
 ----------------
 

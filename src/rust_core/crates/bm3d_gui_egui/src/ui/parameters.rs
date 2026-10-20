@@ -5,16 +5,12 @@ use eframe::egui;
 
 /// BM3D processing parameters with method-specific UI panels.
 pub struct Bm3dParameters {
-    // Mode selection
     pub mode: RingRemovalMode,
 
-    // Common parameters
-    /// Random noise standard deviation (maps to Rust core's sigma_random).
+    /// Random noise standard deviation.
     pub sigma_random: f32,
-    /// Automatically estimate sigma from image data
     pub auto_sigma: bool,
 
-    // BM3D block-matching parameters (Generic, Streak, MultiscaleStreak)
     pub patch_size: usize,
     pub search_window: usize,
     pub max_matches: usize,
@@ -24,17 +20,14 @@ pub struct Bm3dParameters {
     /// Default is 1 (Y axis) for standard tomography data [angles, Y, X].
     pub processing_axis: usize,
 
-    // Fourier-SVD parameters
     pub fft_alpha: f32,
     pub notch_width: f32,
 
-    // Multi-scale parameters (MultiscaleStreak mode)
     pub num_scales: usize, // 0 = auto
     /// The loaded data is already log-transformed (attenuation), so the
     /// multiscale pipeline must not apply its own logarithm.
     pub log_domain_input: bool,
 
-    // UI state
     show_advanced: bool,
 }
 
@@ -51,7 +44,7 @@ impl Default for Bm3dParameters {
             search_window: bm3d_default.search_window,
             max_matches: bm3d_default.max_matches,
             use_hadamard_fast_mode: false,
-            processing_axis: 1, // Default: Y axis (middle dimension)
+            processing_axis: 1,
             fft_alpha: bm3d_default.fft_alpha,
             notch_width: bm3d_default.notch_width,
             num_scales: multiscale_default.num_scales.unwrap_or(0),
@@ -66,11 +59,8 @@ impl Bm3dParameters {
         Self::default()
     }
 
-    /// Convert to bm3d_core config.
     pub fn to_config(&self) -> Bm3dConfig<f32> {
         let default = Bm3dConfig::<f32>::default();
-        // If auto_sigma is enabled, we pass 0.0 to Rust core to trigger auto-estimation.
-        // Otherwise we pass the manual value.
         let sigma = if self.auto_sigma {
             0.0
         } else {
@@ -80,7 +70,7 @@ impl Bm3dParameters {
         Bm3dConfig {
             sigma_random: sigma,
             patch_size: self.patch_size,
-            step_size: self.patch_size / 2, // Standard: half patch size
+            step_size: self.patch_size / 2,
             search_window: self.search_window,
             max_matches: self.max_matches,
             fft_alpha: self.fft_alpha,
@@ -90,7 +80,6 @@ impl Bm3dParameters {
         }
     }
 
-    /// Convert to multiscale config
     pub fn to_multiscale_config(&self) -> MultiscaleConfig<f32> {
         let bm3d_config = self.to_config();
         let default = MultiscaleConfig::<f32>::default();
@@ -107,7 +96,6 @@ impl Bm3dParameters {
         }
     }
 
-    /// Returns true if the current mode uses multiscale processing
     pub fn uses_multiscale(&self) -> bool {
         self.mode == RingRemovalMode::MultiscaleStreak
     }
@@ -118,17 +106,14 @@ impl Bm3dParameters {
 
         ui.heading("Processing Parameters");
 
-        // Mode selection (always visible)
         changed |= self.show_mode_selection(ui);
 
-        // Collapsible description of the selected method with source + literature links
         show_method_info(ui, self.mode);
 
         ui.add_space(4.0);
         ui.separator();
         ui.add_space(4.0);
 
-        // Method-specific parameter panels
         match self.mode {
             RingRemovalMode::FourierSvd => {
                 changed |= self.show_fourier_svd_params(ui);
@@ -144,7 +129,6 @@ impl Bm3dParameters {
         changed
     }
 
-    /// Show mode selection dropdown
     fn show_mode_selection(&mut self, ui: &mut egui::Ui) -> bool {
         let mut changed = false;
 
@@ -206,7 +190,6 @@ impl Bm3dParameters {
         changed
     }
 
-    /// Show Fourier-SVD specific parameters (NO advanced section)
     fn show_fourier_svd_params(&mut self, ui: &mut egui::Ui) -> bool {
         let mut changed = false;
 
@@ -240,18 +223,15 @@ impl Bm3dParameters {
             }
         });
 
-        // Processing axis (needed for volume processing)
         ui.add_space(4.0);
         changed |= self.show_processing_axis(ui);
 
         changed
     }
 
-    /// Show MultiscaleStreak parameters: sigma + scales in Tier 1, BM3D in Advanced
     fn show_multiscale_streak_params(&mut self, ui: &mut egui::Ui) -> bool {
         let mut changed = false;
 
-        // Tier 1: Sigma and Scales
         changed |= self.show_sigma_control(ui);
 
         ui.horizontal(|ui| {
@@ -271,10 +251,6 @@ impl Bm3dParameters {
             }
         });
 
-        // Input domain. The multiscale model works on log-transformed data and
-        // applies the logarithm itself, which is right for linear transmission
-        // and wrong for data that is already attenuation (-ln T): logging it a
-        // second time turns air noise into huge outliers.
         if ui
             .checkbox(
                 &mut self.log_domain_input,
@@ -293,28 +269,23 @@ impl Bm3dParameters {
 
         ui.add_space(4.0);
 
-        // Advanced section with BM3D params
         changed |= self.show_advanced_bm3d_section(ui);
 
         changed
     }
 
-    /// Show BM3D parameters for Streak and Generic modes
     fn show_bm3d_params(&mut self, ui: &mut egui::Ui) -> bool {
         let mut changed = false;
 
-        // Tier 1: Sigma only
         changed |= self.show_sigma_control(ui);
 
         ui.add_space(4.0);
 
-        // Advanced section with BM3D params
         changed |= self.show_advanced_bm3d_section(ui);
 
         changed
     }
 
-    /// Show sigma control with auto checkbox
     fn show_sigma_control(&mut self, ui: &mut egui::Ui) -> bool {
         let mut changed = false;
 
@@ -326,7 +297,6 @@ impl Bm3dParameters {
                  Supports scientific notation (e.g., 5e-3)",
             );
 
-            // Auto sigma checkbox
             if ui
                 .checkbox(&mut self.auto_sigma, "Auto")
                 .on_hover_text("Automatically estimate noise level from image data")
@@ -335,7 +305,6 @@ impl Bm3dParameters {
                 changed = true;
             }
 
-            // Disable drag value if auto is selected
             ui.add_enabled_ui(!self.auto_sigma, |ui| {
                 let sigma_response = ui.add(
                     egui::DragValue::new(&mut self.sigma_random)
@@ -352,7 +321,6 @@ impl Bm3dParameters {
         changed
     }
 
-    /// Show processing axis selector
     fn show_processing_axis(&mut self, ui: &mut egui::Ui) -> bool {
         let mut changed = false;
 
@@ -391,7 +359,6 @@ impl Bm3dParameters {
         changed
     }
 
-    /// Show advanced BM3D parameters section (collapsible)
     fn show_advanced_bm3d_section(&mut self, ui: &mut egui::Ui) -> bool {
         let mut changed = false;
 
@@ -407,7 +374,6 @@ impl Bm3dParameters {
 
         if self.show_advanced {
             ui.indent("advanced_params", |ui| {
-                // Patch size
                 ui.horizontal(|ui| {
                     ui.label("Patch Size:").on_hover_text(
                         "Size of patches for block matching.\n\
@@ -425,7 +391,6 @@ impl Bm3dParameters {
                     }
                 });
 
-                // Search window
                 ui.horizontal(|ui| {
                     ui.label("Search Window:").on_hover_text(
                         "Size of area to search for similar patches.\n\
@@ -441,7 +406,6 @@ impl Bm3dParameters {
                     }
                 });
 
-                // Max matches
                 ui.horizontal(|ui| {
                     ui.label("Max Matches:").on_hover_text(
                         "Maximum similar patches per group.\n\
@@ -470,10 +434,8 @@ impl Bm3dParameters {
                     }
                 });
 
-                // Processing axis
                 changed |= self.show_processing_axis(ui);
 
-                // Reset to defaults button
                 if ui
                     .button("Reset to Defaults")
                     .on_hover_text("Reset advanced parameters to their default values")
@@ -498,19 +460,17 @@ impl Bm3dParameters {
 mod tests {
     use super::*;
 
-    /// Any patch size the slider offers must flow through to the core config
-    /// unaltered, with the stride derived as half the patch size.
     #[test]
     fn arbitrary_patch_size_maps_to_config() {
         let mut params = Bm3dParameters::new();
         params.patch_size = 7;
         let config = params.to_config();
         assert_eq!(config.patch_size, 7);
-        assert_eq!(config.step_size, 3); // patch_size / 2, integer division
+        assert_eq!(config.step_size, 3);
     }
 
     /// The GUI has no search-stride control, so it leaves `search_step` to
-    /// the per-mode default of bm3d_core (issue #163).
+    /// the per-mode default of bm3d_core.
     #[test]
     fn search_step_is_left_to_core_default() {
         let mut params = Bm3dParameters::new();
@@ -527,8 +487,6 @@ mod tests {
         assert_eq!(params.patch_size, Bm3dConfig::<f32>::default().patch_size);
     }
 
-    /// The input-domain toggle must reach the multiscale config, and its
-    /// default must track the core default.
     #[test]
     fn log_domain_toggle_maps_to_multiscale_config() {
         let mut params = Bm3dParameters::new();
