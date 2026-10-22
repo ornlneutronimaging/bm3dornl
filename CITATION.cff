@@ -1,0 +1,53 @@
+cff-version: 1.2.0
+message: If you use this software, please cite the paper below.
+title: "BM3DORNL"
+type: software
+license: MIT
+repository-code: "https://github.com/ornlneutronimaging/bm3dornl"
+url: "https://bm3dornl.readthedocs.io"
+authors:
+  - family-names: Zhang
+    given-names: Chen
+    orcid: "https://orcid.org/0000-0001-8374-4467"
+    affiliation: "Computing and Computational Sciences Directorate, Oak Ridge National Laboratory"
+  - family-names: Bilheux
+    given-names: Jean-Christophe
+    orcid: "https://orcid.org/0000-0003-2172-6487"
+    affiliation: "Neutron Sciences Directorate, Oak Ridge National Laboratory"
+  - family-names: Ganyushin
+    given-names: Dmitry
+    affiliation: "Computing and Computational Sciences Directorate, Oak Ridge National Laboratory"
+  - family-names: Peterson
+    given-names: Pete
+    orcid: "https://orcid.org/0000-0002-1353-0348"
+    affiliation: "Computing and Computational Sciences Directorate, Oak Ridge National Laboratory"
+identifiers:
+  - type: doi
+    value: 10.5281/zenodo.18226145
+    description: Software archive on Zenodo, all versions
+preferred-citation:
+  type: article
+  authors:
+    - family-names: Zhang
+      given-names: Chen
+      orcid: "https://orcid.org/0000-0001-8374-4467"
+      affiliation: "Computing and Computational Sciences Directorate, Oak Ridge National Laboratory"
+    - family-names: Bilheux
+      given-names: Jean-Christophe
+      orcid: "https://orcid.org/0000-0003-2172-6487"
+      affiliation: "Neutron Sciences Directorate, Oak Ridge National Laboratory"
+    - family-names: Ganyushin
+      given-names: Dmitry
+      affiliation: "Computing and Computational Sciences Directorate, Oak Ridge National Laboratory"
+    - family-names: Peterson
+      given-names: Pete
+      orcid: "https://orcid.org/0000-0002-1353-0348"
+      affiliation: "Computing and Computational Sciences Directorate, Oak Ridge National Laboratory"
+  title: "BM3DORNL: High-Performance BM3D Denoising for Neutron Tomography"
+  journal: "Journal of Open Source Software"
+  volume: 11
+  issue: 126
+  start: 11132
+  year: 2026
+  month: 10
+  doi: "10.21105/joss.11132"
