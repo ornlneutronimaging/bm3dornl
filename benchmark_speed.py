@@ -19,9 +19,6 @@ def run_benchmark():
 
     print("\n--- Benchmarking Single Scale ---")
     start_time = time.time()
-    # Using 'streak' mode to trigger core logic likely used in multiscale?
-    # Actually multiscale is a specific flag.
-    # Let's just run standard bm3d first as baseline.
     _ = bm3d.bm3d_ring_artifact_removal(img, mode="streak")
     end_time = time.time()
     single_time = end_time - start_time

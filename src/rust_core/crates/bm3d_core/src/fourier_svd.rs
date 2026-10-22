@@ -29,7 +29,7 @@ use rustfft::num_complex::Complex;
 /// Input A: (rows, cols)
 /// u: (rows,)
 /// s: scalar
-/// v: (cols,) - Note: this is v, not v_t in the sense of V^T row.
+/// v: (cols,)
 fn power_iteration_k1<F: Bm3dFloat>(
     matrix: ArrayView2<F>,
     max_iter: usize,
@@ -86,7 +86,7 @@ fn compute_vertical_energy_profile<F: Bm3dFloat>(
 ) -> Array1<F> {
     let (rows, cols) = sinogram.dim();
 
-    // Create FFT plans locally (expensive but robust)
+    // Create FFT plans locally (expensive)
     let mut planner = FftPlanner::<F>::new();
     let fft_row = planner.plan_fft_forward(cols);
     let fft_col = planner.plan_fft_forward(rows);
@@ -98,10 +98,9 @@ fn compute_vertical_energy_profile<F: Bm3dFloat>(
 
     // 2. Gaussian Notch (Bandpass at Fy=0)
     // Filter = exp( - (y - cy)^2 / (2 * sigma^2) )
-    // We want to KEEP Fy ~ 0.
-    // Frequencies are shifted? transforms::fft2d output is standard FFT layout (DC at 0,0)
+    // transforms::fft2d output is standard FFT layout (DC at 0,0)
     // So Fy=0 corresponds to indices close to 0 and close to N.
-    // We need to handle wrapping indices for valid distance calculation.
+    // Handle wrapping indices for valid distance calculation.
 
     let mut filtered_freq = freq_domain; // Move to mutable
 
@@ -109,12 +108,6 @@ fn compute_vertical_energy_profile<F: Bm3dFloat>(
     let sigma_sq = notch_width * notch_width;
     let rows_f = F::usize_as(rows);
     let rows_half = rows_f / F::from_f64_c(2.0);
-
-    // We operate on unshifted FFT data.
-    // Index r corresponds to frequency:
-    // if r < rows/2: f = r
-    // else: f = r - rows
-    // Distance to 0 is just min(r, rows-r).
 
     // Precompute column weights (High Pass in X to suppress wide structures/DC)
     let cols_f = F::usize_as(cols);
@@ -124,8 +117,8 @@ fn compute_vertical_energy_profile<F: Bm3dFloat>(
         let c_f = F::usize_as(c);
         let dist = if c_f <= cols_half { c_f } else { cols_f - c_f };
         let dist_sq = dist * dist;
-        // High Pass: 1.0 - LowPass. We use same sigma for simplicity or slightly wider?
-        // Let's use same sigma to reject 'streak-like' low freq structures.
+        // High Pass: 1.0 - LowPass.
+        // Use same sigma to reject 'streak-like' low freq structures.
         let low_pass = (neg_half * dist_sq / sigma_sq).exp();
         x_weights.push(F::one() - low_pass);
     }
@@ -160,12 +153,8 @@ fn compute_vertical_energy_profile<F: Bm3dFloat>(
         energy_profile[c] = sum_abs * rows_f_inv;
     }
 
-    // Normalize profile?
-    // Python code: normalized by Median.
-    // "med_energy = np.median(energy_profile)"
-    // "norm_profile = energy_profile / med_energy"
+    // Normalized by Median.
 
-    // We need median of energy_profile
     let mut energy_vec: Vec<F> = energy_profile.to_vec();
     // Sort to find median
     // F doesn't implement Ord, so partial_cmp
@@ -192,32 +181,22 @@ fn compute_vertical_energy_profile<F: Bm3dFloat>(
 
 /// The rescue path below exists for inputs where the MAD-derived threshold is
 /// numerical silence. It fires when the threshold falls under this fraction of
-/// the largest deviation, i.e. when the gate could remove nothing measurable
-/// and the whole call would return its input (issue #133). Measured margins:
-/// the degenerate flat-background phantoms sit near 5e-8; 533 of 540 real
-/// CG-1D slices sit from about 2.7e-2 up to 5e-1 — more than four decades
-/// either side of the cut — and the remaining 7 have exactly zero dispersion,
-/// handled separately below.
+/// the largest deviation.
 const NOOP_THRESHOLD_RATIO: f64 = 1e-6;
 
 /// Deviations at or below this fraction of the largest deviation are the
 /// degenerate floor itself (numerically silent entries), excluded when
 /// re-estimating the scale. Only consulted inside the rescue branch, where the
-/// floor is machine-precision residue; genuine noise populations sit orders of
-/// magnitude above it.
+/// floor is machine-precision residue.
 const FLOOR_RATIO: f64 = 1e-6;
 
 /// The rescue declines unless at least this fraction of columns (and at least
-/// [`MIN_INFORMATIVE_COLUMNS`]) carry information above the floor. With fewer,
-/// streaks cannot be told apart from structure, and a no-op is preferable to
-/// guessing.
+/// [`MIN_INFORMATIVE_COLUMNS`]) carry information above the floor.
 const MIN_INFORMATIVE_FRACTION: f64 = 0.25;
 const MIN_INFORMATIVE_COLUMNS: usize = 16;
 
 /// The rescue declines if the correction it would apply carries more than this
-/// fraction of the input's total energy. Genuine streak removal is a small
-/// correction (measured 1.7% on the benchmark phantom); a rank-1 subtraction
-/// approaching the data's own scale is removing the sample, not streaks.
+/// fraction of the input's total energy.
 const MAX_STREAK_ENERGY_FRACTION: f64 = 0.1;
 
 /// Apply the magnitude gate: mask = 1 / (1 + (|x|/thresh)^6), streak = x * mask.
@@ -265,17 +244,8 @@ fn gate_v_streak<F: Bm3dFloat>(
 /// 6. Corrected = A - StreakImage
 ///
 /// The gate keeps detail below its threshold as streak and protects detail
-/// above it as structure, so the threshold must land between the streak and
-/// structure amplitudes. It is 3x a MAD-based scale of `v_detail`. MAD is the
-/// median of the absolute deviations, and on a sinogram whose columns mostly
-/// see flat air the majority of those deviations are numerically zero, so MAD
-/// collapses to machine residue and the gate removes nothing at all — the
-/// whole call returns its input (issue #133). When that specific degeneracy is
-/// detected, the scale is re-estimated over the entries above the numerical
-/// floor; the rescue is guarded so it declines (keeping the no-op) rather than
-/// ever applying a structure-scale correction. Inputs where the threshold is
-/// measurable — all real measured data checked — take the original path
-/// unchanged.
+/// above it as structure. It is 3x a MAD-based scale of `v_detail`. MAD is the
+/// median of the absolute deviations.
 pub fn fourier_svd_removal<F: Bm3dFloat>(
     sinogram: ArrayView2<F>,
     fft_alpha: F,
@@ -290,8 +260,7 @@ pub fn fourier_svd_removal<F: Bm3dFloat>(
     let (u, s, v) = power_iteration_k1(sinogram, 20, F::from_f64_c(1e-6));
 
     // 2. Filter v (Horizontal Profile)
-    let v_slice = v.as_slice().unwrap(); // Assuming standard layout, safe for owned arrays usually.
-    // If strided, map to vec.
+    let v_slice = v.as_slice().unwrap();
     // v is owned Array1, so it is contiguous.
     let v_smooth_vec = compute_1d_median_filter(v_slice, 51);
     let v_smooth = Array1::from(v_smooth_vec);
@@ -306,11 +275,7 @@ pub fn fourier_svd_removal<F: Bm3dFloat>(
         None
     };
 
-    // Degeneracy check on the RAW MAD, before estimate_robust_sigma's
-    // mad == 0 fallback can substitute a standard deviation: that fallback is
-    // reached from the same flat-background degeneracy and its value is set by
-    // whatever structure is present, which is exactly the scale the gate must
-    // never adopt.
+    // Degeneracy check on the RAW MAD.
     let vals: Vec<f64> = v_detail.iter().map(|x| x.to_f64().unwrap_or(0.0)).collect();
     let mut sorted_vals = vals.clone();
     sorted_vals.sort_by(|a, b| a.total_cmp(b));
@@ -321,18 +286,8 @@ pub fn fourier_svd_removal<F: Bm3dFloat>(
     let max_dev = dev[dev.len() - 1];
 
     if 3.0 * raw_mad_sigma < NOOP_THRESHOLD_RATIO * max_dev {
-        // The threshold is numerical silence: the gate below would remove
-        // nothing and the call would return its input. Try to rescue.
+        // The threshold is numerical silence. Try to rescue.
 
-        // Exactly zero dispersion is different from silently small dispersion.
-        // The median filter returns an element of its window, so on a smooth
-        // column profile more than half of the detail entries can be exactly
-        // zero — measured on 7 of 540 sinograms of the real CG-1D volume, whose
-        // zeros are median-filter coincidences on real detector columns, not
-        // flat air. No scale can be estimated from a zero median deviation, and
-        // every substitute measured worse than leaving the data alone (the old
-        // mad == 0 standard-deviation fallback degraded those slices; so did
-        // rescuing them). Return the input unchanged.
         if raw_mad_sigma == 0.0 {
             return sinogram.to_owned();
         }
@@ -354,8 +309,7 @@ pub fn fourier_svd_removal<F: Bm3dFloat>(
         let base_thresh = F::from_f64_c(sigma_rescue * 3.0);
         let v_streak = gate_v_streak(&v_detail, base_thresh, modulator.as_ref());
 
-        // Genuine streak removal is a small correction. ||u|| = 1, so the
-        // rank-1 correction's Frobenius norm is s * ||v_streak||.
+        // ||u|| = 1, so the rank-1 correction's Frobenius norm is s * ||v_streak||.
         let streak_energy = s.to_f64().unwrap_or(0.0)
             * v_streak
                 .iter()
@@ -374,7 +328,6 @@ pub fn fourier_svd_removal<F: Bm3dFloat>(
             .sum::<f64>()
             .sqrt();
         if streak_energy > MAX_STREAK_ENERGY_FRACTION * data_energy {
-            // A correction this large would be removing the sample.
             return sinogram.to_owned();
         }
 
@@ -389,7 +342,7 @@ pub fn fourier_svd_removal<F: Bm3dFloat>(
         return corrected;
     }
 
-    // 3. Magnitude Gating (original path, unchanged)
+    // 3. Magnitude Gating
     let sigma = estimate_robust_sigma(v_detail.view());
     let base_thresh = F::from_f64_c(sigma * 3.0);
 
@@ -429,13 +382,12 @@ mod tests {
         ((c as f64 * 12.9898).sin() * 43758.5453).fract()
     }
 
-    /// Regression for issue #133: a sinogram whose columns mostly see flat air
-    /// must still have its streaks removed, not be returned unchanged.
+    /// A sinogram whose columns mostly see flat air must still have its streaks
+    /// removed.
     ///
     /// The air carries a minuscule per-column wobble so its detail is tiny but
-    /// not exactly zero: that is sino.npy's regime, where MAD collapses without
-    /// tripping the old `mad == 0` fallback and the previous code returned its
-    /// input untouched. This test fails against that code.
+    /// not exactly zero: that is where MAD collapses without tripping the
+    /// `mad == 0` fallback.
     #[test]
     fn flat_air_majority_is_rescued() {
         let cols = 200;
@@ -475,9 +427,8 @@ mod tests {
     }
 
     /// With too few informative columns the rescue must decline and return the
-    /// input exactly, never estimate a scale from a handful of entries. The air
-    /// carries a tiny wobble so dispersion is nonzero and the count guard, not
-    /// the zero-dispersion rule, is what declines.
+    /// input exactly. The air carries a tiny wobble so dispersion is nonzero and
+    /// the count guard is what declines.
     #[test]
     fn rescue_declines_on_too_few_informative_columns() {
         let cols = 200;
@@ -501,7 +452,7 @@ mod tests {
     }
 
     /// A rescue whose correction would carry a large share of the data's
-    /// energy is removing the sample, not streaks, and must decline. Wobbled
+    /// energy is removing the sample and must decline. Wobbled
     /// air keeps dispersion nonzero so the energy guard is what declines.
     #[test]
     fn rescue_declines_on_structure_scale_correction() {
@@ -529,11 +480,9 @@ mod tests {
     }
 
     /// Exactly zero dispersion: more than half the detail entries are exactly
-    /// zero (median-filter coincidences on a smooth profile), yet enough
-    /// informative columns exist that the count guard alone would let a rescue
-    /// proceed. No scale is estimable from a zero median deviation, so the
-    /// input must come back unchanged. Fails on the previous code, whose
-    /// mad == 0 fallback substituted a standard deviation and altered the data.
+    /// zero (median-filter coincidences on a smooth profile). No scale is
+    /// estimable from a zero median deviation, so the input must come back
+    /// unchanged.
     #[test]
     fn zero_dispersion_returns_input_unchanged() {
         let cols = 200;

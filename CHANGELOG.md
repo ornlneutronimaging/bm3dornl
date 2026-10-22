@@ -1,11 +1,95 @@
 # Changelog
 
+## 0.12.0 - 2026-10-15
+
+### Changed
+
+- **Behavior change:** generic mode, the general-purpose BM3D denoiser, now
+  tests every candidate position in the block-matching search window (#163).
+  The search used to step by `step_size`, the stride
+  between reference patches. Generic output changes. Generic processing takes
+  2 to 3 times as long at the default `search_window`, and more with a larger
+  window (about 5 to 6 times at `search_window=64`).
+- New `search_step` parameter: the stride between candidate positions in the
+  block-matching search (#163). `None`, the default, uses 1 in generic mode
+  and `step_size` in streak, multiscale and Fourier-SVD modes, so their
+  search does not change. Pass `search_step=step_size` to restore the old
+  generic output. `search_step=0` raises a `ValueError`.
+- `bm3d_ring_artifact_removal` takes `search_step` as its last parameter. The
+  `bm3d_rust` bindings take it as a last keyword argument. In the low-level
+  kernel bindings (`bm3d_hard_thresholding`, `bm3d_wiener_filtering` and their
+  stack and f64 variants), `None` means `step_size`.
+- Rust core: `Bm3dConfig` has a new field `search_step: Option<usize>` and
+  `Bm3dKernelConfig` a new field `search_step: usize`. Struct literals of
+  `Bm3dKernelConfig`, and of `Bm3dConfig` without `..Default::default()`, must
+  set it.
+- **Behavior change:** a `step_size` larger than `patch_size` is now refused
+  with `ValueError: step_size (s) must not exceed patch_size (p)` on every
+  path (#166). `step_size` equal to `patch_size` stays valid. In the Rust core,
+  `Bm3dConfig::validate`, `run_bm3d_step` and `run_bm3d_step_stack` return
+  the same error. The two kernels also return an error for a `step_size` or
+  `search_step` of 0.
+
+### Fixed
+
+- The bottom and right edges of the image are now filtered in generic and
+  streak modes (2D and 3D input) and in Fourier-SVD mode (2D input) (#163).
+  Reference patches sat only at multiples of `step_size`. When the
+  image size minus `patch_size` was not a multiple of `step_size` (at the
+  defaults, any size not divisible by 4), the last rows or columns came back
+  unfiltered, with all of their noise. For example, a 720 x 725 sinogram lost
+  its last column. One extra reference row and column now reach each edge.
+  Where the grid already reaches both edges, streak and Fourier-SVD output,
+  and generic output with `search_step=step_size`, stay bit-identical.
+- Multiscale output can also change, because its internal scales often have
+  sizes off the reference grid. The change is usually small (at most 6.1e-3
+  in our tests). On some inputs, though, it
+  changes the decision of the multiscale wall gate, which keeps straight
+  object edges from being removed as stripes. In a synthetic test with
+  `sigma_random` set to the true noise level, the gate then missed a straight
+  object edge more often, and that edge came out smeared (RMSE 0.0105 to
+  0.0123). The gate is tracked in #167.
+- `mode` in `bm3d_ring_artifact_removal` is now case-insensitive on every
+  path, as it already was for 2D single-scale input. In 3D, `mode="Streak"`
+  used to run generic processing, and `multiscale=True` refused `"Streak"`. A
+  `mode` that is not a string now raises `TypeError` on every path.
+- An image smaller than `patch_size` in either dimension now raises
+  `ValueError: Image size (rows, cols) is smaller than patch_size p` on every
+  path, as 2D input already did (#165). The 3D stack path, the low-level
+  kernel bindings and the `test_block_matching_rust` debug bindings used to
+  panic with `pyo3_runtime.PanicException`. Multiscale processing used to
+  return an image with fewer rows than `patch_size` unfiltered. The Rust kernels `run_bm3d_step` and
+  `run_bm3d_step_stack` return the same error, from the new public check
+  `bm3d_core::pipeline::check_image_size`.
+- Input arrays that are not C-contiguous now give the same output as C-order
+  input (#164). The Rust fast paths read pixel data in memory order but
+  indexed it as row-major, so a Fortran-order or negative-stride array was
+  read with rows and columns, or the column order, mixed up. This affected 3D
+  stacks with F-contiguous slices (for example a `transpose(0, 2, 1)` view, or
+  `np.asfortranarray` of a one-slice stack), the `bm3d_rust` bindings,
+  `fourier_svd_removal` and `estimate_noise_sigma`. 2D input to `bm3d_ring_artifact_removal` was
+  not affected. The bindings now convert input to C order, so every layout
+  gives the C-order output exactly. In the Rust core, the fast paths take
+  only standard-layout arrays; other layouts take the indexed path, which
+  agrees with the standard-layout result to rounding.
+
+### Documentation
+
+- The README DOI badge now points at the Zenodo concept DOI (#162).
+
+### Internal
+
+- CI action updates raised `softprops/action-gh-release` from 3.0.2 to 3.0.3,
+  `prefix-dev/setup-pixi` from 0.10.2 to 0.11.0, `actions/download-artifact`
+  from 8.0.1 to 8.0.2 and `actions/upload-artifact` from 7.0.1 to 7.0.2
+  (#161, #170, #171, #172).
+
 ## 0.11.0 - 2026-09-03
 
 ### Fixed
 
-- GUI HDF5 volumes now load about 16 times faster on the 591-slice gzip test:
-  about 4 seconds instead of 62. The progress reader added after 0.10.0 had read
+- GUI HDF5 volumes now load about 16 times faster on the 591-slice gzip test.
+  The progress reader added after 0.10.0 had read
   slice by slice, repeatedly decompressing chunks. Chunk-aligned reads now cover
   every chunked dataset, decompress each chunk once, and preserve visible
   progress.
@@ -15,7 +99,7 @@
   no longer require an ORNL account or registered SSH key (#132). The README
   explains that tests and builds do not need this 1.4 GB Git LFS submodule.
 - Fresh test-data submodule checkouts now succeed. The pointer now uses the
-  correct full commit hash instead of a mistyped, nonexistent one.
+  correct full commit hash.
 - Fourier-SVD now removes streaks from flat-background sinograms through
   `fourier_svd_removal` and `FourierSvd` mode (#133). Rescue starts when the old
   threshold falls below 1e-6 of the largest deviation. Scale is then estimated
@@ -27,20 +111,17 @@
   `notch_width`.
 - Unsafe Fourier-SVD rescues now return the input unchanged. Rescue requires
   informative values in at least one-quarter of columns and never fewer than
-  16 columns. It declines when correction would exceed 10% of input energy;
-  the correction is not clamped because it could remove the sample.
+  16 columns. It declines when correction would exceed 10% of input energy.
 - Outside this degenerate case, Fourier-SVD output remains byte-identical to
   0.10.0. Output-for-output checks covered the full measured CG-1D volume and
   noise-bearing synthetic cases. Of 540 measured sinograms, 533 remain
   byte-identical.
 - Seven CG-1D sinograms with zero median absolute deviation now return
-  unchanged. This is closer to the reference than the former standard-deviation
-  fallback. A median filter can make most details exactly zero on a smooth
+  unchanged. A median filter can make most details exactly zero on a smooth
   profile, leaving no scale to estimate.
 - The GUI now processes logged attenuation sinograms correctly in multiscale
   mode. The Multiscale Streak panel adds an "Input is already log-transformed
-  (attenuation)" toggle that sets `log_domain_input`. Without it, normalized
-  CG-1D data received a second logarithm and became unusable.
+  (attenuation)" toggle that sets `log_domain_input`.
 - Canceling GUI processing now returns the app to a ready state (#136).
   Previously, cancellation joined the worker and stopped reading its progress
   channel. The lost final message left progress and Process stuck until another
@@ -53,10 +134,10 @@
   Processed, and Difference previously clustered at the upper left. The layout
   reserved panel-wide cells but advanced only by each label's width.
 - GUI patch sizes now include every integer from 4 through 16 (#135). The old
-  menu offered only 4, 8, and 16; size 7 is now selectable as documented. All
+  menu offered only 4, 8, and 16; size 7 is now selectable. All
   sizes use the core's regular path; only 8-by-8 patches offer the optional
   Hadamard fast transform.
-- Multiscale streak removal now follows Mäkinen et al. (2021) more closely. It
+- Multiscale streak removal now follows Mäkinen et al. (2021). It
   denoises logarithmic attenuation data. For taller inputs, it first averages
   adjacent sinogram rows.
 - Multiscale denoising now processes overlapping horizontal segments. Each
@@ -79,12 +160,10 @@
   `-d` or `--dataset` selects an HDF5 dataset; a file containing one 3D dataset
   opens it automatically. Other HDF5 files open the dataset browser, while TIFF
   stacks and sequences load directly.
-- Every volume loads on a background thread, preventing interface freezes.
-  Known HDF5 slice totals show exact progress; unknown totals use an
-  animated bar.
+- Every volume loads on a background thread. Known HDF5 slice totals show
+  exact progress; unknown totals use an animated bar.
 - `--called-from-app FILE` adds a return button that saves the processed volume
-  as HDF5 dataset `/data`, then closes the GUI. This lets a launching
-  application round-trip data through the GUI.
+  as HDF5 dataset `/data`, then closes the GUI.
 - The GUI now explains the selected algorithm in a collapsible "About this
   method" panel (#156). It covers Generic BM3D, Streak, Multiscale Streak, and
   Fourier-SVD.
@@ -108,8 +187,7 @@
   pinning every GitHub Action to a full commit SHA (#118, #121). Pins retain
   version comments, and Dependabot maintains them.
 - Pure continuous-integration workflows now grant only read access to repository
-  contents (#118). Rust toolchain steps explicitly request stable, preserving
-  that channel after pinning. The pinning itself changed no action versions or
+  contents (#118). Rust toolchain steps explicitly request stable. The pinning itself changed no action versions or
   workflow behavior.
 
 ### Documentation
@@ -121,20 +199,17 @@
 - Contributor setup now uses supported Pixi tasks. The previous instructions
   named a missing micromamba file. They also ran tests outside Pixi.
 - `estimate_noise_sigma` documentation now describes vertical streak amplitude
-  instead of general image noise (#134). Independent Gaussian noise produced
-  about 0.013, not the former example's expected 0.1, because vertical smoothing
-  suppresses independent pixel noise. The example now uses vertical streak
-  noise, and tests cover both noise cases.
+  (#134). The example now uses vertical streak noise, and tests cover both
+  noise cases.
 - Noise-estimation documentation now states that `sigma_random <= 1e-6`,
   including 0.0, enables automatic estimation. Python docstrings, Rust comments,
   and the crate README now describe this behavior. Runtime behavior is
   unchanged.
 - Optional test-data documentation now records the measured data's provenance
-  (#140). `tomostack_small.h5` comes from CG-1D acquisition IPTS-30610, raw file
+  (#140). `tomostack_small.h5` comes from a CG-1D acquisition, raw file
   `2023_08_11_1D_redo`.
 - `clean_tomostack` is the same acquisition denoised by the closed-source
-  reference, not ground truth or a second measurement (#140). `sino.npy` is a
-  simulated Shepp-Logan sinogram.
+  reference (#140). `sino.npy` is a simulated Shepp-Logan sinogram.
 - Every notebook now names its extra prerequisites (#139, #144). The tutorial
   adds `matplotlib`; real-data notebooks add `matplotlib`, `h5py`, and commands
   to fetch optional test data.
@@ -163,13 +238,12 @@
 ### Internal
 
 - Source clones now require Pixi 0.68 or newer because `pixi.lock` uses format
-  7. The lock preserves prior package URLs and changes only file layout, matching
-  other Neutron Data Project repositories. Continuous integration moved from
-  Pixi 0.62.2 to 0.78.0, which generated the lock.
+  7. The lock preserves prior package URLs and changes only file layout.
+  Continuous integration moved from Pixi 0.62.2 to 0.78.0, which generated the
+  lock.
 - GUI maintenance keeps builds clean on newer stable Rust versions (#122, #127).
-  Nine ambiguous floats now use explicit `f32` literals, avoiding future compiler
-  errors. The command-line loading code now follows rustfmt and Clippy without
-  behavior changes.
+  Nine ambiguous floats now use explicit `f32` literals. The command-line
+  loading code now follows rustfmt and Clippy without behavior changes.
 - CI action updates raised `actions/checkout` from 6 to 7.0.1,
   `prefix-dev/setup-pixi` from 0.9.6 to 0.10.2, and
   `softprops/action-gh-release` from 3.0.1 to 3.0.2. They also raised
@@ -181,10 +255,10 @@
 
 ### Changed
 
-- Python: the default `mode` for `bm3d_ring_artifact_removal` changed from `"generic"` to `"streak"`, so the API default matches the package's ring-artifact-removal focus and the GUI/documentation defaults (#115).
+- Python: the default `mode` for `bm3d_ring_artifact_removal` changed from `"generic"` to `"streak"` (#115).
 - Python: the `threshold` parameter default changed from `2.7` to `None`. When `None`, the backend default is applied automatically: `2.7` for single-scale BM3D and `3.5` for multi-scale BM3D. Pass an explicit value to override (#115).
 - Rust core: the default `RingRemovalMode` changed from `MultiscaleStreak` to `Streak`, and the default `sigma_random` changed from `0.0` (auto-estimate) to `0.1`; the multi-scale default debinning iterations increased from 10 to 30 (#115).
-- GUI: BM3D parameter defaults are now derived from the Rust `Bm3dConfig`/`MultiscaleConfig` defaults instead of being hard-coded, so the GUI, Python API, and Rust core stay in sync (mode now defaults to Streak; `sigma_random` to 0.1; `max_matches` to 16) (#115).
+- GUI: BM3D parameter defaults are now derived from the Rust `Bm3dConfig`/`MultiscaleConfig` defaults (mode now defaults to Streak; `sigma_random` to 0.1; `max_matches` to 16) (#115).
 - Docs/README: corrected the parameter reference table to match the actual backend defaults (`step_size` 3→4, `search_window` 39→24, `streak_sigma_smooth` 1.0→3.0) and documented the new `threshold=None` / dual-default behavior (#115).
 
 ### Fixed

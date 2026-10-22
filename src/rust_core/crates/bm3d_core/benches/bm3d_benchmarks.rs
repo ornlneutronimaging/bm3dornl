@@ -1,16 +1,12 @@
 //! Criterion benchmarks for BM3D core operations.
 //!
 //! Run with: cargo bench -p bm3d_core
-//! Run specific: cargo bench -p bm3d_core -- bench_fft2d
-//!
-//! This benchmark imports from bm3d_core - no code duplication.
 
 use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
 use ndarray::Array2;
 use rand::prelude::*;
 use rustfft::FftPlanner;
 
-// Import from bm3d_core - the whole point of this restructure!
 use bm3d_core::block_matching::{compute_integral_images, find_similar_patches};
 use bm3d_core::{
     Bm3dKernelConfig, Bm3dMode, Bm3dPlans, estimate_streak_profile_impl, fft2d, ifft2d,
@@ -52,6 +48,7 @@ fn run_bm3d_kernel_compat<F: bm3d_core::Bm3dFloat>(
         step_size,
         search_window,
         max_matches,
+        search_step: step_size,
         use_hadamard_fast_path: None,
     };
     run_bm3d_kernel(

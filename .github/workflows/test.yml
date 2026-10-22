@@ -43,8 +43,7 @@ jobs:
       fail-fast: false
       matrix:
         # Lint on both x86_64 and aarch64 so the arch-gated SIMD paths are all
-        # covered: SSE2/AVX2 compile only on x86, NEON only on aarch64. A single-arch
-        # gate let the edition-2024 unsafe_op_in_unsafe_fn break hide on x86. See #109.
+        # covered: SSE2/AVX2 compile only on x86, NEON only on aarch64.
         os: [ubuntu-latest, ubuntu-24.04-arm]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -66,8 +65,17 @@ jobs:
 
       - name: Run clippy (entire workspace)
         working-directory: src/rust_core
-        # Lint every crate (bm3d_core, bm3d_python, bm3d_gui_egui), not just bm3d_core.
+        # Lint every crate (bm3d_core, bm3d_python, bm3d_gui_egui).
         run: cargo clippy --workspace --all-targets -- -D warnings
+
+  doc-lint:
+    name: Doc Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Check comment and docstring wording
+        run: python3 scripts/doc_lint.py
 
   python-test:
     name: Python Tests
@@ -76,7 +84,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install pixi
-        uses: prefix-dev/setup-pixi@d3f436a425481402e6a95a1d1fc10331c708cd9e # v0.10.2
+        uses: prefix-dev/setup-pixi@ad1da6449d9e506fd127fd67ab2d054a769f6a94 # v0.11.2
         with:
           pixi-version: v0.78.0
           run-install: false

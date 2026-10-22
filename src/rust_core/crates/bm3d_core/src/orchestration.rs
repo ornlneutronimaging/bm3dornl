@@ -1,7 +1,7 @@
 //! Unified BM3D Ring Artifact Removal Pipeline
 //!
-//! This module provides a complete BM3D denoising pipeline for 2D sinograms,
-//! eliminating the need for Python orchestration. It combines:
+//! This module provides a complete BM3D denoising pipeline for 2D sinograms.
+//! It combines:
 //! - Normalization / denormalization
 //! - Sigma map computation from streak profile
 //! - Optional streak pre-subtraction (streak mode)
@@ -17,7 +17,9 @@ use std::time::Instant;
 
 use crate::float_trait::Bm3dFloat;
 use crate::noise_estimation::estimate_noise_sigma;
-use crate::pipeline::{Bm3dKernelConfig, Bm3dMode, run_bm3d_step};
+use crate::pipeline::{
+    Bm3dKernelConfig, Bm3dMode, check_image_size, check_step_size, run_bm3d_step,
+};
 use crate::streak::{estimate_streak_profile_impl, gaussian_blur_1d};
 
 // =============================================================================
@@ -60,10 +62,10 @@ const DEFAULT_PSD_WIDTH: f64 = 0.6;
 /// Default filter strength multiplier
 const DEFAULT_FILTER_STRENGTH: f64 = 1.0;
 
-/// Fixed sigma for streak profile estimation when computing sigma map
+/// Sigma for streak profile estimation when computing sigma map
 const SIGMA_MAP_STREAK_SIGMA: f64 = 5.0;
 
-/// Fixed iterations for streak profile estimation when computing sigma map
+/// Iterations for streak profile estimation when computing sigma map
 const SIGMA_MAP_STREAK_ITERATIONS: usize = 1;
 
 /// Default FFT alpha (trust factor). 0.0 = disabled, 1.0 = standard boost.
@@ -100,7 +102,6 @@ pub enum RingRemovalMode {
 
 /// Configuration for BM3D ring artifact removal.
 ///
-/// All parameters have sensible defaults matching the original Python implementation.
 /// Use `Default::default()` for standard settings.
 #[derive(Debug, Clone)]
 pub struct Bm3dConfig<F: Bm3dFloat> {
@@ -108,12 +109,16 @@ pub struct Bm3dConfig<F: Bm3dFloat> {
     pub sigma_random: F,
     /// Block matching patch size. Default: 8
     pub patch_size: usize,
-    /// Stride between patches. Default: 4
+    /// Stride between reference patches, at most `patch_size`. Default: 4
     pub step_size: usize,
     /// Search window size for block matching. Default: 24
     pub search_window: usize,
     /// Maximum similar patches per group. Default: 16
     pub max_matches: usize,
+    /// Stride between candidate positions in the block-matching search.
+    /// `None` uses 1 (every position) in generic mode and `step_size` in the
+    /// other modes, including each scale of multiscale processing. Default: None
+    pub search_step: Option<usize>,
     /// Hard thresholding coefficient. Default: 2.7
     pub threshold: F,
     /// Sigma for streak estimation smoothing. Default: 3.0
@@ -145,6 +150,7 @@ impl<F: Bm3dFloat> Default for Bm3dConfig<F> {
             step_size: DEFAULT_STEP_SIZE,
             search_window: DEFAULT_SEARCH_WINDOW,
             max_matches: DEFAULT_MAX_MATCHES,
+            search_step: None,
             threshold: F::from_f64_c(DEFAULT_THRESHOLD),
             streak_sigma_smooth: F::from_f64_c(DEFAULT_STREAK_SIGMA_SMOOTH),
             streak_iterations: DEFAULT_STREAK_ITERATIONS,
@@ -170,14 +176,15 @@ impl<F: Bm3dFloat> Bm3dConfig<F> {
         if self.patch_size == 0 {
             return Err("patch_size must be > 0".to_string());
         }
-        if self.step_size == 0 {
-            return Err("step_size must be > 0".to_string());
-        }
+        check_step_size(self.step_size, self.patch_size)?;
         if self.search_window == 0 {
             return Err("search_window must be > 0".to_string());
         }
         if self.max_matches == 0 {
             return Err("max_matches must be > 0".to_string());
+        }
+        if self.search_step == Some(0) {
+            return Err("search_step must be > 0 (or None for the per-mode default)".to_string());
         }
         if self.sigma_random < F::zero() {
             return Err("sigma_random must be >= 0".to_string());
@@ -198,6 +205,17 @@ impl<F: Bm3dFloat> Bm3dConfig<F> {
             return Err("psd_width must be > 0".to_string());
         }
         Ok(())
+    }
+
+    /// Candidate-search stride for `mode`: `search_step` when set; otherwise
+    /// 1 in generic mode and `step_size` in the other modes.
+    fn resolved_search_step(&self, mode: RingRemovalMode) -> usize {
+        self.search_step.unwrap_or(match mode {
+            RingRemovalMode::Generic => 1,
+            RingRemovalMode::Streak
+            | RingRemovalMode::MultiscaleStreak
+            | RingRemovalMode::FourierSvd => self.step_size,
+        })
     }
 }
 
@@ -267,11 +285,10 @@ fn compute_sigma_map<F: Bm3dFloat>(
 /// `psd_x` is the horizontal noise power profile, sampled on the source
 /// image's frequency grid and resampled here onto the patch grid. `None`
 /// means horizontally white, which is Mäkinen et al.'s basic streak model
-/// (equation 2, Figure 1) and the right choice at the coarsest multiscale
-/// level. At finer levels the noise has been shaped by debinning and is no
-/// longer white in X, so equation 25 uses the residual kernel's spectrum
-/// instead; that profile is what [`crate::multiscale::generate_psd_shapes`]
-/// computes.
+/// (equation 2, Figure 1) at the coarsest multiscale level. At finer levels
+/// the noise has been shaped by debinning and is no longer white in X, so
+/// equation 25 uses the residual kernel's spectrum; that profile is what
+/// [`crate::multiscale::generate_psd_shapes`] computes.
 fn construct_psd<F: Bm3dFloat>(
     patch_size: usize,
     psd_width: F,
@@ -280,7 +297,7 @@ fn construct_psd<F: Bm3dFloat>(
     let mut sigma_psd = Array2::zeros((patch_size, patch_size));
 
     // Resample the horizontal profile onto the patch's frequency grid,
-    // normalised to unit mean so it shapes the PSD without rescaling it.
+    // normalised to unit mean.
     let x_gain: Vec<F> = match psd_x {
         None => vec![F::one(); patch_size],
         Some(profile) => {
@@ -288,14 +305,6 @@ fn construct_psd<F: Bm3dFloat>(
             if n == 0 {
                 vec![F::one(); patch_size]
             } else {
-                // The profile is a power spectrum (|FFT|^2, see
-                // generate_psd_shapes) and sigma_psd holds amplitudes that
-                // are squared back into a variance downstream. Normalize in
-                // the POWER domain — unit mean power, then square root —
-                // so the profile shapes the variance without rescaling its
-                // average level: normalizing the amplitudes instead would
-                // inflate mean variance by mean(P)/mean(sqrt(P))^2 for any
-                // non-flat profile (Jensen), moving every threshold.
                 let mut powers = Vec::with_capacity(patch_size);
                 for x in 0..patch_size {
                     // Circular frequency in cycles/pixel, mapped onto the
@@ -361,7 +370,6 @@ fn subtract_streak_profile<F: Bm3dFloat>(
 
 /// Unified BM3D ring artifact removal with pre-computed plans (Internal/Advanced).
 ///
-/// This is the core implementation that takes pre-computed FFT plans.
 /// See `bm3d_ring_artifact_removal` for the public API.
 pub fn bm3d_ring_artifact_removal_with_plans<F: Bm3dFloat>(
     sinogram: ArrayView2<F>,
@@ -376,8 +384,7 @@ pub fn bm3d_ring_artifact_removal_with_plans<F: Bm3dFloat>(
 /// horizontal noise power profile for streak mode.
 ///
 /// The multiscale pipeline uses this to give each pyramid level the PSD its
-/// own noise actually has (Mäkinen et al. 2021, equations 19 and 25) rather
-/// than reusing the horizontally-white model at every level.
+/// own noise has (Mäkinen et al. 2021, equations 19 and 25).
 pub(crate) fn bm3d_ring_artifact_removal_with_psd<F: Bm3dFloat>(
     sinogram: ArrayView2<F>,
     mode: RingRemovalMode,
@@ -414,12 +421,7 @@ pub(crate) fn bm3d_ring_artifact_removal_with_psd<F: Bm3dFloat>(
     let (rows, cols) = sinogram.dim();
 
     // Check image is large enough for patch size
-    if rows < config.patch_size || cols < config.patch_size {
-        return Err(format!(
-            "Image size ({}, {}) is smaller than patch_size {}",
-            rows, cols, config.patch_size
-        ));
-    }
+    check_image_size(rows, cols, config.patch_size)?;
 
     let (d_min, _d_max, range, eps, mut z_norm) = timed!(profile_timing, normalize_ns, {
         // Step 1: Compute global min/max for normalization
@@ -502,6 +504,7 @@ pub(crate) fn bm3d_ring_artifact_removal_with_psd<F: Bm3dFloat>(
     });
 
     // Step 6: BM3D Pass 1 - Hard Thresholding
+    let search_step = config.resolved_search_step(mode);
     let hard_config = Bm3dKernelConfig {
         sigma_random,
         threshold: config.threshold,
@@ -509,6 +512,7 @@ pub(crate) fn bm3d_ring_artifact_removal_with_psd<F: Bm3dFloat>(
         step_size: config.step_size,
         search_window: config.search_window,
         max_matches: config.max_matches,
+        search_step,
         use_hadamard_fast_path: config.use_hadamard_fast_path,
     };
     let yhat_ht = timed!(profile_timing, hard_pass_ns, {
@@ -531,6 +535,7 @@ pub(crate) fn bm3d_ring_artifact_removal_with_psd<F: Bm3dFloat>(
         step_size: config.step_size,
         search_window: config.search_window,
         max_matches: config.max_matches,
+        search_step,
         use_hadamard_fast_path: config.use_hadamard_fast_path,
     };
     let yhat_final = timed!(profile_timing, wiener_pass_ns, {
@@ -647,6 +652,13 @@ mod tests {
             let u = self.next_u64();
             (u >> 40) as f32 / (1u64 << 24) as f32
         }
+
+        // Box-Muller transform for a standard Gaussian sample
+        fn next_gaussian(&mut self) -> f64 {
+            let u1 = f64::from(self.next_f32()).max(1e-10);
+            let u2 = f64::from(self.next_f32());
+            (-2.0 * u1.ln()).sqrt() * (2.0 * std::f64::consts::PI * u2).cos()
+        }
     }
 
     fn random_matrix(rows: usize, cols: usize, seed: u64) -> Array2<f32> {
@@ -670,6 +682,8 @@ mod tests {
         assert_eq!(config.step_size, 4);
         assert_eq!(config.search_window, 24);
         assert_eq!(config.max_matches, 16);
+        // None resolves per mode: 1 in generic mode, step_size otherwise.
+        assert_eq!(config.search_step, None);
         assert!(approx_eq(config.threshold, 2.7, 1e-6));
         assert!(approx_eq(config.streak_sigma_smooth, 3.0, 1e-6));
         assert_eq!(config.streak_iterations, 2);
@@ -1183,6 +1197,120 @@ mod tests {
             diff > 0.1,
             "Denoising should have occurred (diff: {})",
             diff
+        );
+    }
+
+    const STRIP_PATCH_SIZE: usize = 8;
+    const STRIP_STEP_SIZE: usize = 4;
+    const STRIP_NOISE_SIGMA: f64 = 0.05;
+    /// Bound on RMS(output - clean) / sigma over an edge strip.
+    const STRIP_MAX_RESIDUAL_RATIO: f64 = 0.6;
+
+    /// Smooth horizontal bands plus Gaussian noise, with a fixed seed per shape.
+    fn banded_images<F: Bm3dFloat>(rows: usize, cols: usize) -> (Array2<F>, Array2<F>) {
+        let clean =
+            Array2::from_shape_fn((rows, cols), |(r, _)| 0.5 + 0.2 * (r as f64 / 15.0).sin());
+        let mut rng = SimpleLcg::new((rows * 1000 + cols) as u64);
+        let noisy = clean.mapv(|v| v + STRIP_NOISE_SIGMA * rng.next_gaussian());
+        (clean.mapv(F::from_f64_c), noisy.mapv(F::from_f64_c))
+    }
+
+    /// For each case `((rows, cols), strip_rows, strip_cols)`, run the public
+    /// 2D entry point in generic and streak mode and measure the residual
+    /// over the last `strip_rows` rows and the last `strip_cols` columns.
+    /// Returns one line per measurement and whether any exceeds the bound.
+    fn edge_residual_report<F: Bm3dFloat>(
+        cases: &[((usize, usize), usize, usize)],
+        precision: &str,
+    ) -> (Vec<String>, bool) {
+        use ndarray::s;
+
+        let mut lines = Vec::new();
+        let mut any_failed = false;
+        for &((rows, cols), strip_rows, strip_cols) in cases {
+            let (clean, noisy) = banded_images::<F>(rows, cols);
+            let lo = noisy.iter().fold(F::infinity(), |a, &b| a.min(b));
+            let hi = noisy.iter().fold(F::neg_infinity(), |a, &b| a.max(b));
+            let range = (hi - lo).to_f64().unwrap();
+            // sigma_random applies to the min/max-normalised image.
+            let config = Bm3dConfig {
+                sigma_random: F::from_f64_c(STRIP_NOISE_SIGMA / range),
+                patch_size: STRIP_PATCH_SIZE,
+                step_size: STRIP_STEP_SIZE,
+                ..Bm3dConfig::default()
+            };
+            for mode in [RingRemovalMode::Generic, RingRemovalMode::Streak] {
+                let output = bm3d_ring_artifact_removal(noisy.view(), mode, &config).unwrap();
+                let residual_ratio = |region: (usize, usize, usize, usize)| -> f64 {
+                    let (r0, r1, c0, c1) = region;
+                    let out = output.slice(s![r0..r1, c0..c1]);
+                    let truth = clean.slice(s![r0..r1, c0..c1]);
+                    let sum_sq: f64 = out
+                        .iter()
+                        .zip(truth.iter())
+                        .map(|(&o, &t)| (o - t).to_f64().unwrap().powi(2))
+                        .sum();
+                    (sum_sq / out.len() as f64).sqrt() / STRIP_NOISE_SIGMA
+                };
+                let mut regions = Vec::new();
+                if strip_rows > 0 {
+                    regions.push(("bottom", (rows - strip_rows, rows, 0, cols)));
+                }
+                if strip_cols > 0 {
+                    regions.push(("right", (0, rows, cols - strip_cols, cols)));
+                }
+                for (edge, region) in regions {
+                    let ratio = residual_ratio(region);
+                    let failed = ratio >= STRIP_MAX_RESIDUAL_RATIO;
+                    any_failed |= failed;
+                    lines.push(format!(
+                        "{rows}x{cols} {mode:?} {precision} {edge} strip: residual \
+                         {ratio:.3} sigma{}",
+                        if failed { "  <-- unfiltered" } else { "" }
+                    ));
+                }
+            }
+        }
+        (lines, any_failed)
+    }
+
+    #[test]
+    fn test_public_2d_filters_bottom_and_right_strip() {
+        // (extent - 8) % 4 is 1, 2 or 3 on rows, columns or both; the strip
+        // is that many rows or columns wide.
+        let cases: Vec<_> = [(66, 82), (65, 81), (67, 83), (64, 83), (67, 80)]
+            .into_iter()
+            .map(|(rows, cols)| {
+                (
+                    (rows, cols),
+                    (rows - STRIP_PATCH_SIZE) % STRIP_STEP_SIZE,
+                    (cols - STRIP_PATCH_SIZE) % STRIP_STEP_SIZE,
+                )
+            })
+            .collect();
+        let (mut lines, f32_failed) = edge_residual_report::<f32>(&cases, "f32");
+        let (f64_lines, f64_failed) = edge_residual_report::<f64>(&cases, "f64");
+        lines.extend(f64_lines);
+        assert!(
+            !(f32_failed || f64_failed),
+            "edge strip keeps the input noise (bound {STRIP_MAX_RESIDUAL_RATIO} sigma):\n{}",
+            lines.join("\n")
+        );
+    }
+
+    #[test]
+    fn test_public_2d_filters_edges_of_aligned_shape() {
+        // Control: on 64 x 80 the plain grid reaches both edges, so its last
+        // two rows and columns are filtered in every mode.
+        let cases = [((64, 80), 2, 2)];
+        let (mut lines, f32_failed) = edge_residual_report::<f32>(&cases, "f32");
+        let (f64_lines, f64_failed) = edge_residual_report::<f64>(&cases, "f64");
+        lines.extend(f64_lines);
+        assert!(
+            !(f32_failed || f64_failed),
+            "edge rows or columns keep the input noise (bound {STRIP_MAX_RESIDUAL_RATIO} \
+             sigma):\n{}",
+            lines.join("\n")
         );
     }
 }

@@ -23,7 +23,9 @@ CARGO_WORKSPACE = REPO_ROOT / "src" / "rust_core" / "Cargo.toml"
 
 # Files to sync
 PYTHON_MAIN = REPO_ROOT / "pyproject.toml"
-PYTHON_GUI = REPO_ROOT / "src" / "rust_core" / "crates" / "bm3d_gui_egui" / "pyproject.toml"
+PYTHON_GUI = (
+    REPO_ROOT / "src" / "rust_core" / "crates" / "bm3d_gui_egui" / "pyproject.toml"
+)
 
 
 def read_version() -> str:
@@ -31,7 +33,9 @@ def read_version() -> str:
     content = CARGO_WORKSPACE.read_text()
     match = re.search(r'\[workspace\.package\]\s*\n\s*version\s*=\s*"([^"]+)"', content)
     if not match:
-        raise ValueError(f"Could not find [workspace.package] version in {CARGO_WORKSPACE}")
+        raise ValueError(
+            f"Could not find [workspace.package] version in {CARGO_WORKSPACE}"
+        )
     return match.group(1)
 
 
@@ -62,7 +66,7 @@ def sync_python_main(version: str) -> None:
     # Update optional dependency: gui = ["bm3dornl-gui==X.Y.Z"]
     new_content = re.sub(
         r'(gui\s*=\s*\["bm3dornl-gui)==[^"]+("\])',
-        f'\\1=={version}\\2',
+        f"\\1=={version}\\2",
         new_content,
     )
 
@@ -129,7 +133,7 @@ def cmd_bump(component: str) -> None:
     print(f"Bumping {component} version: {old_version} -> {new_version}")
     print()
 
-    # Update Cargo.toml first (single source of truth)
+    # Update Cargo.toml first
     print("Updating Cargo workspace...")
     write_cargo_version(new_version)
     print()

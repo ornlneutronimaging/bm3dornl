@@ -4,13 +4,6 @@ use std::sync::Arc;
 
 use crate::float_trait::Bm3dFloat;
 
-// =============================================================================
-// Constants for Transform Operations
-// =============================================================================
-
-// Note: WHT normalization scale is now computed at runtime using F::usize_as(64)
-// to support both f32 and f64 precision.
-
 #[inline(always)]
 fn transpose_square_in_place<T>(data: &mut [T], n: usize) {
     for r in 0..n {
@@ -112,9 +105,9 @@ pub fn fft2d_into_with_plan_scratch<F: Bm3dFloat>(
     let col_scratch_len = fft_col_plan.get_inplace_scratch_len();
 
     if let (Some(input_data), Some(work_data), Some(output_data)) = (
-        input.as_slice_memory_order(),
+        input.as_slice(),
         work_complex.as_slice_memory_order_mut(),
-        output.as_slice_memory_order_mut(),
+        output.as_slice_mut(),
     ) {
         // 1. Transform rows (batched across all rows in one call).
         for r in 0..rows {
@@ -349,10 +342,12 @@ pub fn ifft2d_into_with_plan_scratch<F: Bm3dFloat>(
     let col_scratch_len = ifft_col_plan.get_inplace_scratch_len();
     let row_scratch_len = ifft_row_plan.get_inplace_scratch_len();
 
+    // As in `fft2d_into_with_plan_scratch`: `input` and `output` must be in
+    // standard layout for the fast path; the scratch `work_complex` need not.
     if let (Some(input_data), Some(work_data), Some(output_data)) = (
-        input.as_slice_memory_order(),
+        input.as_slice(),
         work_complex.as_slice_memory_order_mut(),
-        output.as_slice_memory_order_mut(),
+        output.as_slice_mut(),
     ) {
         // 1. Transform columns in-place in complex workspace.
         work_data.copy_from_slice(input_data);
@@ -452,8 +447,7 @@ pub fn ifft2d_into_with_plan_scratch<F: Bm3dFloat>(
 
 /// Compute 2D inverse FFT in-place on complex input, writing real output.
 ///
-/// Compared to `ifft2d_into_with_plan_scratch`, this avoids copying input into
-/// a separate complex workspace. The complex input is overwritten.
+/// The complex input is overwritten.
 pub fn ifft2d_inplace_to_real_with_plan_scratch<F: Bm3dFloat>(
     mut input_output: ArrayViewMut2<Complex<F>>,
     ifft_row_plan: &Arc<dyn Fft<F>>,
@@ -472,10 +466,9 @@ pub fn ifft2d_inplace_to_real_with_plan_scratch<F: Bm3dFloat>(
     let col_scratch_len = ifft_col_plan.get_inplace_scratch_len();
     let row_scratch_len = ifft_row_plan.get_inplace_scratch_len();
 
-    if let (Some(data), Some(output_data)) = (
-        input_output.as_slice_memory_order_mut(),
-        output.as_slice_memory_order_mut(),
-    ) {
+    // The fast path indexes both buffers as row-major slices, so it needs
+    // them in standard layout (`as_slice_mut`).
+    if let (Some(data), Some(output_data)) = (input_output.as_slice_mut(), output.as_slice_mut()) {
         // 1. Transform columns in-place in complex input/output buffer.
         if rows == cols {
             transpose_square_in_place(data, rows);
@@ -573,7 +566,6 @@ pub fn ifft2d_inplace_to_real_with_plan_scratch<F: Bm3dFloat>(
 /// In-place Fast Walsh-Hadamard Transform (Natural Order) for 8 elements.
 /// Uses a butterfly network with only additions and subtractions.
 /// Complexity: 8 log2(8) = 24 ops.
-/// This allows "multiplication-free" transform, drastically speeding up processing for 8x8 blocks.
 #[inline(always)]
 fn fwht8<F: Bm3dFloat>(buf: &mut [F; 8]) {
     // Stage 1 (Stride 1)
@@ -619,7 +611,7 @@ fn fwht8<F: Bm3dFloat>(buf: &mut [F; 8]) {
     buf[3] = t3;
 }
 
-/// 2D WHT for 8x8 patch. Returns Complex (im=0) for compatibility.
+/// 2D WHT for 8x8 patch. Returns Complex (im=0).
 pub fn wht2d_8x8_forward<F: Bm3dFloat>(input: ArrayView2<F>) -> Array2<Complex<F>> {
     let mut output = Array2::<Complex<F>>::zeros((8, 8));
     wht2d_8x8_forward_into_view(input, output.view_mut());
@@ -727,7 +719,6 @@ mod tests {
     use std::sync::Arc;
 
     // Helper: Simple Linear Congruential Generator for deterministic "random" test data
-    // This avoids adding rand as a dependency while still providing varied test inputs
     struct SimpleLcg {
         state: u64,
     }
@@ -865,7 +856,7 @@ mod tests {
 
     #[test]
     fn test_fft2d_roundtrip_multiple_seeds() {
-        // Test with 10 different random inputs to increase confidence
+        // Test with 10 different random inputs
         for seed in 0..10u64 {
             let input = random_matrix_f32(8, 8, seed * 7919); // Use prime multiplier for varied seeds
             let (fft_row, fft_col, ifft_row, ifft_col) = create_fft_plans_f32(8, 8);
@@ -1034,7 +1025,7 @@ mod tests {
     #[test]
     fn test_fft2d_single_element() {
         let mut input = Array2::<f32>::zeros((1, 1));
-        input[[0, 0]] = 2.71; // Euler's number approximation (not PI to avoid clippy)
+        input[[0, 0]] = 2.71; // Euler's number approximation
         let (fft_row, fft_col, ifft_row, ifft_col) = create_fft_plans_f32(1, 1);
 
         let freq = fft2d(input.view(), &fft_row, &fft_col);

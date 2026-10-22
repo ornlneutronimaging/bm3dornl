@@ -54,7 +54,7 @@ class TestStreakProfileF64:
         result_f64 = estimate_streak_profile_rust_f64(image_f64, 3.0, 3)
         result_f32 = estimate_streak_profile_rust(image_f32, 3.0, 3)
 
-        # Results should be close but not identical due to precision
+        # Results should be close
         assert_allclose(result_f64, result_f32.astype(np.float64), rtol=1e-4, atol=1e-6)
 
     def test_streak_profile_f64_uniform_image(self):
@@ -130,7 +130,7 @@ class TestBm3dHardThresholdingF64:
             max_matches=16,
         )
 
-        # Results should be similar (not identical due to precision)
+        # Results should be similar
         assert_allclose(result_f64, result_f32.astype(np.float64), rtol=1e-3, atol=1e-4)
 
 
@@ -242,5 +242,4 @@ class TestF64Precision:
 
         result = estimate_streak_profile_rust_f64(image, 3.0, 3)
 
-        # Verify we get f64 result
         assert result.dtype == np.float64

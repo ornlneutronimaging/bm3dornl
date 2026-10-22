@@ -8,14 +8,9 @@ from bm3dornl.bm3d import bm3d_ring_artifact_removal
 def get_peak_rss_mb():
     """Returns peak RSS in MB."""
     if sys.platform == "darwin":
-        # Mac return bytes? No, getrusage on Mac returns bytes?
-        # Actually it's often KB or bytes depending on OS.
-        # On Mac usually bytes? No, documentation says bytes on Mac, KB on Linux.
-        # Let's check interactively or assume standard scaling.
-        # We can just check start vs end.
+        # Bytes on Mac, KB on Linux.
         rusage = resource.getrusage(resource.RUSAGE_SELF)
-        return rusage.ru_maxrss / 1024 / 1024  # If bytes -> MB
-        # If result is too small, it was KB.
+        return rusage.ru_maxrss / 1024 / 1024  # Bytes -> MB
     else:
         rusage = resource.getrusage(resource.RUSAGE_SELF)
         return rusage.ru_maxrss / 1024
@@ -40,12 +35,8 @@ def test_memory():
 
     gc.collect()
 
-    _baseline_rss = get_peak_rss_mb()  # This is PEAK so far. Current RSS might be lower.
-    # We want Current RSS.
+    _baseline_rss = get_peak_rss_mb()  # This is PEAK so far.
     # resource.getrusage gives maxrss over lifetime.
-    # We can measure current RSS via psutil if available, or just rely on Peak.
-    # If we allocate input, Peak increases.
-    # Then processing, Peak increases more.
 
     stack = np.random.normal(0, 1, (N, H, W)).astype(np.float32)
 
@@ -55,12 +46,16 @@ def test_memory():
     print("Running BM3D...")
     start_time = time.time()
     # Use stack mode
-    _denoised = bm3d_ring_artifact_removal(stack, mode="streak", sigma_random=0.1, patch_size=8, max_matches=32)
+    _denoised = bm3d_ring_artifact_removal(
+        stack, mode="streak", sigma_random=0.1, patch_size=8, max_matches=32
+    )
     end_time = time.time()
 
     rss_peak = get_peak_rss_mb()
     print(f"RSS Peak: {rss_peak:.2f} MB")
-    print(f"Expansion: {(rss_peak - rss_after_alloc) / input_size_mb:.2f}x (Processing Overhead relative to Input)")
+    print(
+        f"Expansion: {(rss_peak - rss_after_alloc) / input_size_mb:.2f}x (Processing Overhead relative to Input)"
+    )
     print(f"Total / Input: {rss_peak / input_size_mb:.2f}x")
 
     print(f"Time: {end_time - start_time:.2f}s")

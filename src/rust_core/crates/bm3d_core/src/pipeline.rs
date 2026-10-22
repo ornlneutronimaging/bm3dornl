@@ -25,19 +25,16 @@ const WIENER_EPSILON: f64 = 1e-8;
 const MAX_WIENER_WEIGHT: f64 = 1e6;
 
 /// Small epsilon for aggregation denominator check.
-/// If the accumulated weight is below this threshold, we fall back to the noisy input.
+/// If the accumulated weight is below this threshold, fall back to the noisy input.
 const AGGREGATION_EPSILON: f64 = 1e-6;
 
 /// Minimum chunk length for Rayon parallel iteration.
-/// Tuned for good load balancing on typical workloads.
 const RAYON_MIN_CHUNK_LEN: usize = 64;
 
 /// Aggregation tile size for memory-bounded partial accumulation.
 /// Larger tiles reduce hashmap overhead; smaller tiles reduce per-worker memory.
 const AGGREGATION_TILE_SIZE: usize = 128;
 const AGGREGATION_TILE_SIZE_ENV: &str = "BM3D_AGGREGATION_TILE_SIZE";
-// 512 gives better cache locality than 1024 on large production-like workloads
-// while still capturing enough patch reuse to avoid excessive FFT recomputation.
 const TRANSFORM_CACHE_CAPACITY: usize = 512;
 const TRANSFORM_CACHE_CAPACITY_ENV: &str = "BM3D_TRANSFORM_CACHE_CAPACITY";
 const PROFILE_TIMING_ENV: &str = "BM3D_PROFILE_TIMING";
@@ -70,17 +67,71 @@ pub struct Bm3dKernelConfig<F: Bm3dFloat> {
     pub sigma_random: F,
     pub threshold: F,
     pub patch_size: usize,
+    /// Stride between reference patches, at most `patch_size`.
     pub step_size: usize,
     pub search_window: usize,
     pub max_matches: usize,
+    /// Stride between candidate positions in the block-matching search
+    /// window. 1 tests every position.
+    pub search_step: usize,
     /// Optional per-call override for 8x8 Hadamard fast path.
     /// `Some(true/false)` takes precedence over env/global defaults.
     pub use_hadamard_fast_path: Option<bool>,
 }
 
+/// Reference patch positions along one axis of length `extent`.
+///
+/// The positions are 0, step, 2 * step, ... up to `extent - patch_size`.
+/// When that grid misses `extent - patch_size`, it is added once, so the
+/// last rows and columns are covered. An extent smaller than the patch gets
+/// one reference at 0.
+fn reference_positions(extent: usize, patch_size: usize, step_size: usize) -> Vec<usize> {
+    let last = extent.saturating_sub(patch_size);
+    let mut positions: Vec<usize> = (0..=last).step_by(step_size).collect();
+    if positions.last() != Some(&last) {
+        positions.push(last);
+    }
+    positions
+}
+
+/// Refuse an image smaller than the patch in either dimension.
+///
+/// Block matching reads `patch_size` rows and columns from every reference
+/// position, so such an image cannot be filtered. Every entry point that
+/// filters an image uses this check.
+pub fn check_image_size(rows: usize, cols: usize, patch_size: usize) -> Result<(), String> {
+    if rows < patch_size || cols < patch_size {
+        return Err(format!(
+            "Image size ({}, {}) is smaller than patch_size {}",
+            rows, cols, patch_size
+        ));
+    }
+    Ok(())
+}
+
+/// Refuse a reference stride of 0 or one larger than the patch.
+pub(crate) fn check_step_size(step_size: usize, patch_size: usize) -> Result<(), String> {
+    if step_size == 0 {
+        return Err("step_size must be > 0".to_string());
+    }
+    if step_size > patch_size {
+        return Err(format!(
+            "step_size ({}) must not exceed patch_size ({})",
+            step_size, patch_size
+        ));
+    }
+    Ok(())
+}
+
+fn check_kernel_strides<F: Bm3dFloat>(config: &Bm3dKernelConfig<F>) -> Result<(), String> {
+    check_step_size(config.step_size, config.patch_size)?;
+    if config.search_step == 0 {
+        return Err("search_step must be > 0".to_string());
+    }
+    Ok(())
+}
+
 /// Helper struct to manage pre-computed FFT plans.
-/// Reusing plans avoids expensive re-initialization overhead (~45% speedup).
-/// We pre-compute:
 /// - 2D plans for patches (Row/Col)
 /// - 1D plans for group dimension (variable K up to max_matches)
 pub struct Bm3dPlans<F: Bm3dFloat> {
@@ -222,7 +273,9 @@ impl<F: Bm3dFloat> PatchTransformCache<F> {
                 ndarray::ArrayViewMut2::from_shape((self.patch_size, self.patch_size), out)
                     .expect("output transform slice shape should match patch size");
             transforms::wht2d_8x8_forward_into_view(patch, out_view);
-        } else if let Some(image_data) = image.as_slice_memory_order() {
+        } else if let Some(image_data) = image.as_slice() {
+            // `as_slice` is Some only in standard (row-major) layout, which
+            // the strided fast path indexes; other layouts take the view path.
             fft2d_strided_patch_into_with_plan_scratch(
                 image_data,
                 image.dim().1,
@@ -841,7 +894,7 @@ struct TileAggregationGeometry {
     tile_cols: usize,
 }
 
-/// Resolve aggregation tile size from environment with a safe fallback.
+/// Resolve aggregation tile size from environment with a fallback.
 fn resolve_aggregation_tile_size(patch_size: usize) -> usize {
     std::env::var(AGGREGATION_TILE_SIZE_ENV)
         .ok()
@@ -968,9 +1021,8 @@ fn resolve_use_hadamard_decision(
 
 /// Resolve whether the 8x8 Hadamard fast path should be used.
 ///
-/// Default is quality-first (`false`), because FFT path is less prone to
-/// patch-like artifacts near strong boundaries. Set `BM3D_USE_HADAMARD=1`
-/// to re-enable speed-first behavior for 8x8 patches.
+/// Default is quality-first (`false`). Set `BM3D_USE_HADAMARD=1`
+/// to enable speed-first behavior for 8x8 patches.
 fn resolve_use_hadamard(patch_size: usize, per_call_override: Option<bool>) -> bool {
     let explicit_override = hadamard_fast_path_override();
     let env_value = std::env::var(USE_HADAMARD_ENV).ok();
@@ -1280,8 +1332,7 @@ fn aggregate_patch_into_tiles<F: Bm3dFloat>(
         ) {
             if std::mem::size_of::<F>() == std::mem::size_of::<f32>() && geom.patch_size == 8 {
                 let weight_f32 = weight.to_f32().unwrap_or(0.0);
-                // SAFETY: We only reinterpret when F is f32-sized and this code is instantiated
-                // for f32 in practice; fallback scalar path is always available.
+                // SAFETY: F is f32-sized.
                 let simd_done = unsafe {
                     let num_f32 = std::slice::from_raw_parts_mut(
                         num_data.as_mut_ptr() as *mut f32,
@@ -1405,6 +1456,7 @@ fn run_bm3d_kernel_with_scratch<F: Bm3dFloat>(
     let patch_size = config.patch_size;
     let step_size = config.step_size;
     let search_window = config.search_window;
+    let search_step = config.search_step;
     let max_matches = config.max_matches;
     let threshold = config.threshold;
     let use_sigma_map_full = sigma_map.dim() == (rows, cols);
@@ -1418,19 +1470,10 @@ fn run_bm3d_kernel_with_scratch<F: Bm3dFloat>(
     // Pre-compute Integral Images for Block Matching acceleration
     let integral_sum = block_matching::compute_integral_sum_image(input_pilot);
 
-    let r_end = rows.saturating_sub(patch_size) + 1;
-    let c_end = cols.saturating_sub(patch_size) + 1;
-    let ref_rows = if r_end == 0 {
-        0
-    } else {
-        (r_end - 1) / step_size + 1
-    };
-    let ref_cols = if c_end == 0 {
-        0
-    } else {
-        (c_end - 1) / step_size + 1
-    };
-    let total_refs = ref_rows * ref_cols;
+    let ref_row_positions = reference_positions(rows, patch_size, step_size);
+    let ref_col_positions = reference_positions(cols, patch_size, step_size);
+    let ref_cols = ref_col_positions.len();
+    let total_refs = ref_row_positions.len() * ref_cols;
 
     let fft_2d_row_ref = &plans.fft_2d_row;
     let fft_2d_col_ref = &plans.fft_2d_col;
@@ -1503,8 +1546,7 @@ fn run_bm3d_kernel_with_scratch<F: Bm3dFloat>(
     let final_result = if total_refs == 0 {
         None
     } else {
-        // Use one coordinate chunk per Rayon worker to preserve throughput
-        // while keeping partial aggregation memory tile-bounded.
+        // Use one coordinate chunk per Rayon worker.
         let partial_count = total_refs.min(rayon::current_num_threads().max(1));
         let chunk_len = total_refs.div_ceil(partial_count).max(RAYON_MIN_CHUNK_LEN);
         let chunk_count = total_refs.div_ceil(chunk_len);
@@ -1547,8 +1589,8 @@ fn run_bm3d_kernel_with_scratch<F: Bm3dFloat>(
                 };
 
                 for ref_index in chunk_start..chunk_end {
-                    let ref_r = (ref_index / ref_cols) * step_size;
-                    let ref_c = (ref_index % ref_cols) * step_size;
+                    let ref_r = ref_row_positions[ref_index / ref_cols];
+                    let ref_c = ref_col_positions[ref_index % ref_cols];
                     // 1. Block Matching
                     timed!(profile_timing, stats.block_matching_ns, {
                         block_matching::find_similar_patches_in_place_sum(
@@ -1558,7 +1600,7 @@ fn run_bm3d_kernel_with_scratch<F: Bm3dFloat>(
                             (patch_size, patch_size),
                             (search_window, search_window),
                             max_matches,
-                            step_size,
+                            search_step,
                             &mut worker.matches,
                         );
                     });
@@ -2019,6 +2061,9 @@ pub fn run_bm3d_step<F: Bm3dFloat>(
             sigma_map.dim()
         ));
     }
+    check_kernel_strides(config)?;
+    let (rows, cols) = input_noisy.dim();
+    check_image_size(rows, cols, config.patch_size)?;
 
     Ok(run_bm3d_kernel(
         input_noisy,
@@ -2066,11 +2111,12 @@ pub fn run_bm3d_step_stack<F: Bm3dFloat>(
             sigma_map.dim()
         ));
     }
+    check_kernel_strides(config)?;
+    check_image_size(rows, cols, config.patch_size)?;
 
     let mut output = Array3::<F>::zeros((n, rows, cols));
     let mut scratch_pool = KernelScratchPool::<F>::new();
-    // Process one slice at a time: avoids nested Rayon scheduling (stack + kernel)
-    // and avoids materializing an intermediate Vec<Array2<_>> of all slice outputs.
+    // Process one slice at a time.
     for i in 0..n {
         let noisy_slice = input_noisy.index_axis(Axis(0), i);
         let pilot_slice = input_pilot.index_axis(Axis(0), i);
@@ -2386,7 +2432,6 @@ mod tests {
         Array3::zeros((1, 1, 1))
     }
 
-    // Keep tests readable while exercising the production config-based API.
     fn run_bm3d_step(
         input_noisy: ndarray::ArrayView2<f32>,
         input_pilot: ndarray::ArrayView2<f32>,
@@ -2408,6 +2453,7 @@ mod tests {
             step_size,
             search_window,
             max_matches,
+            search_step: step_size,
             use_hadamard_fast_path: None,
         };
         super::run_bm3d_step(
@@ -2442,6 +2488,7 @@ mod tests {
             step_size,
             search_window,
             max_matches,
+            search_step: step_size,
             use_hadamard_fast_path: None,
         };
         super::run_bm3d_step_stack(
@@ -2773,8 +2820,7 @@ mod tests {
 
     #[test]
     fn test_denoising_reduces_noise() {
-        // Use a smooth gradient image (not random) which BM3D can exploit
-        // BM3D works best on images with self-similar patches
+        // Use a smooth gradient image which BM3D can exploit
         let clean = Array2::from_shape_fn((64, 64), |(r, c)| {
             // Smooth gradient with some structure
             0.5 + 0.3 * ((r as f32 / 64.0).sin() + (c as f32 / 64.0).cos())
@@ -2804,7 +2850,6 @@ mod tests {
         let mse_after = mse(&output, &clean);
 
         // Denoising should reduce MSE, or at minimum not increase it significantly
-        // Use a relaxed assertion since BM3D behavior depends on image structure
         assert!(
             mse_after < mse_before * 1.5,
             "Denoising should not significantly increase MSE: before={}, after={}",
@@ -2916,7 +2961,7 @@ mod tests {
         let mse_before = mse_stack(&noisy, &clean);
         let mse_after = mse_stack(&output, &clean);
 
-        // Relaxed assertion - denoising should not significantly increase MSE
+        // Denoising should not significantly increase MSE
         assert!(
             mse_after < mse_before * 1.5,
             "Stack denoising should not significantly increase MSE: before={}, after={}",
@@ -2929,7 +2974,6 @@ mod tests {
 
     #[test]
     fn test_different_patch_sizes() {
-        // Test both 4x4 (FFT) and 8x8 (Hadamard) paths
         for patch_size in [4, 8] {
             let image = random_matrix(32, 32, (patch_size * 1000) as u64);
             let sigma_psd = dummy_sigma_psd();
@@ -3217,5 +3261,367 @@ mod tests {
                 step_size
             );
         }
+    }
+
+    /// (patch_size, step_size) of the default configuration.
+    const GEOMETRY_8_4: (usize, usize) = (8, 4);
+    /// (patch_size, step_size) the GUI uses for patch 7.
+    const GEOMETRY_7_3: (usize, usize) = (7, 3);
+    const COVERAGE_SEARCH_WINDOW: usize = 24;
+    const COVERAGE_MAX_MATCHES: usize = 16;
+    const COVERAGE_NOISE_SIGMA: f32 = 0.1;
+
+    /// The one place the coverage tests build a kernel config.
+    ///
+    /// The candidate search steps by step_size, and search_window / 2 is a
+    /// multiple of step_size in both geometries. So every candidate of a
+    /// reference on the grid is on the grid too.
+    fn coverage_kernel_config<F: Bm3dFloat>(
+        mode: Bm3dMode,
+        (patch_size, step_size): (usize, usize),
+    ) -> Bm3dKernelConfig<F> {
+        let threshold = match mode {
+            Bm3dMode::HardThreshold => 2.7,
+            Bm3dMode::Wiener => 0.0,
+        };
+        Bm3dKernelConfig {
+            sigma_random: F::from_f64_c(f64::from(COVERAGE_NOISE_SIGMA)),
+            threshold: F::from_f64_c(threshold),
+            patch_size,
+            step_size,
+            search_window: COVERAGE_SEARCH_WINDOW,
+            max_matches: COVERAGE_MAX_MATCHES,
+            search_step: step_size,
+            use_hadamard_fast_path: None,
+        }
+    }
+
+    /// Run one kernel pass with white noise. Hard thresholding is its own
+    /// pilot; Wiener gets the clean image as an ideal pilot.
+    fn run_coverage_kernel<F: Bm3dFloat>(
+        clean: &Array2<F>,
+        noisy: &Array2<F>,
+        mode: Bm3dMode,
+        geometry: (usize, usize),
+        plans: &Bm3dPlans<F>,
+    ) -> Array2<F> {
+        let pilot = match mode {
+            Bm3dMode::HardThreshold => noisy,
+            Bm3dMode::Wiener => clean,
+        };
+        let sigma_psd = Array2::<F>::zeros((1, 1));
+        let sigma_map = Array2::<F>::zeros((1, 1));
+        run_bm3d_kernel(
+            noisy.view(),
+            pilot.view(),
+            mode,
+            sigma_psd.view(),
+            sigma_map.view(),
+            &coverage_kernel_config::<F>(mode, geometry),
+            plans,
+        )
+    }
+
+    /// A smooth clean image and the same image with Gaussian noise.
+    fn coverage_images<F: Bm3dFloat>(rows: usize, cols: usize) -> (Array2<F>, Array2<F>) {
+        let clean = Array2::from_shape_fn((rows, cols), |(r, c)| {
+            0.5 + 0.2 * (r as f32 / 7.0).sin() * (c as f32 / 11.0).cos()
+        });
+        let mut rng = SimpleLcg::new((rows * 1000 + cols) as u64);
+        let noisy = clean.mapv(|v| v + COVERAGE_NOISE_SIGMA * rng.next_gaussian());
+        let to_float = |v: f32| F::from_f64_c(f64::from(v));
+        (clean.mapv(to_float), noisy.mapv(to_float))
+    }
+
+    /// Run both kernel passes on each shape and describe every pass that
+    /// returns a pixel equal to its input.
+    fn kernel_coverage_failures<F: Bm3dFloat>(
+        shapes: &[(usize, usize)],
+        geometry: (usize, usize),
+        precision: &str,
+    ) -> Vec<String> {
+        let (patch_size, step_size) = geometry;
+        let plans = Bm3dPlans::<F>::new(patch_size, COVERAGE_MAX_MATCHES);
+        let mut failures = Vec::new();
+        for &(rows, cols) in shapes {
+            let (clean, noisy) = coverage_images::<F>(rows, cols);
+            let strip_rows = (rows - patch_size) % step_size;
+            let strip_cols = (cols - patch_size) % step_size;
+            for mode in [Bm3dMode::HardThreshold, Bm3dMode::Wiener] {
+                let output = run_coverage_kernel(&clean, &noisy, mode, geometry, &plans);
+                let (mut bottom, mut right, mut elsewhere) = (0usize, 0usize, 0usize);
+                for ((r, c), &value) in noisy.indexed_iter() {
+                    if output[[r, c]] != value {
+                        continue;
+                    }
+                    if r >= rows - strip_rows {
+                        bottom += 1;
+                    } else if c >= cols - strip_cols {
+                        right += 1;
+                    } else {
+                        elsewhere += 1;
+                    }
+                }
+                let unfiltered = bottom + right + elsewhere;
+                if unfiltered > 0 {
+                    failures.push(format!(
+                        "{rows}x{cols} patch {patch_size} step {step_size} {mode:?} \
+                         {precision}: {unfiltered} of {} pixels equal the input ({bottom} \
+                         in the last {strip_rows} rows, {right} more in the last \
+                         {strip_cols} columns, {elsewhere} elsewhere)",
+                        rows * cols
+                    ));
+                }
+            }
+        }
+        failures
+    }
+
+    /// Coverage failures of one geometry on each shape, in f32 and f64.
+    fn coverage_failures_f32_f64(
+        shapes: &[(usize, usize)],
+        geometry: (usize, usize),
+    ) -> Vec<String> {
+        let mut failures = kernel_coverage_failures::<f32>(shapes, geometry, "f32");
+        failures.extend(kernel_coverage_failures::<f64>(shapes, geometry, "f64"));
+        failures
+    }
+
+    #[test]
+    fn test_kernel_filters_bottom_and_right_strip() {
+        // Patch 8, step 4: (extent - 8) % 4 is 1, 2 and 3 on rows only, on
+        // columns only, and on both axes.
+        let shapes_8_4 = [
+            (65, 80),
+            (66, 80),
+            (67, 80),
+            (64, 81),
+            (64, 82),
+            (64, 83),
+            (65, 81),
+            (66, 82),
+            (67, 83),
+        ];
+        // Patch 7, step 3: (66 - 7) % 3 and (81 - 7) % 3 are 2. (65 - 7) % 3 is 1.
+        let shapes_7_3 = [(66, 66), (66, 81), (65, 81)];
+        let mut failures = coverage_failures_f32_f64(&shapes_8_4, GEOMETRY_8_4);
+        failures.extend(coverage_failures_f32_f64(&shapes_7_3, GEOMETRY_7_3));
+        assert!(
+            failures.is_empty(),
+            "kernel left pixels unfiltered:\n{}",
+            failures.join("\n")
+        );
+    }
+
+    #[test]
+    fn test_kernel_filters_every_pixel_on_aligned_shape() {
+        let mut failures = coverage_failures_f32_f64(&[(64, 80)], GEOMETRY_8_4);
+        failures.extend(coverage_failures_f32_f64(&[(64, 79)], GEOMETRY_7_3));
+        assert!(
+            failures.is_empty(),
+            "kernel left pixels unfiltered:\n{}",
+            failures.join("\n")
+        );
+    }
+
+    #[test]
+    fn test_reference_positions_exact_lists() {
+        let grid = |last: usize, step: usize| (0..=last).step_by(step).collect::<Vec<usize>>();
+        let grid_plus = |last: usize, step: usize, extra: usize| {
+            let mut positions = grid(last, step);
+            positions.push(extra);
+            positions
+        };
+        let aligned = reference_positions(64, 8, 4);
+        assert_eq!(aligned, grid(56, 4));
+        assert_eq!(aligned.len(), 15, "aligned shape gets no extra reference");
+        let cases = [
+            ((65, 8, 4), grid_plus(56, 4, 57)),
+            ((66, 8, 4), grid_plus(56, 4, 58)),
+            ((67, 8, 4), grid_plus(56, 4, 59)),
+            ((8, 8, 4), vec![0]),
+            ((9, 8, 4), vec![0, 1]),
+            ((65, 8, 2), grid_plus(56, 2, 57)),
+            ((20, 8, 1), grid(12, 1)),
+            ((64, 8, 12), vec![0, 12, 24, 36, 48, 56]),
+            // Smaller than the patch: one reference at 0.
+            ((5, 8, 4), vec![0]),
+            ((7, 8, 4), vec![0]),
+        ];
+        for ((extent, patch_size, step_size), expected) in cases {
+            assert_eq!(
+                reference_positions(extent, patch_size, step_size),
+                expected,
+                "extent {extent}, patch {patch_size}, step {step_size}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_reference_positions_reach_both_ends_without_duplicates() {
+        for patch_size in [7, 8] {
+            for extent in patch_size..=100 {
+                let last = extent - patch_size;
+                for step_size in 1..=8 {
+                    let positions = reference_positions(extent, patch_size, step_size);
+                    let case = format!(
+                        "extent {extent}, patch {patch_size}, step {step_size}: {positions:?}"
+                    );
+                    assert_eq!(positions.first(), Some(&0), "{case}");
+                    assert_eq!(positions.last(), Some(&last), "{case}");
+                    assert!(
+                        positions.windows(2).all(|pair| pair[0] < pair[1]),
+                        "not strictly increasing (duplicate reference): {case}"
+                    );
+                    assert!(
+                        (0..=last)
+                            .step_by(step_size)
+                            .all(|p| positions.contains(&p)),
+                        "a multiple of the step is missing: {case}"
+                    );
+                    let off_grid: Vec<usize> = positions
+                        .iter()
+                        .copied()
+                        .filter(|p| p % step_size != 0)
+                        .collect();
+                    assert!(
+                        off_grid.is_empty() || off_grid == [last],
+                        "only extent - patch_size may be off the grid: {case}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// Largest |a - b| over the top-left `rows x cols` block.
+    fn max_abs_diff<F: Bm3dFloat>(a: &Array2<F>, b: &Array2<F>, rows: usize, cols: usize) -> f64 {
+        let mut max_diff = 0.0f64;
+        for r in 0..rows {
+            for c in 0..cols {
+                max_diff = max_diff.max((a[[r, c]] - b[[r, c]]).abs().to_f64().unwrap());
+            }
+        }
+        max_diff
+    }
+
+    /// Allowance for outputs that may differ only in rounding.
+    fn rounding_tolerance<F: Bm3dFloat>() -> f64 {
+        64.0 * F::epsilon().to_f64().unwrap()
+    }
+
+    /// Mirror an image top to bottom or left to right.
+    fn mirror<F: Bm3dFloat>(image: &Array2<F>, flip_rows: bool, flip_cols: bool) -> Array2<F> {
+        let (rows, cols) = image.dim();
+        Array2::from_shape_fn((rows, cols), |(r, c)| {
+            let src_r = if flip_rows { rows - 1 - r } else { r };
+            let src_c = if flip_cols { cols - 1 - c } else { c };
+            image[[src_r, src_c]]
+        })
+    }
+
+    /// Describe every kernel pass whose output on a mirrored image is not
+    /// the mirrored output.
+    fn kernel_mirror_failures<F: Bm3dFloat>(
+        shapes: &[(usize, usize)],
+        geometry: (usize, usize),
+        precision: &str,
+    ) -> Vec<String> {
+        let (patch_size, step_size) = geometry;
+        let plans = Bm3dPlans::<F>::new(patch_size, COVERAGE_MAX_MATCHES);
+        let tolerance = rounding_tolerance::<F>();
+        let mut failures = Vec::new();
+        for &(rows, cols) in shapes {
+            let (clean, noisy) = coverage_images::<F>(rows, cols);
+            for mode in [Bm3dMode::HardThreshold, Bm3dMode::Wiener] {
+                let output = run_coverage_kernel(&clean, &noisy, mode, geometry, &plans);
+                for (axis, flip_rows, flip_cols) in
+                    [("rows", true, false), ("columns", false, true)]
+                {
+                    let mirrored = run_coverage_kernel(
+                        &mirror(&clean, flip_rows, flip_cols),
+                        &mirror(&noisy, flip_rows, flip_cols),
+                        mode,
+                        geometry,
+                        &plans,
+                    );
+                    let restored = mirror(&mirrored, flip_rows, flip_cols);
+                    let diff = max_abs_diff(&restored, &output, rows, cols);
+                    if diff > tolerance {
+                        failures.push(format!(
+                            "{rows}x{cols} patch {patch_size} step {step_size} {mode:?} \
+                             {precision}, {axis} mirrored: outputs differ by {diff:.3e} \
+                             (rounding allows {tolerance:.1e})"
+                        ));
+                    }
+                }
+            }
+        }
+        failures
+    }
+
+    #[test]
+    fn test_kernel_commutes_with_mirror_on_aligned_shapes() {
+        let mut failures = Vec::new();
+        for (geometry, shapes) in [
+            (GEOMETRY_8_4, [(64, 80), (68, 92)]),
+            (GEOMETRY_7_3, [(64, 79), (67, 82)]),
+        ] {
+            failures.extend(kernel_mirror_failures::<f32>(&shapes, geometry, "f32"));
+            failures.extend(kernel_mirror_failures::<f64>(&shapes, geometry, "f64"));
+        }
+        assert!(
+            failures.is_empty(),
+            "reference set is not symmetric on an aligned shape (duplicate edge \
+             reference?):\n{}",
+            failures.join("\n")
+        );
+    }
+
+    /// Describe every kernel pass whose output on a 64 x 80 crop differs
+    /// from its output on the parent image far from the crop's bottom and
+    /// right edges.
+    fn kernel_crop_failures<F: Bm3dFloat>(
+        shapes: &[(usize, usize)],
+        geometry: (usize, usize),
+        precision: &str,
+    ) -> Vec<String> {
+        let (crop_rows, crop_cols) = (64, 80);
+        let margin = COVERAGE_SEARCH_WINDOW + geometry.0;
+        let (far_rows, far_cols) = (crop_rows - margin, crop_cols - margin);
+        let crop = |image: &Array2<F>| {
+            Array2::from_shape_fn((crop_rows, crop_cols), |(r, c)| image[[r, c]])
+        };
+        let plans = Bm3dPlans::<F>::new(geometry.0, COVERAGE_MAX_MATCHES);
+        let tolerance = rounding_tolerance::<F>();
+        let mut failures = Vec::new();
+        for &(rows, cols) in shapes {
+            let (clean, noisy) = coverage_images::<F>(rows, cols);
+            for mode in [Bm3dMode::HardThreshold, Bm3dMode::Wiener] {
+                let parent = run_coverage_kernel(&clean, &noisy, mode, geometry, &plans);
+                let cropped =
+                    run_coverage_kernel(&crop(&clean), &crop(&noisy), mode, geometry, &plans);
+                let diff = max_abs_diff(&parent, &cropped, far_rows, far_cols);
+                if diff > tolerance {
+                    failures.push(format!(
+                        "{rows}x{cols} {mode:?} {precision}: the first {far_rows} rows and \
+                         {far_cols} columns differ from the 64x80 crop by {diff:.3e} \
+                         (rounding allows {tolerance:.1e})"
+                    ));
+                }
+            }
+        }
+        failures
+    }
+
+    #[test]
+    fn test_kernel_far_pixels_ignore_extra_edge_rows_and_columns() {
+        let shapes = [(65, 81), (66, 82), (67, 83), (64, 83), (67, 80)];
+        let mut failures = kernel_crop_failures::<f32>(&shapes, GEOMETRY_8_4, "f32");
+        failures.extend(kernel_crop_failures::<f64>(&shapes, GEOMETRY_8_4, "f64"));
+        assert!(
+            failures.is_empty(),
+            "reference grid is not anchored at 0:\n{}",
+            failures.join("\n")
+        );
     }
 }

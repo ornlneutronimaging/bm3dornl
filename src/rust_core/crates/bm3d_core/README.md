@@ -56,7 +56,10 @@ let denoised = bm3d_ring_artifact_removal(image.view(), RingRemovalMode::Streak,
 
 ### Configuration
 
-- `Bm3dConfig` - BM3D parameter configuration
+- `Bm3dConfig` - BM3D parameter configuration. `step_size` is the stride
+  between reference patches. `search_step` is the stride between candidate
+  positions in the block-matching search; `None` uses 1 in `Generic` mode and
+  `step_size` in the other modes
 - `RingRemovalMode` - `Generic` for white noise or `Streak` for directional artifacts
 - `MultiscaleConfig` - Multiscale parameter configuration
 
@@ -69,7 +72,7 @@ let denoised = bm3d_ring_artifact_removal(image.view(), RingRemovalMode::Streak,
 ## Performance
 
 The implementation uses:
-- Integral image pre-screening for fast block matching
+- Integral image pre-screening for block matching
 - Early termination in distance calculations
 - Pre-computed FFT plans (`Bm3dPlans`)
 - Fast Walsh-Hadamard transform for 8×8 patches
@@ -78,7 +81,8 @@ The implementation uses:
 ## References
 
 - Dabov, K., Foi, A., Katkovnik, V., & Egiazarian, K. (2007). Image denoising by sparse 3D transform-domain collaborative filtering. *IEEE TIP*.
-- Mäkinen, Y., et al. (2021). Collaborative Filtering of Correlated Noise: Exact Transform-Domain Variance for Improved Shrinkage and Patch Matching.
+- Mäkinen, Y., Azzari, L., & Foi, A. (2020). Collaborative filtering of correlated noise: Exact transform-domain variance for improved shrinkage and patch matching. *IEEE TIP*, 29. https://doi.org/10.1109/TIP.2020.3014721
+- Mäkinen, Y., Marchesini, S., & Foi, A. (2021). Ring artifact reduction via multiscale nonlocal collaborative filtering of spatially correlated noise. *J. Synchrotron Rad.*, 28(3). https://doi.org/10.1107/S1600577521001910
 
 ## License
 

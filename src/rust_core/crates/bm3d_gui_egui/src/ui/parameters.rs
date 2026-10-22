@@ -69,8 +69,6 @@ impl Bm3dParameters {
     /// Convert to bm3d_core config.
     pub fn to_config(&self) -> Bm3dConfig<f32> {
         let default = Bm3dConfig::<f32>::default();
-        // If auto_sigma is enabled, we pass 0.0 to Rust core to trigger auto-estimation.
-        // Otherwise we pass the manual value.
         let sigma = if self.auto_sigma {
             0.0
         } else {
@@ -272,9 +270,7 @@ impl Bm3dParameters {
         });
 
         // Input domain. The multiscale model works on log-transformed data and
-        // applies the logarithm itself, which is right for linear transmission
-        // and wrong for data that is already attenuation (-ln T): logging it a
-        // second time turns air noise into huge outliers.
+        // applies the logarithm itself.
         if ui
             .checkbox(
                 &mut self.log_domain_input,
@@ -507,6 +503,18 @@ mod tests {
         let config = params.to_config();
         assert_eq!(config.patch_size, 7);
         assert_eq!(config.step_size, 3); // patch_size / 2, integer division
+    }
+
+    /// The GUI has no search-stride control, so it leaves `search_step` to
+    /// the per-mode default of bm3d_core.
+    #[test]
+    fn search_step_is_left_to_core_default() {
+        let mut params = Bm3dParameters::new();
+        for patch_size in [params.patch_size, 7] {
+            params.patch_size = patch_size;
+            assert_eq!(params.to_config().search_step, None);
+            assert_eq!(params.to_multiscale_config().bm3d_config.search_step, None);
+        }
     }
 
     #[test]

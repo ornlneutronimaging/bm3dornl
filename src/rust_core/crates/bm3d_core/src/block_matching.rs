@@ -40,8 +40,6 @@ impl<F: Bm3dFloat> PartialOrd for PatchMatch<F> {
 }
 
 /// Compute squared L2 distance between two patches directly from the source image.
-///
-/// This avoids creating candidate patch views in the hot inner loop.
 #[inline(always)]
 fn compute_squared_distance_at<F: Bm3dFloat>(
     image: ArrayView2<F>,
@@ -396,11 +394,11 @@ pub fn compute_integral_sum_image<F: Bm3dFloat>(image: ArrayView2<F>) -> Array2<
 ///
 /// Integral Image I(x, y) = sum(i(x', y')) for x'<=x, y'<=y.
 /// This allows O(1) computation of sum of pixels in any rectangular region.
-/// We use this for fast pre-screening in Block Matching:
+/// Use this for pre-screening in Block Matching:
 /// 1. Compute Mean Difference Bound: (sum1 - sum2)^2 / N
 /// 2. Compute Norm Difference Bound: (norm1 - norm2)^2
 ///
-/// If either bound exceeds threshold, we skip strict distance calculation.
+/// If either bound exceeds threshold, skip strict distance calculation.
 /// Returns (Sum, SqSum). Indexing: [row+1, col+1].
 pub fn compute_integral_images<F: Bm3dFloat>(image: ArrayView2<F>) -> (Array2<F>, Array2<F>) {
     let (h, w) = image.dim();
@@ -480,10 +478,9 @@ pub fn find_similar_patches_in_place_sum<F: Bm3dFloat>(
     };
 
     let inv_n = F::one() / F::usize_as(ph * pw);
-    if let (Some(image_data), Some(sum_data)) = (
-        image.as_slice_memory_order(),
-        integral_sum.as_slice_memory_order(),
-    ) {
+    // The fast path indexes both arrays as row-major slices, so it needs
+    // standard layout (`as_slice`); any other layout takes the fallback.
+    if let (Some(image_data), Some(sum_data)) = (image.as_slice(), integral_sum.as_slice()) {
         let sum_stride = integral_sum.dim().1;
         let image_cols = w;
         let ref_sum = get_patch_sum_strided(sum_data, sum_stride, ref_r, ref_c, ph, pw);
@@ -556,7 +553,7 @@ pub fn find_similar_patches_in_place_sum<F: Bm3dFloat>(
             }
         }
     } else {
-        // Fallback for non-contiguous views.
+        // Fallback for views not in standard layout.
         let ref_sum = get_patch_sum(integral_sum, ref_r, ref_c, ph, pw);
         for r in (search_r_start..=search_r_end).step_by(step) {
             for c in (search_c_start..=search_c_end).step_by(step) {
@@ -628,9 +625,7 @@ pub fn find_similar_patches_in_place_sum<F: Bm3dFloat>(
     });
 }
 
-/// Backward-compatible in-place API.
-///
-/// `integral_sq_sum` is accepted for compatibility but no longer used.
+/// In-place API.
 pub fn find_similar_patches_in_place<F: Bm3dFloat>(
     image: ArrayView2<F>,
     integral_sum: &Array2<F>,
@@ -687,7 +682,6 @@ mod tests {
     use std::collections::BinaryHeap;
 
     // Helper: Simple Linear Congruential Generator for deterministic "random" test data
-    // Copied from transforms.rs tests to maintain consistency
     struct SimpleLcg {
         state: u64,
     }
@@ -1283,8 +1277,6 @@ mod tests {
             2, // step=2
         );
 
-        // With step=2, we search fewer positions, so typically get fewer or equal matches
-        // (assuming enough positions exist)
         assert!(
             matches_step2.len() <= matches_step1.len(),
             "Step=2 should find same or fewer matches than step=1: {} vs {}",
@@ -1411,7 +1403,6 @@ mod tests {
 
     #[test]
     fn test_find_similar_known_distance() {
-        // Create image where we can predict exact distances
         // Reference patch at (0,0) with value 0, another patch at (0,4) with value 1
         // Distance = 4*4 * (1-0)^2 = 16
         let mut image = Array2::<f32>::zeros((8, 8));

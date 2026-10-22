@@ -77,7 +77,7 @@ fn main() {
     let elapsed = t0.elapsed();
     let rss_peak_mb = peak_rss_mb().unwrap_or(0.0);
 
-    // Keep output observable to avoid accidental optimization assumptions.
+    // Keep output observable.
     let checksum: f64 = out
         .iter()
         .step_by((rows * cols / 4096).max(1))
