@@ -6,6 +6,7 @@
 [![PyPI](https://img.shields.io/pypi/v/bm3dornl)](https://pypi.org/project/bm3dornl/)
 [![Crates.io](https://img.shields.io/crates/v/bm3d_core)](https://crates.io/crates/bm3d_core)
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.18226145.svg)](https://doi.org/10.5281/zenodo.18226145)
+[![DOI](https://joss.theoj.org/papers/10.21105/joss.11132/status.svg)](https://doi.org/10.21105/joss.11132)
 
 <!-- End Badges -->
 BM3D ORNL
