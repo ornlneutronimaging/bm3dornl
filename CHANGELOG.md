@@ -6,7 +6,7 @@
 
 - GUI: the Multiscale Streak panel asks for the input data as
   "Transmission (background ≈ 1)" or "Attenuation (background ≈ 0)" instead
-  of an "Input is already log-transformed (attenuation)" checkbox. The
+  of an "Input is already log-transformed (attenuation)" checkbox (#178). The
   tooltips describe the result of choosing the wrong one. Transmission data
   marked as attenuation has its streaks removed as additive offsets. The
   Difference panel looks cleaner, but dense regions are over-corrected and
