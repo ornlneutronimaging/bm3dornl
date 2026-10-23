@@ -271,16 +271,39 @@ impl Bm3dParameters {
 
         // Input domain. The multiscale model works on log-transformed data and
         // applies the logarithm itself.
+        ui.label("Input data:").on_hover_text(
+            "The quantity the loaded data holds. Check the open-beam background:\n\
+             about 1 means transmission, about 0 means attenuation.",
+        );
         if ui
-            .checkbox(
+            .radio_value(
                 &mut self.log_domain_input,
-                "Input is already log-transformed (attenuation)",
+                false,
+                "Transmission (background ≈ 1)",
             )
             .on_hover_text(
-                "Check this for attenuation sinograms (-ln of transmission), the usual\n\
-                 normalized product. Leave unchecked for linear transmission data in\n\
-                 [0, 1], which the pipeline log-transforms itself.\n\
-                 Wrong setting = a second logarithm and unusable output.",
+                "Normalized I/I0: open beam ≈ 1, sample dark.\n\
+                 The pipeline takes the logarithm itself, so detector-gain streaks are\n\
+                 removed as multiplicative errors. The Difference panel then follows\n\
+                 the sample's shape, which is expected.\n\
+                 Choosing this for attenuation data takes a second logarithm and the\n\
+                 output is unusable.",
+            )
+            .changed()
+        {
+            changed = true;
+        }
+        if ui
+            .radio_value(
+                &mut self.log_domain_input,
+                true,
+                "Attenuation (background ≈ 0)",
+            )
+            .on_hover_text(
+                "-ln(I/I0): open beam ≈ 0, sample bright. The logarithm is skipped.\n\
+                 Choosing this for transmission data removes streaks as additive\n\
+                 offsets: the Difference panel looks cleaner, but dense regions are\n\
+                 over-corrected and rings appear after reconstruction.",
             )
             .changed()
         {
