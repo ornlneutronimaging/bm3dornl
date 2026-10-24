@@ -107,6 +107,22 @@ Workflow
 
 6. **Export:** Save the result as TIFF or HDF5.
 
+Input Data
+----------
+
+The Multiscale Streak method asks what the loaded data holds. Check the
+open-beam background in the image. Choose **Transmission (background ≈ 1)**,
+the default, for normalized I/I0 data with a dark sample. The pipeline takes
+the logarithm itself and removes detector-gain streaks as multiplicative
+errors, so the Difference panel follows the sample's shape: stripes are strong
+in the bright background and fade inside dense regions. Choose **Attenuation
+(background ≈ 0)** for -ln(I/I0) data with a bright sample; the logarithm is
+skipped. Attenuation chosen for transmission data removes the streaks as
+additive offsets: the Difference panel shows clean uniform stripes, but dense
+regions are over-corrected and rings appear after reconstruction. Transmission
+chosen for attenuation data takes a second logarithm and the output is
+unusable.
+
 Tips
 ----
 
@@ -117,4 +133,5 @@ Tips
 - **Use ROI selection:** Select flat regions to evaluate noise reduction.
 
 - **Inspect the difference:** In streak mode, removed content should be mainly
-  vertical streaks. Horizontal structure may indicate signal loss.
+  vertical streaks. Horizontal structure may indicate signal loss. With
+  Transmission input, the streaks fade inside dense regions; see `Input Data`_.
