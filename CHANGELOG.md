@@ -5,7 +5,8 @@
 ### Documentation
 
 - The GUI page describes the Multiscale Streak input data choice,
-  Transmission or Attenuation, and the result of choosing the wrong one.
+  Transmission or Attenuation, and the result of choosing the wrong one
+  (#179).
 
 ## 0.12.1 - 2026-10-23
 
