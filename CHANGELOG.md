@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## 0.12.1 - 2026-10-23
+
+This release changes no library API, default or output.
 
 ### Changed
 
@@ -12,6 +14,21 @@
   Difference panel looks cleaner, but dense regions are over-corrected and
   rings appear after reconstruction. The default and `log_domain_input` are
   unchanged.
+
+### Documentation
+
+- The README shows the JOSS paper badge, and a `CITATION.cff` file cites the
+  JOSS paper (#176, #177).
+- Code comments and docstrings keep standard API documentation, equations and
+  citations only (#175). The `bm3d_core` README gives full references for
+  the two Mäkinen et al. papers.
+
+### Internal
+
+- `pixi run lint`, pre-commit and CI run a documentation wording lint,
+  `scripts/doc_lint.py` (#175).
+- CI action update raised `prefix-dev/setup-pixi` from 0.11.0 to 0.11.2
+  (#173).
 
 ## 0.12.0 - 2026-10-15
 
