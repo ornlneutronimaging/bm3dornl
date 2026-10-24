@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### Documentation
+
+- The GUI page describes the Multiscale Streak input data choice,
+  Transmission or Attenuation, and the result of choosing the wrong one.
+
 ## 0.12.1 - 2026-10-23
 
 This release changes no library API, default or output.
