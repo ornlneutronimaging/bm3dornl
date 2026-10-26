@@ -7,6 +7,7 @@
 mod data;
 mod processing;
 mod ui;
+mod zoom;
 
 use data::{LoadingJob, Volume3D, build_hdf5_tree, find_3d_datasets};
 use eframe::egui;
@@ -105,7 +106,10 @@ fn main() -> eframe::Result<()> {
     eframe::run_native(
         "bm3dornl - BM3D Ring Artifact Removal",
         options,
-        Box::new(move |_cc| {
+        Box::new(move |cc| {
+            // The normal / large text size shared by the VENUS rust tools
+            // (the launcher's choice applies here too).
+            cc.egui_ctx.set_zoom_factor(zoom::load());
             let mut app = App {
                 return_path,
                 ..Default::default()
@@ -793,10 +797,11 @@ impl eframe::App for App {
                     }
                 };
 
-                // Version display (right-aligned)
+                // Version display (right-aligned), then the text-size toggle
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.label(format!("v{}", env!("CARGO_PKG_VERSION")))
                         .on_hover_text("bm3dornl version");
+                    zoom::toggle_button(ui);
                 });
             });
 
