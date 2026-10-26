@@ -515,40 +515,62 @@ pub(crate) fn bm3d_ring_artifact_removal_with_psd<F: Bm3dFloat>(
         search_step,
         use_hadamard_fast_path: config.use_hadamard_fast_path,
     };
-    let yhat_ht = timed!(profile_timing, hard_pass_ns, {
-        run_bm3d_step(
-            z_norm.view(),
-            z_norm.view(), // pilot = noisy for first pass
-            Bm3dMode::HardThreshold,
+    // Both passes in one heterocompute call keep the hard result on its device.
+    #[cfg(feature = "heterocompute")]
+    let fused = timed!(profile_timing, hard_pass_ns, {
+        let hadamard =
+            crate::pipeline::resolve_use_hadamard(config.patch_size, config.use_hadamard_fast_path);
+        crate::accelerated::run(
+            z_norm.view().insert_axis(ndarray::Axis(0)),
+            crate::accelerated::Passes::Both,
             sigma_psd.view(),
-            sigma_map.view(),
+            sigma_map.view().insert_axis(ndarray::Axis(0)),
             &hard_config,
-            plans,
+            hadamard,
         )
-    })?;
+    });
+    #[cfg(not(feature = "heterocompute"))]
+    let fused: Option<ndarray::Array3<F>> = None;
 
-    // Step 7: BM3D Pass 2 - Wiener Filtering
-    let wiener_config = Bm3dKernelConfig {
-        sigma_random,
-        threshold: F::zero(), // not used for Wiener
-        patch_size: config.patch_size,
-        step_size: config.step_size,
-        search_window: config.search_window,
-        max_matches: config.max_matches,
-        search_step,
-        use_hadamard_fast_path: config.use_hadamard_fast_path,
+    let yhat_final = match fused {
+        Some(both) => both.index_axis_move(ndarray::Axis(0), 0),
+        None => {
+            let yhat_ht = timed!(profile_timing, hard_pass_ns, {
+                run_bm3d_step(
+                    z_norm.view(),
+                    z_norm.view(), // pilot = noisy for first pass
+                    Bm3dMode::HardThreshold,
+                    sigma_psd.view(),
+                    sigma_map.view(),
+                    &hard_config,
+                    plans,
+                )
+            })?;
+
+            // Step 7: BM3D Pass 2 - Wiener Filtering
+            let wiener_config = Bm3dKernelConfig {
+                sigma_random,
+                threshold: F::zero(), // not used for Wiener
+                patch_size: config.patch_size,
+                step_size: config.step_size,
+                search_window: config.search_window,
+                max_matches: config.max_matches,
+                search_step,
+                use_hadamard_fast_path: config.use_hadamard_fast_path,
+            };
+            timed!(profile_timing, wiener_pass_ns, {
+                run_bm3d_step(
+                    z_norm.view(),
+                    yhat_ht.view(), // pilot = HT result
+                    Bm3dMode::Wiener,
+                    sigma_psd.view(),
+                    sigma_map.view(),
+                    &wiener_config,
+                    plans,
+                )
+            })?
+        }
     };
-    let yhat_final = timed!(profile_timing, wiener_pass_ns, {
-        run_bm3d_step(
-            z_norm.view(),
-            yhat_ht.view(), // pilot = HT result
-            Bm3dMode::Wiener,
-            sigma_psd.view(),
-            sigma_map.view(),
-            &wiener_config,
-            plans,
-        )
-    })?;
 
     // Step 8: Denormalize to original range
     let output = timed!(profile_timing, denormalize_ns, {
