@@ -1784,7 +1784,7 @@ checksum = "fc0fef456e4baa96da950455cd02c081ca953b141298e41db3fc7e36b1da849c"
 [[package]]
 name = "heterocompute"
 version = "0.2.0"
-source = "git+ssh://git@github.com/KedoKudo/heterocompute.git?rev=900bb24743c93faa00c768297c428d36fcab7eb6#900bb24743c93faa00c768297c428d36fcab7eb6"
+source = "git+ssh://git@github.com/KedoKudo/heterocompute.git?rev=42c7eba0d60b8b163aacfb8f92ce16cf5b1e24c7#42c7eba0d60b8b163aacfb8f92ce16cf5b1e24c7"
 dependencies = [
  "heterocompute-core",
  "heterocompute-cpu",
@@ -1795,7 +1795,7 @@ dependencies = [
 [[package]]
 name = "heterocompute-core"
 version = "0.2.0"
-source = "git+ssh://git@github.com/KedoKudo/heterocompute.git?rev=900bb24743c93faa00c768297c428d36fcab7eb6#900bb24743c93faa00c768297c428d36fcab7eb6"
+source = "git+ssh://git@github.com/KedoKudo/heterocompute.git?rev=42c7eba0d60b8b163aacfb8f92ce16cf5b1e24c7#42c7eba0d60b8b163aacfb8f92ce16cf5b1e24c7"
 dependencies = [
  "thiserror 2.0.17",
 ]
@@ -1803,7 +1803,7 @@ dependencies = [
 [[package]]
 name = "heterocompute-cpu"
 version = "0.2.0"
-source = "git+ssh://git@github.com/KedoKudo/heterocompute.git?rev=900bb24743c93faa00c768297c428d36fcab7eb6#900bb24743c93faa00c768297c428d36fcab7eb6"
+source = "git+ssh://git@github.com/KedoKudo/heterocompute.git?rev=42c7eba0d60b8b163aacfb8f92ce16cf5b1e24c7#42c7eba0d60b8b163aacfb8f92ce16cf5b1e24c7"
 dependencies = [
  "cblas-sys",
  "heterocompute-core",
@@ -1813,7 +1813,7 @@ dependencies = [
 [[package]]
 name = "heterocompute-cuda"
 version = "0.2.0"
-source = "git+ssh://git@github.com/KedoKudo/heterocompute.git?rev=900bb24743c93faa00c768297c428d36fcab7eb6#900bb24743c93faa00c768297c428d36fcab7eb6"
+source = "git+ssh://git@github.com/KedoKudo/heterocompute.git?rev=42c7eba0d60b8b163aacfb8f92ce16cf5b1e24c7#42c7eba0d60b8b163aacfb8f92ce16cf5b1e24c7"
 dependencies = [
  "heterocompute-core",
  "libc",
@@ -1823,7 +1823,7 @@ dependencies = [
 [[package]]
 name = "heterocompute-metal"
 version = "0.2.0"
-source = "git+ssh://git@github.com/KedoKudo/heterocompute.git?rev=900bb24743c93faa00c768297c428d36fcab7eb6#900bb24743c93faa00c768297c428d36fcab7eb6"
+source = "git+ssh://git@github.com/KedoKudo/heterocompute.git?rev=42c7eba0d60b8b163aacfb8f92ce16cf5b1e24c7#42c7eba0d60b8b163aacfb8f92ce16cf5b1e24c7"
 dependencies = [
  "heterocompute-core",
  "objc2 0.6.3",
