@@ -1023,7 +1023,7 @@ fn resolve_use_hadamard_decision(
 ///
 /// Default is quality-first (`false`). Set `BM3D_USE_HADAMARD=1`
 /// to enable speed-first behavior for 8x8 patches.
-fn resolve_use_hadamard(patch_size: usize, per_call_override: Option<bool>) -> bool {
+pub(crate) fn resolve_use_hadamard(patch_size: usize, per_call_override: Option<bool>) -> bool {
     let explicit_override = hadamard_fast_path_override();
     let env_value = std::env::var(USE_HADAMARD_ENV).ok();
     resolve_use_hadamard_decision(
@@ -2065,6 +2065,32 @@ pub fn run_bm3d_step<F: Bm3dFloat>(
     let (rows, cols) = input_noisy.dim();
     check_image_size(rows, cols, config.patch_size)?;
 
+    #[cfg(feature = "heterocompute")]
+    {
+        let passes = match mode {
+            Bm3dMode::HardThreshold if same(input_noisy, input_pilot) => {
+                Some(crate::accelerated::Passes::Hard)
+            }
+            Bm3dMode::HardThreshold => None,
+            Bm3dMode::Wiener => Some(crate::accelerated::Passes::Wiener(stacked(input_pilot))),
+        };
+        let hadamard = resolve_use_hadamard(config.patch_size, config.use_hadamard_fast_path);
+        let ran = passes.and_then(|passes| {
+            let map = stacked(sigma_map);
+            crate::accelerated::run(
+                stacked(input_noisy),
+                passes,
+                sigma_psd,
+                map,
+                config,
+                hadamard,
+            )
+        });
+        if let Some(out) = ran {
+            return Ok(out.index_axis_move(Axis(0), 0));
+        }
+    }
+
     Ok(run_bm3d_kernel(
         input_noisy,
         input_pilot,
@@ -2114,6 +2140,19 @@ pub fn run_bm3d_step_stack<F: Bm3dFloat>(
     check_kernel_strides(config)?;
     check_image_size(rows, cols, config.patch_size)?;
 
+    #[cfg(feature = "heterocompute")]
+    if let Some(output) = accelerated_stack(
+        input_noisy,
+        input_pilot,
+        mode,
+        sigma_psd,
+        sigma_map,
+        config,
+        progress_fn,
+    )? {
+        return Ok(output);
+    }
+
     let mut output = Array3::<F>::zeros((n, rows, cols));
     let mut scratch_pool = KernelScratchPool::<F>::new();
     // Process one slice at a time.
@@ -2143,6 +2182,73 @@ pub fn run_bm3d_step_stack<F: Bm3dFloat>(
         }
     }
     Ok(output)
+}
+
+/// `v` as a stack of one.
+#[cfg(feature = "heterocompute")]
+fn stacked<F>(v: ArrayView2<'_, F>) -> ArrayView3<'_, F> {
+    v.insert_axis(Axis(0))
+}
+
+/// Whether two views hold the same values, the same memory or not.
+#[cfg(feature = "heterocompute")]
+fn same<F: Bm3dFloat, D: ndarray::Dimension>(
+    a: ndarray::ArrayView<'_, F, D>,
+    b: ndarray::ArrayView<'_, F, D>,
+) -> bool {
+    let shared =
+        a.as_ptr() == b.as_ptr() && a.raw_dim() == b.raw_dim() && a.strides() == b.strides();
+    shared || a == b
+}
+
+/// Slices a stack heterocompute takes at a time, so progress is reported between them.
+#[cfg(feature = "heterocompute")]
+const STACK_CHUNK: usize = 16;
+
+/// [`run_bm3d_step_stack`] through heterocompute, in chunks of [`STACK_CHUNK`] slices; `None`
+/// where heterocompute refuses it, before any slice.
+#[cfg(feature = "heterocompute")]
+fn accelerated_stack<F: Bm3dFloat>(
+    noisy: ArrayView3<F>,
+    pilot: ArrayView3<F>,
+    mode: Bm3dMode,
+    sigma_psd: ArrayView2<F>,
+    sigma_map: ArrayView3<F>,
+    config: &Bm3dKernelConfig<F>,
+    progress_fn: Option<&dyn Fn(usize, usize) -> Result<(), String>>,
+) -> Result<Option<Array3<F>>, String> {
+    use crate::accelerated::{Passes, run};
+    let (n, rows, cols) = noisy.dim();
+    if mode == Bm3dMode::HardThreshold && !same(noisy, pilot) {
+        return Ok(None);
+    }
+    let hadamard = resolve_use_hadamard(config.patch_size, config.use_hadamard_fast_path);
+    let per_slice = sigma_map.dim().0 == n;
+    let mut output = Array3::<F>::zeros((n, rows, cols));
+    for start in (0..n).step_by(STACK_CHUNK) {
+        let end = (start + STACK_CHUNK).min(n);
+        let chunk = noisy.slice(s![start..end, .., ..]);
+        let passes = match mode {
+            Bm3dMode::HardThreshold => Passes::Hard,
+            Bm3dMode::Wiener => Passes::Wiener(pilot.slice(s![start..end, .., ..])),
+        };
+        let map = if per_slice {
+            sigma_map.slice(s![start..end, .., ..])
+        } else {
+            sigma_map.view()
+        };
+        let Some(done) = run(chunk, passes, sigma_psd, map, config, hadamard) else {
+            if start == 0 {
+                return Ok(None);
+            }
+            return Err("heterocompute refused a chunk of the stack after the first".into());
+        };
+        output.slice_mut(s![start..end, .., ..]).assign(&done);
+        if let Some(cb) = &progress_fn {
+            cb(end, n)?;
+        }
+    }
+    Ok(Some(output))
 }
 
 /// Test function for block matching (used for debugging/validation).
