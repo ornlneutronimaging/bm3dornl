@@ -550,6 +550,7 @@ name = "bm3d_core"
 version = "0.12.1"
 dependencies = [
  "criterion",
+ "heterocompute",
  "libc",
  "ndarray",
  "num-traits",
@@ -678,6 +679,15 @@ name = "cast"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "37b2a672a2cb129a2e41c10b1224bb368f9f37a2b16b612598138befd7b37eb5"
+
+[[package]]
+name = "cblas-sys"
+version = "0.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b6feecd82cce51b0204cf063f0041d69f24ce83f680d87514b004248e7b0fa65"
+dependencies = [
+ "libc",
+]
 
 [[package]]
 name = "cc"
@@ -1772,6 +1782,57 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fc0fef456e4baa96da950455cd02c081ca953b141298e41db3fc7e36b1da849c"
 
 [[package]]
+name = "heterocompute"
+version = "0.2.0"
+source = "git+ssh://git@github.com/ornlneutronimaging/heterocompute.git?rev=d35f95713ef05d41d9c8f9d27bc149b8209eab74#d35f95713ef05d41d9c8f9d27bc149b8209eab74"
+dependencies = [
+ "heterocompute-core",
+ "heterocompute-cpu",
+ "heterocompute-cuda",
+ "heterocompute-metal",
+]
+
+[[package]]
+name = "heterocompute-core"
+version = "0.2.0"
+source = "git+ssh://git@github.com/ornlneutronimaging/heterocompute.git?rev=d35f95713ef05d41d9c8f9d27bc149b8209eab74#d35f95713ef05d41d9c8f9d27bc149b8209eab74"
+dependencies = [
+ "thiserror 2.0.17",
+]
+
+[[package]]
+name = "heterocompute-cpu"
+version = "0.2.0"
+source = "git+ssh://git@github.com/ornlneutronimaging/heterocompute.git?rev=d35f95713ef05d41d9c8f9d27bc149b8209eab74#d35f95713ef05d41d9c8f9d27bc149b8209eab74"
+dependencies = [
+ "cblas-sys",
+ "heterocompute-core",
+ "libloading",
+]
+
+[[package]]
+name = "heterocompute-cuda"
+version = "0.2.0"
+source = "git+ssh://git@github.com/ornlneutronimaging/heterocompute.git?rev=d35f95713ef05d41d9c8f9d27bc149b8209eab74#d35f95713ef05d41d9c8f9d27bc149b8209eab74"
+dependencies = [
+ "heterocompute-core",
+ "libc",
+ "libloading",
+]
+
+[[package]]
+name = "heterocompute-metal"
+version = "0.2.0"
+source = "git+ssh://git@github.com/ornlneutronimaging/heterocompute.git?rev=d35f95713ef05d41d9c8f9d27bc149b8209eab74#d35f95713ef05d41d9c8f9d27bc149b8209eab74"
+dependencies = [
+ "heterocompute-core",
+ "objc2 0.6.3",
+ "objc2-foundation 0.3.2",
+ "objc2-metal 0.3.2",
+ "objc2-metal-performance-shaders",
+]
+
+[[package]]
 name = "hex"
 version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2474,7 +2535,7 @@ dependencies = [
  "block2 0.5.1",
  "objc2 0.5.2",
  "objc2-foundation 0.2.2",
- "objc2-metal",
+ "objc2-metal 0.2.2",
 ]
 
 [[package]]
@@ -2515,6 +2576,8 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e3e0adef53c21f888deb4fa59fc59f7eb17404926ee8a6f59f5df0fd7f9f3272"
 dependencies = [
  "bitflags 2.10.0",
+ "block2 0.6.2",
+ "libc",
  "objc2 0.6.3",
  "objc2-core-foundation",
 ]
@@ -2555,6 +2618,35 @@ dependencies = [
 ]
 
 [[package]]
+name = "objc2-metal"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a0125f776a10d00af4152d74616409f0d4a2053a6f57fa5b7d6aa2854ac04794"
+dependencies = [
+ "bitflags 2.10.0",
+ "block2 0.6.2",
+ "dispatch2",
+ "objc2 0.6.3",
+ "objc2-core-foundation",
+ "objc2-foundation 0.3.2",
+]
+
+[[package]]
+name = "objc2-metal-performance-shaders"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "46a10f15ff4e2045f947ffca8a17fc351b155c321de16f04278a008a1f446784"
+dependencies = [
+ "bitflags 2.10.0",
+ "block2 0.6.2",
+ "objc2 0.6.3",
+ "objc2-core-foundation",
+ "objc2-core-graphics",
+ "objc2-foundation 0.3.2",
+ "objc2-metal 0.3.2",
+]
+
+[[package]]
 name = "objc2-quartz-core"
 version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2564,7 +2656,7 @@ dependencies = [
  "block2 0.5.1",
  "objc2 0.5.2",
  "objc2-foundation 0.2.2",
- "objc2-metal",
+ "objc2-metal 0.2.2",
 ]
 
 [[package]]
