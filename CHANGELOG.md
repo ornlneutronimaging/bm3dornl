@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### Added
+
+- `bm3d_core` and the Python extension gain a `heterocompute` feature
+  (`heterocompute-openblas` on Linux) that runs the hard-threshold and Wiener
+  passes through heterocompute, on the CPU, a CUDA GPU or an Apple GPU,
+  wherever it predicts them fastest; `pixi run build-gpu` builds it on macOS.
+  Results agree with the built-in kernel to rounding. `BM3DORNL_DEVICE`
+  (`cpu`, `gpu`) forces a device. Off by default; it depends on a git
+  revision of heterocompute until that is released.
+
 ### Documentation
 
 - The GUI page describes the Multiscale Streak input data choice,

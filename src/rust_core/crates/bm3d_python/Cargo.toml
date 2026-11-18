@@ -10,6 +10,13 @@ repository = "https://github.com/ornlneutronimaging/bm3dornl"
 name = "bm3d_rust"
 crate-type = ["cdylib"]
 
+[features]
+default = []
+# BM3D passes through heterocompute, on the CPU, a CUDA GPU or an Apple GPU.
+heterocompute = ["bm3d_core/heterocompute"]
+# As `heterocompute`, linking the system OpenBLAS its CPU services need on Linux.
+heterocompute-openblas = ["bm3d_core/heterocompute-openblas"]
+
 [dependencies]
 bm3d_core = { path = "../bm3d_core" }
 pyo3 = { version = "0.29", features = ["extension-module"] }

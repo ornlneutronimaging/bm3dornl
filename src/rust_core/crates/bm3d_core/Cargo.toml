@@ -14,7 +14,15 @@ authors = ["Oak Ridge National Laboratory Neutron Imaging Team"]
 name = "bm3d_core"
 crate-type = ["rlib"]
 
+[features]
+default = []
+# BM3D passes through heterocompute, on the CPU, a CUDA GPU or an Apple GPU.
+heterocompute = ["dep:heterocompute"]
+# As `heterocompute`, linking the system OpenBLAS its CPU services need on Linux.
+heterocompute-openblas = ["heterocompute", "heterocompute/openblas"]
+
 [dependencies]
+heterocompute = { git = "ssh://git@github.com/ornlneutronimaging/heterocompute.git", rev = "d35f95713ef05d41d9c8f9d27bc149b8209eab74", optional = true }
 ndarray = { workspace = true }
 num-traits = "0.2"
 rayon = { workspace = true }

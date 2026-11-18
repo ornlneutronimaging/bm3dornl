@@ -8,6 +8,8 @@
 //! The library supports both f32 and f64 precision through the `Bm3dFloat` trait.
 //! All public functions are generic over this trait.
 
+#[cfg(feature = "heterocompute")]
+mod accelerated;
 pub mod block_matching;
 pub mod filtering;
 pub mod float_trait;
